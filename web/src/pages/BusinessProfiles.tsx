@@ -10,6 +10,7 @@ export function BusinessProfiles() {
     return (
       <div className="max-w-6xl">
         <PageHead
+          inBreadcrumb
           title="Business profile"
           subtitle="Settings apply to the selected business only."
         />

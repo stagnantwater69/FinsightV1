@@ -653,6 +653,7 @@ function SpendingImpactPage() {
   return (
     <div>
       <PageHead
+        inBreadcrumb
         eyebrow="Insights"
         title="Spending impact"
         subtitle="What-if check. Nothing is saved."
@@ -964,14 +965,14 @@ function SpendingImpactPage() {
         <div className="mt-5 rounded-2xl bg-paper p-5 shadow-md ring-1 ring-paper-200">
           {/* Shaped like the card that is coming, so the page does not jump. */}
           <div className="flex items-center gap-3">
-            <span className="h-11 w-11 shrink-0 animate-pulse rounded-xl bg-paper-100" />
+            <span className="h-11 w-11 shrink-0 skeleton rounded-xl" />
             <div className="w-full">
-              <span className="block h-4 w-40 animate-pulse rounded bg-paper-100" />
-              <span className="mt-2 block h-3 w-64 animate-pulse rounded bg-paper-100" />
+              <span className="block h-4 w-40 skeleton" />
+              <span className="mt-2 block h-3 w-64 skeleton" />
             </div>
           </div>
-          <span className="mt-4 block h-3 w-full animate-pulse rounded bg-paper-100" />
-          <span className="mt-2 block h-3 w-4/5 animate-pulse rounded bg-paper-100" />
+          <span className="mt-4 block h-3 w-full skeleton" />
+          <span className="mt-2 block h-3 w-4/5 skeleton" />
           <p className="sr-only" role="status">
             FinSight is describing this item.
           </p>

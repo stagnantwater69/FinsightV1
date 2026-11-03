@@ -62,6 +62,7 @@ const DESTINATIONS: Destination[] = [
   { label: "Records", to: "/records", section: "Overview", keywords: "expenses sales list table history" },
   { label: "Ask FinSight", to: ASK_FINSIGHT, section: "Overview", keywords: "ai chat assistant conversation ask question explain history" },
   { label: "Expense insight", to: "/insights/expense-behavior", section: "Insights", keywords: "expense behaviour trends categories unusual anomaly spending patterns where money went daily chart" },
+  { label: "Payment calendar", to: "/calendar", section: "Insights", keywords: "calendar due dates upcoming payments recurring bills rent salary schedule closed days month" },
   { label: "Spending impact", to: "/insights/spending-impact", section: "Insights", keywords: "simulate what if afford purchase plan impact" },
   { label: "Recovery target", to: "/insights/recovery", section: "Insights", keywords: "daily target sales goal month coverage break even" },
   { label: "Month-end review", to: "/insights/recovery/month-end-review", section: "Insights", keywords: "recovery month summary recap last month coverage surplus shortfall suggested questions" },
@@ -324,7 +325,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
           placeholder="Search records, categories, pages…"
-          className="min-h-tap w-full rounded-xl border border-paper-200 bg-paper-100 pl-9 pr-16 text-sm text-ink-900 transition placeholder:text-ink-400 hover:border-brand-300 focus:bg-paper"
+          className="min-h-tap w-full rounded-xl border border-paper-200/70 bg-paper/70 pl-9 pr-16 text-sm text-ink-900 shadow-sm backdrop-blur transition placeholder:text-ink-400 hover:border-brand-300 focus:bg-paper"
         />
         {/* The shortcut hint. Hidden on touch, where there is no keyboard to
             press it with and it would just be a mystery label. */}

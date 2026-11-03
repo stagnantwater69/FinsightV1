@@ -53,6 +53,10 @@ const FlaggedRecords = lazy(() => route.loadFlaggedRecordsRoute().then((m) => ({
 const Dashboard = lazy(() => route.loadDashboardRoute().then((m) => ({ default: m.Dashboard })));
 const ExpenseInsight = lazy(() => route.loadExpenseInsightRoute().then((m) => ({ default: m.ExpenseInsight })));
 const RecoveryInsightPage = lazy(() => route.loadRecoveryInsightRoute().then((m) => ({ default: m.RecoveryInsightPage })));
+const UnusualExpensesPage = lazy(() => route.loadUnusualExpensesRoute().then((m) => ({ default: m.UnusualExpensesPage })));
+const ExpenseFindingsPage = lazy(() => route.loadExpenseFindingsRoute().then((m) => ({ default: m.ExpenseFindingsPage })));
+const RecurringExpensesPage = lazy(() => route.loadRecurringExpensesRoute().then((m) => ({ default: m.RecurringExpensesPage })));
+const PaymentCalendarPage = lazy(() => route.loadPaymentCalendarRoute().then((m) => ({ default: m.PaymentCalendarPage })));
 const RecoveryMonthEndReviewPage = lazy(() => route.loadRecoveryMonthEndReviewRoute().then((m) => ({ default: m.RecoveryMonthEndReviewPage })));
 const SpendingImpact = lazy(() => route.loadSpendingImpactRoute().then((m) => ({ default: m.SpendingImpact })));
 const AddRecurringSchedule = lazy(() => route.loadRecurringScheduleRoute().then((m) => ({ default: m.AddRecurringSchedule })));
@@ -170,6 +174,10 @@ function App() {
                       AuthenticatedLayout. Its conversation survives navigation
                       because the state lives in AiChatContext, not in a page. */}
                   <Route path="/insights/expense-behavior" element={<ExpenseInsight />} />
+                  <Route path="/insights/expense-behavior/unusual" element={<UnusualExpensesPage />} />
+                  <Route path="/insights/expense-behavior/findings" element={<ExpenseFindingsPage />} />
+                  <Route path="/insights/expense-behavior/recurring" element={<RecurringExpensesPage />} />
+                  <Route path="/calendar" element={<PaymentCalendarPage />} />
                   <Route path="/insights/recovery" element={<RecoveryInsightPage />} />
                   <Route path="/insights/recovery/month-end-review" element={<RecoveryMonthEndReviewPage />} />
                   <Route path="/insights/spending-impact" element={<SpendingImpact />} />

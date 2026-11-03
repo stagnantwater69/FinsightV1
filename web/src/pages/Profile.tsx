@@ -71,6 +71,7 @@ export function Profile() {
     return (
       <div>
         <PageHead
+          inBreadcrumb
           title="My profile"
           subtitle="Manage your personal account details and sign-in security."
         />
@@ -167,6 +168,7 @@ export function Profile() {
   return (
     <div className="w-full">
       <PageHead
+        inBreadcrumb
         title="My profile"
         subtitle="Manage your personal account details and sign-in security."
       />
@@ -561,7 +563,7 @@ function SessionsPanel({
 
       <div className="flex shrink-0 justify-end pt-5">
         <Button
-          variant="primary"
+          variant="secondary"
           className="w-full sm:w-auto"
           disabled={submitting}
           onClick={() => void handleClick()}
@@ -857,7 +859,7 @@ function SecurityPanel() {
           <Button
             ref={changePasswordButtonRef}
             type="button"
-            variant="primary"
+            variant="secondary"
             onClick={beginEditing}
           >
             Change password

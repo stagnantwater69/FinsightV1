@@ -1,33 +1,26 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
-import { usePersistentState, useDismiss, useFocusTrap, useMenuKeys } from "../lib/hooks";
-import { AddExpenseModal } from "./AddExpenseModal";
-import { AddSalesModal } from "./AddSalesModal";
+import { usePersistentState } from "../lib/hooks";
 import { BusinessSwitcher } from "./BusinessSwitcher";
 import { GlobalSearch } from "./GlobalSearch";
 import { NotificationBell } from "./NotificationBell";
 import { SetupPrompt } from "./SetupPrompt";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { AccountMenu, initials } from "./AccountMenu";
-import { useFutureDatedRecords } from "../context/FutureDatedRecordsContext";
 import { PrefetchLink as Link } from "./PrefetchLink";
 import { prefetchPrimaryRoutes } from "../lib/routeLoaders";
 import {
   IconBusiness,
-  IconCamera,
+  IconCalendar,
   IconChevronDown,
   IconDashboard,
-  IconExpense,
   IconInsights,
-  IconPlus,
   IconProfile,
   IconRecords,
-  IconSales,
   IconSearch,
   IconSidebar,
-  IconUpload,
 } from "./icons";
 
 /**
@@ -149,6 +142,10 @@ const EXTRA_PAGE_TITLES: Record<string, string> = {
   "/records/categories": "Categories",
   "/business-profiles/all": "All businesses",
   "/account-settings": "Account settings",
+  "/insights/expense-behavior/unusual": "Unusual expenses",
+  "/insights/expense-behavior/findings": "Findings to review",
+  "/insights/expense-behavior/recurring": "Recurring expenses",
+  "/calendar": "Payment calendar",
 };
 
 /**
@@ -176,28 +173,6 @@ const BOTTOM_NAV: NavItem[] = [
   { to: "/records", label: "Records", Icon: IconRecords, tour: "records" },
   { to: "/insights/expense-behavior", label: "Insights", Icon: IconInsights, match: "/insights", tour: "insights" },
   { to: "/business-profiles", label: "Business", Icon: IconBusiness },
-];
-
-/**
- * Add expense / Add sales open the same popup Records uses for its own "+"
- * buttons — `modal` names which one instead of a route. Scan receipt and
- * Import CSV stay full-page `to` links: both are involved enough (a camera,
- * a file upload and preview table) that a modal would just be a cramped copy
- * of the page, not a shortcut.
- */
-const QUICK_ADD: {
-  to?: string;
-  modal?: "expense" | "sales";
-  Icon: IconComponent;
-  tone: string;
-  title: string;
-  sub: string;
-  tour?: string;
-}[] = [
-  { modal: "expense", Icon: IconExpense, tone: "bg-tint-accent text-tone-accent", title: "Add expense", sub: "Money spent by the business" },
-  { modal: "sales", Icon: IconSales, tone: "bg-tint-brand text-tone-brand", title: "Add sales reference", sub: "A recorded sales amount" },
-  { to: "/records/receipts/new", Icon: IconCamera, tone: "bg-tint-info text-tone-info", title: "Scan receipt", sub: "Extract details from a photo", tour: "scan-receipt" },
-  { to: "/records/csv-imports/new", Icon: IconUpload, tone: "bg-tint-brand text-tone-brand", title: "Import CSV", sub: "Upload existing records", tour: "import-csv" },
 ];
 
 const isBool = (v: unknown): v is boolean => typeof v === "boolean";
@@ -262,25 +237,21 @@ function SidebarLink({
 export function AppShell({ children }: { children: ReactNode }) {
   const { profile: user } = useAuth();
   const { selected } = useBusinessProfiles();
-  const futureDated = useFutureDatedRecords();
   const location = useLocation();
-  const navigate = useNavigate();
 
   const [collapsed, setCollapsed] = usePersistentState("finsight.sidebarCollapsed", false, isBool);
   const [insightsOpen, setInsightsOpen] = useState(location.pathname.startsWith("/insights"));
-  const [addOpen, setAddOpen] = useState(false);
   const [mobileSearch, setMobileSearch] = useState(false);
-  // Quick Add's own popup instances — separate from Records' own
-  // addExpenseOpen/addSalesOpen, which still exist for the page's own "+"
-  // buttons and its Edit/Duplicate flows. Landing back on /records after a
-  // save (below) is what Records' own mount-time load then picks up.
-  const [quickAddExpenseOpen, setQuickAddExpenseOpen] = useState(false);
-  const [quickAddSalesOpen, setQuickAddSalesOpen] = useState(false);
+  // The topbar floats on the canvas at rest; once content scrolls under it,
+  // a blur keeps the breadcrumb legible over cards.
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
-
-  const { ref: addRef, triggerRef: addTriggerRef } = useDismiss(addOpen, () => setAddOpen(false));
-  const onMenuKeys = useMenuKeys();
-  const addTrapRef = useFocusTrap<HTMLDivElement>(addOpen);
 
   // Once the first page has had its turn, warm the other tabs' code so
   // switching to them shows the page (or its skeleton) without a code wait.
@@ -296,7 +267,6 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   // Close transient chrome on navigation, or a menu lingers over the new page.
   useEffect(() => {
-    setAddOpen(false);
     setMobileSearch(false);
     if (location.pathname.startsWith("/insights")) setInsightsOpen(true);
   }, [location.pathname]);
@@ -463,7 +433,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             a shell with no doors at all — every read-only page is open to them
             now, and a navigation they cannot see is the same dead end reached
             by a different route. Safe because every destination here only
-            READS; the write paths (Quick add, Scan, Import) stay gated below. */}
+            READS; the write paths (Add, Scan, Import) stay on their own pages. */}
         <nav
           aria-label="Main"
           // Collapsed, this must NOT be a scroll container. `overflow-y:auto`
@@ -620,7 +590,11 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* ============================= MAIN ============================== */}
       <div className="flex min-w-0 flex-col">
         {/* ---------------------------- TOPBAR ---------------------------- */}
-        <header className="sticky top-0 z-30 border-b border-paper-200 bg-paper/85 backdrop-blur short:static">
+        <header
+          className={`sticky top-0 z-30 transition-[background-color,backdrop-filter] duration-200 short:static ${
+            scrolled ? "bg-paper-50/60 backdrop-blur-md" : "bg-transparent"
+          }`}
+        >
           {/* Wraps rather than overflows. At a 200px CSS viewport (400px at
               200% browser zoom) the mark, search and action cluster cannot
               share one line, and a fixed height forced the page to scroll
@@ -636,19 +610,45 @@ export function AppShell({ children }: { children: ReactNode }) {
               <img src="/newmascotlogo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
             </Link>
 
+            {/* ---- breadcrumb ----
+                Business, then page. Takes the mark's place from lg up, where
+                the sidebar carries the logo; `flex-1` makes it the spacer that
+                pushes search and actions to the right edge. */}
+            <nav aria-label="Breadcrumb" className="hidden min-w-0 flex-1 lg:block">
+              <ol className="flex min-w-0 items-center gap-1.5 text-[13px]">
+                {selected ? (
+                  <>
+                    <li className="min-w-0">
+                      <Link
+                        to="/business-profiles"
+                        className="block max-w-[14rem] truncate rounded-md text-ink-500 transition hover:text-ink-900"
+                      >
+                        {selected.name}
+                      </Link>
+                    </li>
+                    <li aria-hidden className="shrink-0 text-ink-400">
+                      <IconChevronDown className="h-3.5 w-3.5 -rotate-90" />
+                    </li>
+                  </>
+                ) : null}
+                <li aria-current="page" className="min-w-0 truncate font-medium text-ink-900">
+                  {pageTitleFor(location.pathname)}
+                </li>
+              </ol>
+            </nav>
+
             {/* ---- global search ----
-                Given the room it deserves: it is the fastest route to any
-                record in the app, and a search field that looks like an
-                afterthought gets used like one. Capped so it doesn't stretch
-                to absurd widths on a large monitor. */}
+                The fastest route to any record in the app. Sits with the
+                actions on the right at a fixed width so the breadcrumb, not
+                the field, absorbs spare room on a wide monitor. */}
             {selected ? (
-              <GlobalSearch className="hidden min-w-0 flex-1 md:block md:max-w-lg lg:max-w-xl" />
+              <GlobalSearch className="hidden min-w-0 md:ml-auto md:block md:w-72 lg:w-80 xl:w-[22rem]" />
             ) : null}
 
             {/* `shrink-0` stays: the search field is the flex item that should
                 give way first. `max-w-full` + `flex-wrap` only bind once the
                 row itself has wrapped, so nothing moves above ~360px. */}
-            <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-0.5 sm:gap-1">
+            <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
               {/* Search collapses to an icon below `md`, where a full field
                   would crowd out everything else in the row. */}
               {selected ? (
@@ -657,93 +657,29 @@ export function AppShell({ children }: { children: ReactNode }) {
                   onClick={() => setMobileSearch((v) => !v)}
                   aria-expanded={mobileSearch}
                   aria-label="Search"
-                  className="tap h-11 w-11 min-h-0 min-w-0 rounded-xl text-ink-600 transition hover:bg-paper-100 hover:text-ink-900 md:hidden"
+                  className="tap h-11 w-11 min-h-0 min-w-0 rounded-xl border border-paper-200/70 bg-paper/70 text-ink-600 shadow-sm backdrop-blur transition hover:bg-paper hover:text-ink-900 md:hidden"
                 >
                   <IconSearch className="h-[18px] w-[18px]" />
                 </button>
               ) : null}
 
-              {/* ---- quick add ----
-                  Hidden while future-dated records are being corrected: new
-                  records wait until the books are back in order. */}
-              {selected && !futureDated.blocked ? (
-                <div ref={addRef} className="relative">
-                  <button
-                    ref={addTriggerRef}
-                    type="button"
-                    data-tour="quick-add"
-                    onClick={() => setAddOpen((v) => !v)}
-                    aria-expanded={addOpen}
-                    aria-haspopup="menu"
-                    className="tap gap-1.5 rounded-xl bg-brand-700 px-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-800 sm:px-3"
-                  >
-                    <IconPlus className="h-4 w-4 shrink-0" />
-                    <span className="hidden sm:inline">Quick add</span>
-                    <span className="sr-only sm:hidden">Quick add</span>
-                  </button>
-                  {addOpen ? (
-                    // useDismiss closes this on Escape and outside click, and
-                    // useMenuKeys drives the arrow keys — but neither stopped
-                    // Tab from leaving the menu while it stayed open over the
-                    // page. useFocusTrap also puts focus on the first item when
-                    // it opens, which is what a menu is expected to do.
-                    <div
-                      ref={addTrapRef}
-                      role="menu"
-                      aria-label="Add a record"
-                      onKeyDown={onMenuKeys}
-                      // Below `sm` the trigger sits mid-row, so a menu hung
-                      // from its right edge ran off the left of the screen.
-                      // There it spans the viewport under the topbar instead,
-                      // like NotificationBell's panel.
-                      className="scroll-slim absolute right-0 top-full z-50 mt-2 max-h-[calc(100dvh-8rem-env(safe-area-inset-bottom))] w-[17rem] max-w-[calc(100vw-1.5rem)] animate-pop-down max-sm:fixed max-sm:inset-x-3 max-sm:top-[calc(var(--topbar-h)+0.25rem)] max-sm:mt-0 max-sm:w-auto max-sm:max-w-none overflow-y-auto overscroll-contain rounded-2xl border border-paper-200 bg-paper p-2 shadow-lg lg:max-h-[calc(100dvh-5rem)]"
-                    >
-                      <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
-                        Add a record
-                      </div>
-                      {QUICK_ADD.map((entry) => {
-                        const inner = (
-                          <>
-                            <span
-                              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${entry.tone}`}
-                            >
-                              <entry.Icon className="h-4 w-4" />
-                            </span>
-                            <span className="min-w-0">
-                              <span className="block text-[13.5px] font-semibold text-ink-900">
-                                {entry.title}
-                              </span>
-                              <span className="block truncate text-[11.5px] text-ink-500">{entry.sub}</span>
-                            </span>
-                          </>
-                        );
-                        const itemClassName =
-                          "flex min-h-tap w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition hover:bg-paper-100";
-                        return entry.modal ? (
-                          <button
-                            key={entry.modal}
-                            type="button"
-                            role="menuitem"
-                            className={itemClassName}
-                            onClick={() => {
-                              setAddOpen(false);
-                              if (entry.modal === "expense") setQuickAddExpenseOpen(true);
-                              else setQuickAddSalesOpen(true);
-                            }}
-                          >
-                            {inner}
-                          </button>
-                        ) : (
-                          <Link key={entry.to} to={entry.to!} data-tour={entry.tour} role="menuitem" className={itemClassName}>
-                            {inner}
-                          </Link>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
+              {/* Beside the bell: both answer "what needs me soon?" — the
+                  bell with what already happened, the calendar with what is
+                  coming. A link, not a popover: it opens a full page. */}
+              {selected ? (
+                <Link
+                  to="/calendar"
+                  aria-label="Payment calendar"
+                  aria-current={location.pathname === "/calendar" ? "page" : undefined}
+                  className={`tap flex h-11 w-11 items-center justify-center rounded-xl border bg-paper/70 shadow-sm backdrop-blur transition hover:bg-paper hover:text-ink-900 ${
+                    location.pathname === "/calendar"
+                      ? "border-edge-brand text-tone-brand"
+                      : "border-paper-200/70 text-ink-600"
+                  }`}
+                >
+                  <IconCalendar className="h-[18px] w-[18px]" />
+                </Link>
               ) : null}
-
               {selected ? <NotificationBell /> : null}
               <ThemeSwitcher compact />
               <AccountMenu />
@@ -771,7 +707,11 @@ export function AppShell({ children }: { children: ReactNode }) {
           id="main-content"
           ref={mainRef}
           tabIndex={-1}
-          className="shell flex-1 animate-fade-up pb-24 pt-6 outline-none lg:pb-12"
+          // Focused by script on every route change (above), never by Tab.
+          // The global :focus-visible ring is a box-shadow, so outline-none
+          // alone left a green frame around the page whenever the browser
+          // treated that focus as keyboard focus, e.g. in a freshly opened tab.
+          className="shell flex-1 animate-fade-up pb-24 pt-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0 lg:pb-12"
         >
           {/* Above the routed page on every route, not once per page — see
               SetupPrompt for why it lives in the shell. */}
@@ -810,23 +750,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         </ul>
       </nav>
 
-      {/* Quick Add's own instances of Records' popups — see QUICK_ADD above. */}
-      {selected ? (
-        <>
-          <AddExpenseModal
-            businessProfileId={selected.id}
-            open={quickAddExpenseOpen}
-            onClose={() => setQuickAddExpenseOpen(false)}
-            onSaved={() => navigate("/records")}
-          />
-          <AddSalesModal
-            businessProfileId={selected.id}
-            open={quickAddSalesOpen}
-            onClose={() => setQuickAddSalesOpen(false)}
-            onSaved={() => navigate("/records")}
-          />
-        </>
-      ) : null}
     </div>
   );
 }

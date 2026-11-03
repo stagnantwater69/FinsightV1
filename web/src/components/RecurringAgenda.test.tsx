@@ -133,6 +133,63 @@ describe("RecurringAgenda", () => {
     expect(within(screen.getByRole("region", { name: "Overdue" })).queryByText("Overdue payment 7")).not.toBeInTheDocument();
   });
 
+  it("in preview mode fills Overdue first, drops per-group Show all, and links to the full agenda", () => {
+    const schedules = Array.from({ length: 4 }, (_, index) => schedule({
+      id: index + 1,
+      label: `Overdue payment ${index + 1}`,
+      dueState: "OVERDUE",
+    }));
+    schedules.push(
+      schedule({ id: 20, label: "Due soon payment", dueState: "DUE_SOON" }),
+      schedule({ id: 21, label: "Future payment", dueState: "SCHEDULED" }),
+    );
+    render(
+      <MemoryRouter>
+        <RecurringAgenda schedules={schedules} previewLimit={5} seeAllTo="/insights/expense-behavior/recurring" />
+      </MemoryRouter>,
+    );
+    expect(screen.getAllByText("Overdue payment 4").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Due soon payment").length).toBeGreaterThan(0);
+    // The sixth row is past the budget, so its whole group is left out.
+    expect(screen.queryByRole("region", { name: "Scheduled" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Show all/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 5 of 6 watched payments")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /See all 6\s*watched payments/ })).toHaveAttribute(
+      "href",
+      "/insights/expense-behavior/recurring",
+    );
+  });
+
+  it("edits and adds through callbacks instead of links when the screen uses a popup", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn();
+    const onAdd = vi.fn();
+    render(
+      <MemoryRouter>
+        <RecurringAgenda schedules={[schedule({ id: 7 })]} onEdit={onEdit} onAdd={onAdd} />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole("link", { name: /Edit/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Edit\s*Shop rent$/ }));
+    expect(onEdit).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
+    await user.click(screen.getByRole("button", { name: "Add a schedule" }));
+    expect(onAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it("in preview mode shows no See all link when everything fits", () => {
+    render(
+      <MemoryRouter>
+        <RecurringAgenda
+          schedules={[schedule({ id: 1 }), schedule({ id: 2, label: "Internet" })]}
+          previewLimit={5}
+          seeAllTo="/insights/expense-behavior/recurring"
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getAllByText("Internet").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: /See all/ })).not.toBeInTheDocument();
+  });
+
   it("renders an overdue schedule under the Overdue heading", () => {
     renderAgenda([
       schedule({ id: 1, label: "Staff salary", dueState: "OVERDUE" }),

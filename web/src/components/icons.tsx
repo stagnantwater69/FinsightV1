@@ -270,6 +270,20 @@ export function IconBell(p: IconProps) {
   );
 }
 
+export function IconCalendar(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <rect x="3.5" y="5" width="17" height="15.5" rx="2.5" />
+      <path d="M3.5 10h17" />
+      <path d="M8 3v4" />
+      <path d="M16 3v4" />
+      <path d="M8 14h2" />
+      <path d="M14 14h2" />
+      <path d="M8 17h2" />
+    </Svg>
+  );
+}
+
 /** The collapse control. Panel outline with the rail picked out. */
 export function IconSidebar(p: IconProps) {
   return (

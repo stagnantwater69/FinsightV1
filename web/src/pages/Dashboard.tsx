@@ -24,6 +24,7 @@ import {
   BellRing,
   CheckCircle2,
   ChevronRight,
+  FileUp,
   Flag,
   GitCompareArrows,
   History,
@@ -64,24 +65,10 @@ export function Dashboard() {
 }
 
 type KpiTone = "brand" | "info" | "accent" | "danger" | "neutral";
-const KPI_WASH: Record<KpiTone, string> = {
-  brand: "from-tint-brand/70",
-  info: "from-tint-info/70",
-  accent: "from-tint-accent/70",
-  danger: "from-tint-danger/70",
-  neutral: "from-tint-neutral/70",
-};
 // The headline amount scales with its own cell (the cell is an inline-size
 // container), so "+PHP 1,128,300" fits a 2-up phone tile without breaking the
 // number apart. It can still wrap at the space after "PHP", never mid-digits.
 const KPI_FIGURE = "figure mt-1 text-[clamp(1rem,12cqi,1.75rem)] font-semibold leading-tight tracking-[-0.02em]";
-const KPI_MARK: Record<KpiTone, string> = {
-  brand: "text-tone-brand",
-  info: "text-tone-info",
-  accent: "text-tone-accent",
-  danger: "text-tone-danger",
-  neutral: "text-tone-neutral",
-};
 
 function KpiCell({
   label,
@@ -113,13 +100,7 @@ function KpiCell({
     changeLabel = `${magnitude} ${up ? "increase" : "decrease"}`;
   }
   return (
-    <div className={`relative isolate min-w-0 overflow-hidden bg-gradient-to-b ${KPI_WASH[tone]} to-paper to-70% p-4 [container-type:inline-size] sm:p-5 ${className}`}>
-      <Icon
-        aria-hidden="true"
-        focusable="false"
-        strokeWidth={1.5}
-        className={`pointer-events-none absolute -bottom-6 -right-6 -z-10 size-28 -rotate-12 opacity-[0.07] ${KPI_MARK[tone]}`}
-      />
+    <div data-alert={tone === "danger" || undefined} className={`stat-tile [container-type:inline-size] ${className}`}>
       <div className="flex items-start justify-between gap-3">
         <p className="text-xs font-medium text-ink-600">{label}</p>
         <IconTile icon={Icon} size="sm" />
@@ -137,7 +118,7 @@ function KpiCell({
           <span className={`figure inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-semibold ${delta.amount === 0 ? "bg-tint-neutral text-tone-neutral" : bad ? "bg-tint-danger text-tone-danger" : "bg-tint-brand text-tone-brand"}`}>
             {delta.amount === 0 ? <Minus aria-hidden className="h-3 w-3" /> : <Trend aria-hidden className="h-3 w-3" />}
             {changeLabel}
-          </span>{" "}vs {delta.against}
+          </span>{" "}<span className="whitespace-nowrap">vs {delta.against}</span>
         </p> : null}
       </div>
     </div>
@@ -273,6 +254,7 @@ function DashboardPage() {
   return (
     <div>
       <PageHead
+        inBreadcrumb
         title="Dashboard"
         subtitle={selected ? <b className="font-semibold text-ink-700">{selected.name}</b> : "Set up your business to see figures."}
         actions={<PeriodFilter />}
@@ -297,16 +279,17 @@ function DashboardPage() {
               <ChevronRight aria-hidden className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
             </Link>
           ) : undefined} shortcuts={
-            <nav aria-label="Quick actions" className="grid grid-cols-3 gap-2 sm:w-[19rem]">
+            <nav aria-label="Quick actions" data-tour="quick-add" className="grid grid-cols-4 gap-1 sm:w-[23rem] sm:gap-2">
               {[
                 { to: "/records/sales/new", label: "Add sale", icon: Plus },
                 { to: "/records/expenses/new", label: "Add expense", icon: Receipt },
                 { to: "/records/receipts/new", label: "Scan receipt", icon: ScanLine },
+                { to: "/records/csv-imports/new", label: "Import CSV", icon: FileUp },
               ].map(({ to, label, icon }) => (
                 <Link
                   key={to}
                   to={to}
-                  className="group flex min-h-tap flex-col items-center gap-2 rounded-xl px-2 py-3 text-center text-xs font-semibold text-ink-700 transition-colors hover:bg-paper-50 hover:text-ink-900"
+                  className="group flex min-h-tap flex-col items-center gap-2 rounded-xl px-1 py-3 text-center text-xs font-semibold text-ink-700 transition-colors hover:bg-paper-50 hover:text-ink-900"
                 >
                   <IconTile icon={icon} />
                   {label}
@@ -417,16 +400,10 @@ function DashboardPage() {
 
           <section
             aria-label="Key figures"
-            className="grid grid-cols-1 overflow-hidden rounded-xl border border-paper-200 bg-paper min-[360px]:grid-cols-2 xl:grid-cols-4"
+            className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 sm:gap-4 xl:grid-cols-4"
           >
             <h2 className="sr-only">Key figures</h2>
-            <div className="relative isolate min-w-0 overflow-hidden border-b border-paper-200 bg-gradient-to-b from-tint-brand/70 to-paper to-70% p-4 [container-type:inline-size] min-[360px]:border-r sm:p-5 xl:border-b-0">
-              <Wallet
-                aria-hidden="true"
-                focusable="false"
-                strokeWidth={1.5}
-                className="pointer-events-none absolute -bottom-6 -right-6 -z-10 size-28 -rotate-12 text-tone-brand opacity-[0.07]"
-              />
+            <div className="stat-tile [container-type:inline-size]">
               <div className="flex items-start justify-between gap-3">
                 <p className="text-xs font-medium text-ink-600">
                   <span>Available funds</span>
@@ -449,7 +426,6 @@ function DashboardPage() {
               value={formatMoney(summary.overview.totalSalesReference)}
               caption={periodCaption}
               delta={summaryDelta("sales")}
-              className="border-b border-paper-200 xl:border-b-0 xl:border-r"
             />
             <KpiCell
               label="Expenses"
@@ -463,7 +439,6 @@ function DashboardPage() {
                   : null
                 )
               }
-              className="border-b border-paper-200 min-[360px]:border-b-0 min-[360px]:border-r"
             />
             <KpiCell
               label="Net"

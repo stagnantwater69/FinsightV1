@@ -256,6 +256,9 @@ export default {
         // The mockup's easing — a slight overshoot-free settle. Used for the
         // sidebar collapse so it decelerates into place instead of stopping.
         shell: "cubic-bezier(.4, 0, .2, 1)",
+        // Fast start, long settle. Every entrance below uses it, so a page,
+        // a menu and a toast arriving together land with the same feel.
+        out: "cubic-bezier(.16, 1, .3, 1)",
       },
 
       keyframes: {
@@ -351,12 +354,12 @@ export default {
       },
       animation: {
         "pop-in": "pop-in 380ms cubic-bezier(.2,.9,.3,1) both",
-        "slide-up": "slide-up 260ms ease-out both",
+        "slide-up": "slide-up 260ms cubic-bezier(.16,1,.3,1) both",
         shimmer: "shimmer 1.6s infinite",
-        "pop-down": "pop-down 140ms ease both",
-        "fade-up": "fade-up 200ms ease both",
-        "toast-in": "toast-in 250ms ease both",
-        "slide-in-right": "slide-in-right 180ms ease both",
+        "pop-down": "pop-down 160ms cubic-bezier(.16,1,.3,1) both",
+        "fade-up": "fade-up 220ms cubic-bezier(.16,1,.3,1) both",
+        "toast-in": "toast-in 250ms cubic-bezier(.16,1,.3,1) both",
+        "slide-in-right": "slide-in-right 200ms cubic-bezier(.16,1,.3,1) both",
         "badge-in": "badge-in 260ms cubic-bezier(.2,.9,.3,1) both",
         bob: "bob 2.8s ease-in-out infinite",
         "rule-draw": "rule-draw 700ms cubic-bezier(.16,1,.3,1) both",

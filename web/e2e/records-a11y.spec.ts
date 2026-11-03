@@ -1,7 +1,7 @@
 /**
  * WEB-F01, in the real page composition. Records mounts its own Add expense /
- * Add sales popups and AppShell mounts Quick Add's copies, so four <dialog>s
- * share the document. With fixed element ids the open sales popup was named
+ * Add sales popups, so several <dialog>s share the document (AppShell used to
+ * mount Quick Add's copies too). With fixed element ids the open sales popup was named
  * "Add expense" in Chromium's accessibility tree and its money-entry controls
  * had no accessible names. The unit test in src/components/Modal.a11y.test.tsx
  * covers the components in isolation; this is the same question asked of the
@@ -22,12 +22,13 @@ test.beforeEach(async ({ page }) => {
   await loginViaUi(page);
 });
 
-test("Quick add → Add sales reference on Records opens a dialog named for sales with named fields", async ({ page }) => {
-  await page.goto("/records");
+test("Add sales on Records opens a dialog named for sales with named fields", async ({ page }) => {
+  // A date filter keeps the page off its first-run empty state, which is
+  // where the "+ Add sales" toolbar button lives.
+  await page.goto("/records?dateFrom=2026-01-01");
   await expect(page.getByRole("heading", { name: "Records", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: /quick add/i }).click();
-  await page.getByRole("menu", { name: /add a record/i }).getByRole("menuitem", { name: /add sales reference/i }).click();
+  await page.getByRole("button", { name: /add sales/i }).click();
 
   const dialog = page.getByRole("dialog", { name: "Add sales reference" });
   await expect(dialog).toBeVisible();

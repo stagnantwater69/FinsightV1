@@ -58,14 +58,9 @@ export function Sparkline({
   );
 }
 
-const TILE_TONES = {
-  brand: { wash: "from-tint-brand", ring: "ring-edge-brand", mark: "text-tone-brand" },
-  info: { wash: "from-tint-info", ring: "ring-edge-info", mark: "text-tone-info" },
-  danger: { wash: "from-tint-danger", ring: "ring-edge-danger", mark: "text-tone-danger" },
-  neutral: { wash: "from-tint-neutral", ring: "ring-paper-200", mark: "text-tone-neutral" },
-} as const;
-
-export type KpiTileTone = keyof typeof TILE_TONES;
+// Tone no longer paints the tile (see `.stat-tile` in index.css); only a
+// danger tone marks it, with the shared alert bar.
+export type KpiTileTone = "brand" | "info" | "danger" | "neutral";
 
 /**
  * One headline figure with its own picture underneath. The label is a direct
@@ -87,17 +82,13 @@ export function KpiTile({
   visual?: ReactNode;
   order?: number;
 }) {
-  const t = TILE_TONES[tone];
   return (
     <div
-      className={`relative isolate flex min-w-0 flex-col overflow-hidden rounded-2xl bg-gradient-to-br ${t.wash} to-paper p-4 pr-16 shadow-sm ring-1 ${t.ring} motion-safe:animate-fade-up sm:p-5 sm:pr-16`}
+      data-alert={tone === "danger" || undefined}
+      className="stat-tile pr-16 motion-safe:animate-fade-up sm:pr-16"
       style={{ animationDelay: `${order * 70}ms` }}
     >
-      <Icon
-        aria-hidden
-        className={`pointer-events-none absolute -bottom-6 -right-6 -z-10 size-28 -rotate-12 opacity-[0.07] ${t.mark}`}
-      />
-      <IconTile icon={Icon} className="absolute right-4 top-4 sm:right-5 sm:top-5" />
+      <IconTile icon={Icon} size="sm" className="absolute right-4 top-4 sm:right-5 sm:top-5" />
       <p className="text-xs font-semibold text-ink-600">{label}</p>
       {children}
       {visual ? <div className="mt-auto -mr-12 pt-3">{visual}</div> : null}

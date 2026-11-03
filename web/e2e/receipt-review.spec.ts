@@ -121,8 +121,8 @@ test("upload, review optional details, correct and save a receipt across web lay
   });
   await page.route("**/records/search**", async (route) => { await route.fulfill({ json: { items: [], nextCursor: null } }); });
   await page.route("**/records/flagged/count**", async (route) => { await route.fulfill({ json: { expenses: 0, sales: 0, total: 0 } }); });
-  await page.getByRole("button", { name: "Quick add" }).click();
-  await page.getByRole("menuitem", { name: /Scan receipt/ }).click();
+  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Records" }).click();
+  await page.getByRole("link", { name: /^Scan (a )?receipt$/ }).first().click();
   await expect(page).toHaveURL(/\/records\/receipts\/new$/);
   await expect(page.getByText("Checking unfinished scans…")).toHaveCount(0);
   // Deterministic, labelled synthetic receipt; no OCR accuracy is implied.

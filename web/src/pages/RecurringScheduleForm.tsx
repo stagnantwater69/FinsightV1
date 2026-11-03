@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { CategorySelect } from "../components/CategorySelect";
@@ -7,6 +7,7 @@ import { useConfirm } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
 import { Checkbox, Field, FormError, MoneyInput, TextInput } from "../components/Field";
 import { FormPage, InfoNote } from "../components/ui";
+import { Modal } from "../components/Modal";
 import { formatDueDate } from "../components/RecurringAgenda";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
@@ -50,6 +51,19 @@ const EMPTY: FormValues = {
   isActive: true,
 };
 
+/** The repeat lengths most owners pick; anything else is "Custom". */
+const REPEAT_PRESETS: { days: number; label: string }[] = [
+  { days: 7, label: "Weekly" },
+  { days: 14, label: "Every 2 weeks" },
+  { days: 30, label: "Monthly" },
+  { days: 90, label: "Quarterly" },
+];
+
+/*
+ * Layout: the name alone on top (it is what the owner thinks of first), then
+ * pairs that belong together, then how often. Pairs collapse to one column
+ * below `sm` so the popup still works on a phone.
+ */
 function ScheduleFields({
   values,
   onChange,
@@ -57,13 +71,19 @@ function ScheduleFields({
   values: FormValues;
   onChange: (patch: Partial<FormValues>) => void;
 }) {
+  const presetMatch = REPEAT_PRESETS.some((preset) => preset.days === values.intervalDays);
+  // Custom stays open once chosen, even if the typed number happens to equal a
+  // preset, so the input does not vanish mid-typing.
+  const [custom, setCustom] = useState(!presetMatch && values.intervalDays !== "");
+  const showCustom = custom || !presetMatch;
+
   return (
     <>
       <Field
-        label="What is it?"
+        label="Payment name"
         htmlFor="label"
         required
-        hint="What you call this payment. FinSight matches your records against it, so keep it close to how you describe the expense — “Shop rent”, “Staff salary”."
+        hint="Use the words you write on the expense, so FinSight can match it."
       >
         <TextInput
           id="label"
@@ -75,80 +95,126 @@ function ScheduleFields({
         />
       </Field>
 
-      <Field label="Category" htmlFor="category" required>
-        <CategorySelect
-          id="category"
-          value={values.categoryId}
-          onChange={(categoryId) => onChange({ categoryId })}
-        />
-      </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Category" htmlFor="category" required fillRow>
+          <CategorySelect
+            id="category"
+            value={values.categoryId}
+            onChange={(categoryId) => onChange({ categoryId })}
+          />
+        </Field>
+        <Field label="Paid to" htmlFor="vendor" optional fillRow>
+          <TextInput
+            id="vendor"
+            value={values.vendor}
+            onChange={(e) => onChange({ vendor: e.target.value })}
+            placeholder="e.g. landlord"
+            maxLength={FIELD_LIMITS.vendor}
+          />
+        </Field>
+      </div>
 
-      <Field label="Paid to" htmlFor="vendor" optional>
-        <TextInput
-          id="vendor"
-          value={values.vendor}
-          onChange={(e) => onChange({ vendor: e.target.value })}
-          maxLength={FIELD_LIMITS.vendor}
-        />
-      </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Usual amount" htmlFor="expectedAmount" required fillRow>
+          <MoneyInput
+            id="expectedAmount"
+            min={0.01}
+            required
+            value={values.expectedAmount}
+            onChange={(e) => onChange({ expectedAmount: e.target.value === "" ? "" : Number(e.target.value) })}
+          />
+        </Field>
+        <Field label="Next due" htmlFor="nextDueDate" required fillRow>
+          <TextInput
+            id="nextDueDate"
+            type="date"
+            required
+            value={values.nextDueDate}
+            onChange={(e) => onChange({ nextDueDate: e.target.value })}
+          />
+        </Field>
+      </div>
 
-      <Field
-        label="Expected amount"
-        htmlFor="expectedAmount"
-        required
-        hint="Roughly what it usually comes to. FinSight allows a margin either side before it says anything."
-      >
-        <MoneyInput
-          id="expectedAmount"
-          min={0.01}
-          required
-          value={values.expectedAmount}
-          onChange={(e) => onChange({ expectedAmount: e.target.value === "" ? "" : Number(e.target.value) })}
-        />
-      </Field>
-
-      <Field
-        label="How often, in days"
-        htmlFor="intervalDays"
-        required
-        hint="7 for weekly, 30 for monthly, 90 for quarterly."
-      >
-        <TextInput
-          id="intervalDays"
-          type="number"
-          min={1}
-          // Matches the server's own bound: a schedule longer than annual would
-          // raise its first finding after the owner's planning horizon.
-          max={366}
-          step={1}
-          required
-          value={values.intervalDays}
-          onChange={(e) => onChange({ intervalDays: e.target.value === "" ? "" : Number(e.target.value) })}
-        />
-      </Field>
-
-      <Field
-        label="Next due"
-        htmlFor="nextDueDate"
-        required
-        hint="The next date you expect to pay it. FinSight moves this forward on its own once it sees a matching record."
-      >
-        <TextInput
-          id="nextDueDate"
-          type="date"
-          required
-          value={values.nextDueDate}
-          onChange={(e) => onChange({ nextDueDate: e.target.value })}
-        />
-      </Field>
+      <fieldset>
+        <legend className="block text-sm font-medium text-ink-700">
+          Repeats
+          <span className="ml-1 text-tone-danger" title="Required">
+            <span aria-hidden>*</span>
+            <span className="sr-only">(required)</span>
+          </span>
+        </legend>
+        <div
+          className="mt-1.5 flex flex-wrap gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1"
+        >
+          {REPEAT_PRESETS.map((preset) => (
+            <RepeatOption
+              key={preset.days}
+              active={!showCustom && values.intervalDays === preset.days}
+              onClick={() => {
+                setCustom(false);
+                onChange({ intervalDays: preset.days });
+              }}
+            >
+              {preset.label}
+            </RepeatOption>
+          ))}
+          <RepeatOption active={showCustom} onClick={() => setCustom(true)}>
+            Custom
+          </RepeatOption>
+        </div>
+        {showCustom ? (
+          <div className="mt-2 flex items-center gap-2">
+            <label htmlFor="intervalDays" className="text-sm text-ink-700">
+              Every
+            </label>
+            <TextInput
+              id="intervalDays"
+              type="number"
+              min={1}
+              // Matches the server's own bound: a schedule longer than annual would
+              // raise its first finding after the owner's planning horizon.
+              max={366}
+              step={1}
+              required
+              className="w-24"
+              value={values.intervalDays}
+              onChange={(e) => onChange({ intervalDays: e.target.value === "" ? "" : Number(e.target.value) })}
+            />
+            <span className="text-sm text-ink-700">days</span>
+          </div>
+        ) : null}
+      </fieldset>
 
       <Checkbox
         label="Watch this payment"
-        hint="Turn this off to pause it — the schedule stays, FinSight just stops telling you when it's late."
+        hint="Untick to pause late alerts. The schedule stays."
         checked={values.isActive}
         onChange={(isActive) => onChange({ isActive })}
       />
     </>
+  );
+}
+
+function RepeatOption({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`tap flex-1 whitespace-nowrap rounded-lg px-3 text-[13px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+        active ? "bg-paper text-tone-brand shadow-sm" : "text-ink-600 hover:text-tone-brand"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -163,15 +229,40 @@ function isComplete(values: FormValues) {
   );
 }
 
-export function AddRecurringSchedule() {
-  const { selected } = useBusinessProfiles();
-  const navigate = useNavigate();
+function valuesOf(schedule: RecurringSchedule): FormValues {
+  return {
+    label: schedule.label,
+    vendor: schedule.vendor ?? "",
+    categoryId: schedule.categoryId,
+    intervalDays: schedule.intervalDays,
+    expectedAmount: schedule.expectedAmount,
+    // Date-only column: slice the ISO string rather than going through a
+    // local-time Date, which would hand the input the previous day.
+    nextDueDate: schedule.nextDueDate.slice(0, 10),
+    isActive: schedule.isActive,
+  };
+}
+
+/**
+ * The add/edit form itself, without a page or a popup around it. `schedule`
+ * null means "add". `onDone` runs after a successful save or delete; the
+ * caller decides what happens next — a page navigates away, a popup closes
+ * and refreshes the list behind it.
+ */
+function ScheduleForm({
+  businessProfileId,
+  schedule,
+  onDone,
+}: {
+  businessProfileId: number;
+  schedule: RecurringSchedule | null;
+  onDone: () => void;
+}) {
   const toast = useToast();
-  const [values, setValues] = useState<FormValues>(EMPTY);
+  const confirm = useConfirm();
+  const [values, setValues] = useState<FormValues>(() => (schedule ? valuesOf(schedule) : EMPTY));
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  if (!selected) return <NoBusinessProfile />;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -179,18 +270,39 @@ export function AddRecurringSchedule() {
     setError(null);
     setSubmitting(true);
     try {
-      await api.post("/insights/recurring-schedules", {
-        businessProfileId: selected!.id,
-        categoryId: values.categoryId,
-        label: values.label.trim(),
-        vendor: values.vendor.trim() || undefined,
-        intervalDays: values.intervalDays,
-        expectedAmount: values.expectedAmount,
-        nextDueDate: values.nextDueDate,
-        isActive: values.isActive,
-      });
-      toast("Recurring payment added");
-      navigate("/insights/expense-behavior");
+      if (schedule) {
+        await api.patch(
+          `/insights/recurring-schedules/${schedule.id}`,
+          {
+            categoryId: values.categoryId,
+            label: values.label.trim(),
+            vendor: values.vendor.trim() || null,
+            intervalDays: values.intervalDays,
+            expectedAmount: values.expectedAmount,
+            nextDueDate: values.nextDueDate,
+            isActive: values.isActive,
+          },
+          { serverStateScope: { businessProfileId } },
+        );
+        toast("Changes saved");
+      } else {
+        await api.post(
+          "/insights/recurring-schedules",
+          {
+            businessProfileId,
+            categoryId: values.categoryId,
+            label: values.label.trim(),
+            vendor: values.vendor.trim() || undefined,
+            intervalDays: values.intervalDays,
+            expectedAmount: values.expectedAmount,
+            nextDueDate: values.nextDueDate,
+            isActive: values.isActive,
+          },
+          { serverStateScope: { businessProfileId } },
+        );
+        toast("Recurring payment added");
+      }
+      onDone();
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -198,23 +310,121 @@ export function AddRecurringSchedule() {
     }
   }
 
+  async function handleDelete() {
+    if (!schedule) return;
+    const ok = await confirm({
+      title: "Stop watching this payment?",
+      body: (
+        <>
+          FinSight stops watching <b className="font-semibold">{values.label}</b>. Your expense records
+          stay. To pause alerts instead, untick “Watch this payment” and save.
+        </>
+      ),
+      confirmLabel: "Delete schedule",
+    });
+    if (!ok) return;
+    setError(null);
+    try {
+      await api.delete(`/insights/recurring-schedules/${schedule.id}`, {
+        serverStateScope: { businessProfileId },
+      });
+      toast("Recurring payment deleted");
+      onDone();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <ScheduleFields values={values} onChange={(patch) => setValues((v) => ({ ...v, ...patch }))} />
+      {schedule ? null : (
+        <InfoNote>FinSight won’t add the expense for you. It tells you when yours hasn’t come in.</InfoNote>
+      )}
+      {error ? <FormError>{error}</FormError> : null}
+      <Button type="submit" variant="primary" fullWidth disabled={submitting}>
+        {submitting ? "Saving…" : schedule ? "Save changes" : "Add payment"}
+      </Button>
+      {schedule ? (
+        // Outlined danger, never a fill — the destructive path must not look
+        // like the primary one.
+        <Button type="button" variant="danger" fullWidth onClick={handleDelete}>
+          Delete schedule
+        </Button>
+      ) : null}
+    </form>
+  );
+}
+
+function lastMatchText(schedule: RecurringSchedule) {
+  return schedule.lastRecordedDate
+    ? `Last matched expense: ${formatDueDate(schedule.lastRecordedDate)}.`
+    : "No matching expense yet.";
+}
+
+/**
+ * The same form in a popup, for the screens that list schedules — the
+ * calendar, Expense insight and the recurring page — so adding or editing one
+ * does not take the owner away from what they were looking at.
+ *
+ * `schedule` null with `open` true is "add". `onSaved` runs after a save or a
+ * delete so the caller can refetch: a schedule's due state is
+ * server-computed, never patched in on the client.
+ */
+export function ScheduleFormModal({
+  open,
+  schedule,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  schedule: RecurringSchedule | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { selected } = useBusinessProfiles();
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={schedule ? "Edit recurring payment" : "Add a recurring payment"}
+    >
+      {/* Mounted only while open, and keyed on the schedule, so every opening
+          starts from that schedule's saved values rather than the last edit. */}
+      {open && selected ? (
+        <div key={schedule?.id ?? "new"}>
+          {schedule ? <p className="mb-4 text-sm text-ink-500">{lastMatchText(schedule)}</p> : null}
+          <ScheduleForm
+            businessProfileId={selected.id}
+            schedule={schedule}
+            onDone={() => {
+              onClose();
+              onSaved();
+            }}
+          />
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
+export function AddRecurringSchedule() {
+  const { selected } = useBusinessProfiles();
+  const navigate = useNavigate();
+
+  if (!selected) return <NoBusinessProfile />;
+
   return (
     <FormPage
       eyebrow="Insights"
       title="Add a recurring payment"
-      subtitle="Tell FinSight about something that repeats, and it will say so when one is late or comes in at an amount you did not expect."
+      subtitle="FinSight tells you when it’s late or the amount is off."
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <ScheduleFields values={values} onChange={(patch) => setValues((v) => ({ ...v, ...patch }))} />
-        <InfoNote>
-          FinSight will not create the expense record for you. It watches for the one you record, and
-          tells you when it hasn't arrived.
-        </InfoNote>
-        {error ? <FormError>{error}</FormError> : null}
-        <Button type="submit" variant="primary" fullWidth disabled={submitting}>
-          {submitting ? "Saving…" : "Save recurring payment"}
-        </Button>
-      </form>
+      <ScheduleForm
+        businessProfileId={selected.id}
+        schedule={null}
+        onDone={() => navigate("/insights/expense-behavior")}
+      />
     </FormPage>
   );
 }
@@ -223,13 +433,8 @@ export function EditRecurringSchedule() {
   const { id } = useParams<{ id: string }>();
   const { selected } = useBusinessProfiles();
   const navigate = useNavigate();
-  const toast = useToast();
-  const confirm = useConfirm();
   const [schedule, setSchedule] = useState<RecurringSchedule | null>(null);
-  const [values, setValues] = useState<FormValues>(EMPTY);
-  const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
 
   /*
    * Read from the agenda list rather than a per-id endpoint, because the API
@@ -255,17 +460,6 @@ export function EditRecurringSchedule() {
           return;
         }
         setSchedule(found);
-        setValues({
-          label: found.label,
-          vendor: found.vendor ?? "",
-          categoryId: found.categoryId,
-          intervalDays: found.intervalDays,
-          expectedAmount: found.expectedAmount,
-          // Date-only column: slice the ISO string rather than going through a
-          // local-time Date, which would hand the input the previous day.
-          nextDueDate: found.nextDueDate.slice(0, 10),
-          isActive: found.isActive,
-        });
       })
       .catch((err) => {
         if (!cancelled) setLoadError(getErrorMessage(err));
@@ -275,84 +469,16 @@ export function EditRecurringSchedule() {
     };
   }, [id, profileId]);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!isComplete(values)) return;
-    setError(null);
-    setSubmitting(true);
-    try {
-      await api.patch(
-        `/insights/recurring-schedules/${id}`,
-        {
-          categoryId: values.categoryId,
-          label: values.label.trim(),
-          vendor: values.vendor.trim() || null,
-          intervalDays: values.intervalDays,
-          expectedAmount: values.expectedAmount,
-          nextDueDate: values.nextDueDate,
-          isActive: values.isActive,
-        },
-        { serverStateScope: { businessProfileId: selected!.id } },
-      );
-      toast("Changes saved");
-      navigate("/insights/expense-behavior");
-    } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleDelete() {
-    const ok = await confirm({
-      title: "Stop watching this payment?",
-      body: (
-        <>
-          FinSight will forget <b className="font-semibold">{values.label}</b> and stop telling you when
-          it's late. Your expense records are not affected. If you only want to stop the alerts for now,
-          untick “Watch this payment” and save instead.
-        </>
-      ),
-      confirmLabel: "Delete schedule",
-    });
-    if (!ok || !profileId) return;
-    setError(null);
-    try {
-      await api.delete(`/insights/recurring-schedules/${id}`, {
-        serverStateScope: { businessProfileId: profileId },
-      });
-      toast("Recurring payment deleted");
-      navigate("/insights/expense-behavior");
-    } catch (err) {
-      setError(getErrorMessage(err));
-    }
-  }
-
   if (loadError) return <p className="text-sm text-tone-danger">{loadError}</p>;
   if (!selected || !schedule) return <p className="text-sm text-ink-500">Loading…</p>;
 
   return (
-    <FormPage
-      eyebrow="Insights"
-      title="Edit recurring payment"
-      subtitle={
-        schedule.lastRecordedDate
-          ? `Last matching record: ${formatDueDate(schedule.lastRecordedDate)}.`
-          : "FinSight hasn't matched a record to this one yet."
-      }
-    >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <ScheduleFields values={values} onChange={(patch) => setValues((v) => ({ ...v, ...patch }))} />
-        {error ? <FormError>{error}</FormError> : null}
-        <Button type="submit" variant="primary" fullWidth disabled={submitting}>
-          {submitting ? "Saving…" : "Save changes"}
-        </Button>
-        {/* Outlined danger, never a fill — the destructive path must not look
-            like the primary one. */}
-        <Button type="button" variant="danger" fullWidth onClick={handleDelete}>
-          Delete this schedule
-        </Button>
-      </form>
+    <FormPage eyebrow="Insights" title="Edit recurring payment" subtitle={lastMatchText(schedule)}>
+      <ScheduleForm
+        businessProfileId={selected.id}
+        schedule={schedule}
+        onDone={() => navigate("/insights/expense-behavior")}
+      />
     </FormPage>
   );
 }

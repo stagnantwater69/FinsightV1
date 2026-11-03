@@ -131,7 +131,7 @@ test("the app shell header wraps instead of scrolling the page at 200px", async 
   await expect(page.getByRole("heading", { name: "Records", exact: true })).toBeVisible();
 
   // Every control stays reachable: wrapping must not be achieved by hiding one.
-  await expect(page.getByRole("button", { name: /quick add/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Search" })).toBeVisible();
   await expect(page.getByRole("button", { name: /account menu/i })).toBeVisible();
   expect(await horizontalScroll(page)).toBe(0);
 });

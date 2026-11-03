@@ -1,9 +1,10 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./AuthContext";
 import { useBusinessProfiles } from "./BusinessProfileContext";
 import { preferencePatch, readTour, reconcile, writeTour, type StoredTour } from "../lib/tourStorage";
 import { TOUR_STEPS } from "../components/tour/steps";
+import { TourContext, type TourContextValue } from "./tourContextValue";
 import { TourOverlay } from "../components/tour/TourOverlay";
 
 /**
@@ -22,7 +23,7 @@ import { TourOverlay } from "../components/tour/TourOverlay";
  *     tour finished on another device is never re-offered here while
  *     /auth/me is still in flight,
  *   - a selected business profile. An owner who skipped Business Profile
- *     Setup has an app whose nav, quick-add, bell and dashboard all render
+ *     Setup has an app whose nav, quick actions, bell and dashboard all render
  *     nothing — touring an empty shell teaches nothing, so the tour waits
  *     until their first profile exists. Their status stays not_started, so
  *     it offers itself then.
@@ -45,49 +46,7 @@ import { TourOverlay } from "../components/tour/TourOverlay";
  * tour" in the account menu writes it back to step 0.
  */
 
-export interface TourContextValue {
-  /** id of the active step, or null. */
-  activeStepId: string | null;
-  active: boolean;
-  /** The dashboard should show the "take the tour?" invitation. */
-  offered: boolean;
-  /** Accept the invitation: open the tour at step 0. */
-  accept: () => void;
-  /** Decline the invitation. Stored as `skipped`; the menu can still restart it. */
-  decline: () => void;
-  /**
-   * Whether there is anything worth touring yet.
-   *
-   * False for an owner who chose "Skip for now" and has no business. The
-   * auto-start below has always honoured that; `restart` did not, and the two
-   * entry points disagreeing is what made "Restart product tour" produce a
-   * four-step stub of a ten-step tour. The controls that offer the tour read
-   * this so they can say WHY it is unavailable rather than doing nothing.
-   */
-  available: boolean;
-  stepIndex: number;
-  setStepIndex: (i: number) => void;
-  /** Ends the tour and records why. */
-  stop: (status: "completed" | "skipped") => void;
-  /** Rewinds to step 0 and (re)arms auto-start — the account-menu entry. */
-  restart: () => void;
-  /** Replay on every sign-in, regardless of a completed/skipped status. */
-  alwaysShow: boolean;
-  /**
-   * Rejects if the account could not be told, having already put the switch
-   * back — so the settings screen can say so rather than showing a preference
-   * that only this browser believes.
-   */
-  setAlwaysShow: (value: boolean) => Promise<void>;
-}
-
-/** Exported for tests/harnesses that drive the overlay with a hand-built value. */
-export const TourContext = createContext<TourContextValue | null>(null);
-
-/** Null-safe consumer for chrome that may render without the provider (tests). */
-export function useTourOptional() {
-  return useContext(TourContext);
-}
+export { TourContext, useTourOptional, type TourContextValue } from "./tourContextValue";
 
 export function TourProvider({ children }: { children: ReactNode }) {
   const { profile, preferences, preferencesLoaded, updatePreferences } = useAuth();

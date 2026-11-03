@@ -1,9 +1,10 @@
 import { Link } from "react-router-dom";
 import { EmptyState } from "./EmptyState";
-import { ButtonLink } from "./Button";
+import { Button, ButtonLink } from "./Button";
 import { Money } from "./Money";
 import { Panel, Pill } from "./ui";
 import { ListDisclosureControl, useListDisclosure } from "./ListDisclosure";
+import { SeeAllFooter } from "./SeeAllFooter";
 import type { RecurringDueState, RecurringSchedule } from "../lib/types";
 
 /**
@@ -108,7 +109,11 @@ export function formatDueDate(iso: string) {
   });
 }
 
-function ScheduleRow({ schedule }: { schedule: RecurringSchedule }) {
+function ScheduleRow({ schedule, onEdit }: {
+  schedule: RecurringSchedule;
+  /** Set when the screen edits in a popup; otherwise Edit is a link to the form page. */
+  onEdit?: (schedule: RecurringSchedule) => void;
+}) {
   const meta = [
     schedule.categoryName ?? "—",
     `every ${schedule.intervalDays} days`,
@@ -133,23 +138,38 @@ function ScheduleRow({ schedule }: { schedule: RecurringSchedule }) {
       </div>
       <div className="flex shrink-0 items-center gap-3">
         <Money value={schedule.expectedAmount} decimals className="text-sm font-semibold text-ink-900" />
-        <Link
-          to={`/insights/recurring-schedules/${schedule.id}/edit`}
-          className="tap-inline rounded-lg px-2 text-xs font-semibold text-tone-brand transition hover:bg-tint-brand"
-        >
-          Edit
-          <span className="sr-only"> {schedule.label}</span>
-        </Link>
+        {onEdit ? (
+          <button
+            type="button"
+            onClick={() => onEdit(schedule)}
+            className="tap-inline rounded-lg px-2 text-xs font-semibold text-tone-brand transition hover:bg-tint-brand"
+          >
+            Edit
+            <span className="sr-only"> {schedule.label}</span>
+          </button>
+        ) : (
+          <Link
+            to={`/insights/recurring-schedules/${schedule.id}/edit`}
+            className="tap-inline rounded-lg px-2 text-xs font-semibold text-tone-brand transition hover:bg-tint-brand"
+          >
+            Edit
+            <span className="sr-only"> {schedule.label}</span>
+          </Link>
+        )}
       </div>
     </li>
   );
 }
 
-function ScheduleGroupSection({ group, resetKey }: {
+function ScheduleGroupSection({ group, resetKey, visibleItems, onEdit }: {
   group: ScheduleGroup;
   resetKey: string;
+  onEdit?: (schedule: RecurringSchedule) => void;
+  /** Set in preview mode: the rows this group may show, with no "Show all". */
+  visibleItems?: RecurringSchedule[];
 }) {
   const disclosure = useListDisclosure({ total: group.items.length, resetKey });
+  const rows = visibleItems ?? group.items.slice(0, disclosure.visibleCount);
 
   return (
     <section aria-label={group.label}>
@@ -160,30 +180,54 @@ function ScheduleGroupSection({ group, resetKey }: {
         </span>
       </h3>
       <p className="mb-2 mt-0.5 text-xs text-ink-500">{group.caption}</p>
-      <ul id={disclosure.contentId} className="space-y-2">
-        {group.items.slice(0, disclosure.visibleCount).map((schedule) => (
-          <ScheduleRow key={schedule.id} schedule={schedule} />
+      <ul id={visibleItems ? undefined : disclosure.contentId} className="space-y-2">
+        {rows.map((schedule) => (
+          <ScheduleRow key={schedule.id} schedule={schedule} onEdit={onEdit} />
         ))}
       </ul>
-      <ListDisclosureControl
-        disclosure={disclosure}
-        total={group.items.length}
-        itemLabel={`${group.label.toLowerCase()} payments`}
-        className="mt-3"
-      />
+      {visibleItems ? null : (
+        <ListDisclosureControl
+          disclosure={disclosure}
+          total={group.items.length}
+          itemLabel={`${group.label.toLowerCase()} payments`}
+          className="mt-3"
+        />
+      )}
     </section>
   );
 }
 
-export function RecurringAgenda({ schedules, resetKey }: {
+export function RecurringAgenda({ schedules, resetKey, className, previewLimit, seeAllTo, onEdit, onAdd }: {
   schedules: RecurringSchedule[];
   resetKey?: string;
+  className?: string;
+  /**
+   * Preview mode: at most this many rows across all groups, in reading order,
+   * with no per-group "Show all". Group headings keep their full counts.
+   */
+  previewLimit?: number;
+  /** Where the full agenda lives; linked only when the preview leaves rows out. */
+  seeAllTo?: string;
+  /** Edit in a popup. Without it, Edit links to the form page. */
+  onEdit?: (schedule: RecurringSchedule) => void;
+  /** Add in a popup. Without it, Add links to the form page. */
+  onAdd?: () => void;
 }) {
   const groups = groupSchedulesByDueState(schedules);
   const overdue = overdueScheduleCount(schedules);
+  // Hand out the preview budget group by group, so Overdue fills first.
+  let remaining = previewLimit ?? 0;
+  const previewRows = groups.map((group) => {
+    if (previewLimit === undefined) return undefined;
+    const rows = group.items.slice(0, Math.max(remaining, 0));
+    remaining -= rows.length;
+    return rows;
+  });
+  const shown = previewLimit === undefined ? schedules.length : Math.min(previewLimit, schedules.length);
 
   return (
     <Panel
+      className={className}
       eyebrow="Recurring expenses"
       title="Payments you asked FinSight to watch"
       action={
@@ -193,9 +237,15 @@ export function RecurringAgenda({ schedules, resetKey }: {
               {overdue} overdue
             </Pill>
           ) : null}
-          <ButtonLink to="/insights/recurring-schedules/new" variant="secondary" size="sm">
-            Add a schedule
-          </ButtonLink>
+          {onAdd ? (
+            <Button type="button" variant="secondary" size="sm" onClick={onAdd}>
+              Add a schedule
+            </Button>
+          ) : (
+            <ButtonLink to="/insights/recurring-schedules/new" variant="secondary" size="sm">
+              Add a schedule
+            </ButtonLink>
+          )}
         </div>
       }
     >
@@ -208,23 +258,43 @@ export function RecurringAgenda({ schedules, resetKey }: {
           title="Nothing scheduled yet"
           icon="↻"
           action={
-            <ButtonLink to="/insights/recurring-schedules/new" variant="primary">
-              Add a recurring payment
-            </ButtonLink>
+            onAdd ? (
+              <Button type="button" variant="primary" onClick={onAdd}>
+                Add a recurring payment
+              </Button>
+            ) : (
+              <ButtonLink to="/insights/recurring-schedules/new" variant="primary">
+                Add a recurring payment
+              </ButtonLink>
+            )
           }
         >
           Rent, salaries, internet. FinSight tells you when one is late or the amount is off.
         </EmptyState>
       ) : (
-        <div className="space-y-5">
-          {groups.map((group) => (
-            <ScheduleGroupSection
-              key={group.key}
-              group={group}
-              resetKey={resetKey ?? String(schedules[0]?.businessProfileId ?? "")}
+        <>
+          <div className="space-y-5">
+            {groups.map((group, index) =>
+              previewRows[index]?.length === 0 ? null : (
+                <ScheduleGroupSection
+                  key={group.key}
+                  group={group}
+                  resetKey={resetKey ?? String(schedules[0]?.businessProfileId ?? "")}
+                  visibleItems={previewRows[index]}
+                  onEdit={onEdit}
+                />
+              ),
+            )}
+          </div>
+          {seeAllTo && shown < schedules.length ? (
+            <SeeAllFooter
+              shown={shown}
+              total={schedules.length}
+              noun="watched payments"
+              to={seeAllTo}
             />
-          ))}
-        </div>
+          ) : null}
+        </>
       )}
     </Panel>
   );

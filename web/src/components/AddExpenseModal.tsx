@@ -72,6 +72,7 @@ export function AddExpenseModal({
   onSaved,
   recordId,
   duplicateFrom,
+  title,
 }: {
   businessProfileId: number;
   open: boolean;
@@ -79,6 +80,8 @@ export function AddExpenseModal({
   onSaved: () => void;
   recordId?: number;
   duplicateFrom?: DuplicateExpenseSeed;
+  /** Overrides "Add expense", e.g. the calendar's "Record payment". */
+  title?: string;
 }) {
   const toast = useToast();
   const { selected } = useBusinessProfiles();
@@ -272,7 +275,7 @@ export function AddExpenseModal({
   const dateFieldId = useId();
 
   return (
-    <Modal open={open} onClose={handleClose} title={editing ? "Edit expense" : "Add expense"}>
+    <Modal open={open} onClose={handleClose} title={title ?? (editing ? "Edit expense" : "Add expense")}>
       {/* noValidate hands validation to the code above; see handleSubmit. */}
       <form onSubmit={handleSubmit} className="space-y-4" noValidate>
         {!editing ? <ManualCreateRecovery recovery={recovery} /> : null}

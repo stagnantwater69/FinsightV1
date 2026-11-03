@@ -951,6 +951,7 @@ export function Records() {
   return (
     <div>
       <PageHead
+        inBreadcrumb
         eyebrow="Records management"
         title="Records"
         subtitle={selected ? selected.name : undefined}
@@ -973,6 +974,30 @@ export function Records() {
                 + Add expense
               </Button>
             )}
+            {/* The less-used create paths, in the same group as the primary so
+                every way to add a record sits in one place. From lg up they
+                follow it on one row behind a hairline; below lg they take a
+                row of their own that scrolls sideways rather than wrapping
+                into rows that push the table off-screen. DOM order matches the
+                visual order at every width, so tab order does too.
+
+                Hidden while the page is empty: the empty state below already
+                offers every one of these routes in context. */}
+            {isPristine ? null : (
+              <div className="scroll-slim -mx-4 basis-full overflow-x-auto px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:basis-auto lg:overflow-visible lg:border-l lg:border-paper-200 lg:pl-2 lg:pr-0">
+                <div className="flex w-max gap-2">
+                  <Button variant="secondary" size="sm" onClick={() => setAddSalesOpen(true)}>
+                    + Add sales
+                  </Button>
+                  <ButtonLink to="/records/receipts/new" variant="secondary" size="sm">
+                    Scan receipt
+                  </ButtonLink>
+                  <ButtonLink to="/records/csv-imports/new" variant="secondary" size="sm">
+                    Import CSV
+                  </ButtonLink>
+                </div>
+              </div>
+            )}
           </>
         }
       />
@@ -982,29 +1007,6 @@ export function Records() {
           Refreshing records…
         </p>
       ) : null}
-
-      {/* The less-used create paths. Scrolls horizontally on phones rather
-          than wrapping into rows that push the table off-screen.
-
-          Hidden while the page is empty: the empty state below already offers
-          every one of these routes in context, and a detached strip of
-          equal-weight buttons directly under the title reads as the page's
-          content rather than as its overflow. */}
-      {isPristine ? null : (
-        <div className="scroll-slim -mx-4 mb-4 overflow-x-auto px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
-          <div className="flex w-max gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setAddSalesOpen(true)}>
-              + Add sales
-            </Button>
-            <ButtonLink to="/records/receipts/new" variant="secondary" size="sm">
-              Scan receipt
-            </ButtonLink>
-            <ButtonLink to="/records/csv-imports/new" variant="secondary" size="sm">
-              Import CSV
-            </ButtonLink>
-          </div>
-        </div>
-      )}
 
       {error ? (
         <div
@@ -1159,20 +1161,22 @@ export function Records() {
                       {r.vendor ? <span className="min-w-0 [overflow-wrap:anywhere]">· {r.vendor}</span> : null}
                     </p>
                   </div>
-                  <p
-                    className={`shrink-0 text-right font-medium ${
-                      r.type === "expense" ? "text-ink-900" : "text-brand-700"
-                    }`}
-                  >
-                    {/* Same reasoning as the table column, and more so here:
-                        this is the phone layout, where there is no hover to
-                        recover the exact figure from. */}
-                    <Money value={r.amount} decimals />
-                  </p>
-                </div>
-
-                <div className="mt-2">
-                  <Pill tone={status.tone}>{status.label}</Pill>
+                  {/* Amount and status stacked on the right: they are read
+                      together ("how much, and is it settled"), and keeping the
+                      pill out of its own row takes a line off every card. */}
+                  <div className="flex shrink-0 flex-col items-end gap-1.5">
+                    <p
+                      className={`text-right font-semibold ${
+                        r.type === "expense" ? "text-ink-900" : "text-brand-700"
+                      }`}
+                    >
+                      {/* Same reasoning as the table column, and more so here:
+                          this is the phone layout, where there is no hover to
+                          recover the exact figure from. */}
+                      <Money value={r.amount} decimals />
+                    </p>
+                    <Pill tone={status.tone}>{status.label}</Pill>
+                  </div>
                 </div>
 
                 <div className="mt-3 flex items-center justify-between border-t border-paper-200 pt-2">

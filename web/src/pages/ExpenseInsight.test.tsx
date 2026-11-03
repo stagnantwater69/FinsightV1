@@ -478,6 +478,30 @@ describe("ExpenseInsight resilience", () => {
     ).toBeInTheDocument();
   });
 
+  it("previews four recurring suggestions and links to the full list only when there are more", async () => {
+    handlers["/insights/recurring-patterns"] = ok(
+      Array.from({ length: 6 }, (_, i) => ({
+        ...candidate,
+        id: 70 + i,
+        description: `Suggested payment ${i + 1}`,
+      })),
+    );
+    renderPage();
+    expect(await screen.findByText("Suggested payment 4")).toBeInTheDocument();
+    expect(screen.queryByText("Suggested payment 5")).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 4 of 6 recurring suggestions")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /See all 6\s*recurring suggestions/ })).toHaveAttribute(
+      "href",
+      "/insights/expense-behavior/recurring#recurring-suggestions",
+    );
+  });
+
+  it("shows no See all link under one recurring suggestion", async () => {
+    renderPage();
+    expect(await screen.findByText("Possible recurring expenses")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /See all/ })).not.toBeInTheDocument();
+  });
+
   it("shows the agenda and the confirm action when schedules are available", async () => {
     renderPage();
     expect(
@@ -778,8 +802,7 @@ describe("ExpenseInsight resilience", () => {
     ).toBeInTheDocument();
   });
 
-  it("pages findings three at a time once there are more than three", async () => {
-    const user = userEvent.setup();
+  it("previews three findings and links to the full list instead of paging", async () => {
     const findingsList = Array.from({ length: 7 }, (_, i) => ({
       id: 100 + i,
       expenseRecordId: 200 + i,
@@ -797,21 +820,15 @@ describe("ExpenseInsight resilience", () => {
     expect(await screen.findByText("Finding number 1")).toBeInTheDocument();
     expect(screen.getByText("Finding number 3")).toBeInTheDocument();
     expect(screen.queryByText("Finding number 4")).not.toBeInTheDocument();
-    expect(
-      screen.getByText((_, el) => el?.tagName === "P" && el.textContent === "Showing 1–3 of 7 findings"),
-    ).toBeInTheDocument();
-    expect(screen.queryByLabelText("Rows")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Next page" }));
-    expect(screen.getByText("Finding number 4")).toBeInTheDocument();
-    expect(screen.queryByText("Finding number 1")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Last page" }));
-    expect(screen.getByText("Finding number 7")).toBeInTheDocument();
-    expect(screen.queryByText("Finding number 6")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Pagination" })).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 3 of 7 findings")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /See all 7\s*findings/ })).toHaveAttribute(
+      "href",
+      "/insights/expense-behavior/findings",
+    );
   });
 
-  it("does not page three or fewer findings", async () => {
+  it("shows no See all link for three or fewer findings", async () => {
     const findingsList = Array.from({ length: 3 }, (_, i) => ({
       id: 100 + i,
       expenseRecordId: 200 + i,
@@ -829,6 +846,7 @@ describe("ExpenseInsight resilience", () => {
     expect(await screen.findByText("Finding number 3")).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Pagination" })).not.toBeInTheDocument();
     expect(screen.queryByText(/findings$/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /See all/ })).not.toBeInTheDocument();
   });
 
   it("restores empty supplemental panels when a refresh fails", async () => {
@@ -911,7 +929,7 @@ describe("ExpenseInsight resilience", () => {
  * Reduction opportunities — plan §10.3 required states and §14.3 test list.
  */
 describe("ExpenseInsight reduction opportunities", () => {
-  it("shows a loading skeleton, then up to three ranked cards even when four are returned", async () => {
+  it("shows a loading skeleton, then keeps extra cards in the same scrolling row when four are returned", async () => {
     // Controlled rather than timer-delayed: a transient loading node can be
     // returned by `findByText` and then detached before the following
     // assertion on a busy full-suite run. Holding the request pending proves
@@ -947,9 +965,11 @@ describe("ExpenseInsight reduction opportunities", () => {
     expect(await screen.findByText("Office Supplies")).toBeInTheDocument();
     expect(screen.getByText("Utilities")).toBeInTheDocument();
     expect(screen.getByText("Transport")).toBeInTheDocument();
-    // The fourth-ranked opportunity is capped client-side even though it came
-    // back from the API — never trust the server as the only guarantee of 3.
-    expect(screen.queryByText("Marketing")).not.toBeInTheDocument();
+    // A fourth card the server should not have sent stays inside the
+    // single horizontal row instead of growing the page.
+    const list = screen.getByRole("list", { name: "Reduction opportunities, 4 in all" });
+    expect(list).toHaveClass("flex", "overflow-x-auto");
+    expect(within(list).getByText("Marketing")).toBeInTheDocument();
   });
 
   it("labels priority and confidence with visible text, not colour alone", async () => {
@@ -1772,36 +1792,34 @@ describe("ExpenseInsight long-data previews", () => {
     expect(summary.queryByText("Category 7")).not.toBeInTheDocument();
   });
 
-  it("exposes every unusual expense without changing the full flagged count", async () => {
-    const user = userEvent.setup();
+  it("previews three unusual expenses and links to the full list on its own page", async () => {
     setOverview(highVolumeBehavior());
     renderPage();
     await screen.findByRole("heading", { name: "Unusual expenses" });
     const unusual = within(panel("Unusual expenses"));
     expect(unusual.getByText("13 flagged")).toBeInTheDocument();
-    expect(unusual.getByText("Unusual purchase 5")).toBeInTheDocument();
-    expect(unusual.queryByText("Unusual purchase 6")).not.toBeInTheDocument();
-    await user.click(unusual.getByRole("button", { name: "Show all 13 unusual expenses" }));
-    expect(unusual.getByText("Unusual purchase 13")).toBeInTheDocument();
-    expect(unusual.getByText("13 flagged")).toBeInTheDocument();
-    await user.click(unusual.getByRole("button", { name: "Show less" }));
-    expect(unusual.queryByText("Unusual purchase 6")).not.toBeInTheDocument();
+    expect(unusual.getByText("Unusual purchase 3")).toBeInTheDocument();
+    expect(unusual.queryByText("Unusual purchase 4")).not.toBeInTheDocument();
+    expect(unusual.getByText("Showing 3 of 13 unusual expenses")).toBeInTheDocument();
+    expect(unusual.queryByRole("button", { name: /Show all .* unusual expenses/ })).not.toBeInTheDocument();
+    expect(unusual.getByRole("link", { name: /See all 13\s*unusual expenses/ })).toHaveAttribute(
+      "href",
+      "/insights/expense-behavior/unusual",
+    );
   });
 
-  it("resets expanded expense previews when the reporting period changes", async () => {
+  it("keeps the unusual-expense preview at three when the reporting period changes", async () => {
     const user = userEvent.setup();
     setOverview(highVolumeBehavior());
     renderPage();
     await screen.findByRole("heading", { name: "Unusual expenses" });
-    await user.click(within(panel("Unusual expenses")).getByRole("button", { name: "Show all 13 unusual expenses" }));
-    await user.click(screen.getByRole("button", { name: "This week" }));
-    await waitFor(() => expect(within(panel("Unusual expenses")).queryByText("Unusual purchase 6")).not.toBeInTheDocument());
     await user.click(screen.getByRole("combobox", { name: "Month" }));
     await user.click(screen.getByRole("option", { name: "September 2026" }));
-    await waitFor(() => expect(within(panel("Unusual expenses")).getByRole("button", { name: "Show all 13 unusual expenses" })).toHaveAttribute("aria-expanded", "false"));
+    await waitFor(() => expect(within(panel("Unusual expenses")).getByText("Unusual purchase 3")).toBeInTheDocument());
+    expect(within(panel("Unusual expenses")).queryByText("Unusual purchase 4")).not.toBeInTheDocument();
   });
 
-  it("reveals reduction opportunities beyond the preview and keeps their actions available", async () => {
+  it("lists every reduction opportunity in one horizontal row with their actions available", async () => {
     const user = userEvent.setup();
     setOverview(behavior, reductionResponse({
       opportunities: Array.from({ length: 6 }, (_, index) => makeOpportunity({
@@ -1811,14 +1829,30 @@ describe("ExpenseInsight long-data previews", () => {
       })),
     }));
     renderPage();
-    const expand = await screen.findByRole("button", { name: "Show all 6 opportunities" });
-    expect(screen.queryByText("Opportunity category 4")).not.toBeInTheDocument();
-    await user.click(expand);
-    expect(screen.getByText("Opportunity category 6")).toBeInTheDocument();
+    const list = await screen.findByRole("list", { name: "Reduction opportunities, 6 in all" });
+    expect(list).toHaveAttribute("tabindex", "0");
+    expect(list).toHaveClass("flex", "overflow-x-auto");
+    expect(within(list).getByText("Opportunity category 6")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Show all \d+ opportunities/ })).not.toBeInTheDocument();
     const simulations = screen.getAllByRole("button", { name: /Simulate reduction/ });
     expect(simulations).toHaveLength(6);
     await user.click(simulations[5]);
     expect(await screen.findByRole("heading", { name: "Simulate reduction — Opportunity category 6" })).toBeInTheDocument();
+  });
+
+  it("opens an opportunity's full details in a popup instead of expanding the card", async () => {
+    const user = userEvent.setup();
+    setOverview(behavior, reductionResponse({
+      opportunities: [makeOpportunity({ id: "opp-1", categoryName: "Office Supplies" })],
+    }));
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /^Details\s*for Office Supplies$/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Office Supplies — details" });
+    expect(within(dialog).getByText(/crossed the high-share threshold/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Office Supplies — details" })).not.toBeInTheDocument(),
+    );
   });
 });
 

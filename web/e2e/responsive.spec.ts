@@ -115,10 +115,6 @@ for (const vp of [{ width: 320, height: 568 }, { width: 568, height: 320 }]) {
     await page.setViewportSize(vp);
     await page.goto("/dashboard");
 
-    await page.locator("[data-tour=quick-add]").click();
-    await expectInsideViewport(page, "[role=menu][aria-label='Add a record']");
-    await page.keyboard.press("Escape");
-
     await page.getByRole("button", { name: /Account menu/i }).click();
     const account = page.getByRole("dialog", { name: "Account" });
     await expect(account).toBeVisible();
@@ -134,8 +130,7 @@ test("add-expense dialog keeps its save button reachable on a phone held sideway
   await signIn(page);
   await page.setViewportSize({ width: 568, height: 320 });
   await page.goto("/records");
-  await page.locator("[data-tour=quick-add]").click();
-  await page.getByRole("menuitem").first().click();
+  await page.getByRole("button", { name: /Add (your first )?expense/ }).first().click();
   const dialog = page.locator("dialog[open]");
   await expect(dialog).toBeVisible();
   await expectInsideViewport(page, "dialog[open]");

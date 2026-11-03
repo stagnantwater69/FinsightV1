@@ -1,6 +1,7 @@
 import type { ImpactBand } from "../../lib/types";
 import { formatMoney } from "../../components/Money";
-import { BAND_COLOR } from "./impactBand";
+import { useLayoutEffect, useRef, useState } from "react";
+import { BAND_COLOR, placeZoneLabels } from "./impactBand";
 
 /**
  * Pictures for the Spending Impact page. Every figure they draw is also
@@ -32,6 +33,40 @@ export function ZoneBand({
 }) {
   const at = (v: number) => Math.min(100, Math.max(0, (v / Math.max(max, 1)) * 100));
   const widths = [at(noticeableAmount), at(highAmount) - at(noticeableAmount), 100 - at(highAmount)];
+  const labels = [
+    { text: ZONES[0].label, at: 0, ink: ZONES[0].ink, figure: false },
+    { text: formatMoney(noticeableAmount), at: at(noticeableAmount), ink: ZONES[1].ink, figure: true },
+    { text: formatMoney(highAmount), at: at(highAmount), ink: ZONES[2].ink, figure: true },
+  ];
+
+  /*
+   * The labels are placed by their measured widths: when the zones start close
+   * together ("PHP 3,880" and "PHP 9,700" on a PHP 61,000 slider) percentage
+   * positions alone print one figure over the other.
+   */
+  const bandRef = useRef<HTMLDivElement>(null);
+  const labelRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const [lefts, setLefts] = useState<(number | null)[] | null>(null);
+  useLayoutEffect(() => {
+    const band = bandRef.current;
+    if (!band) return;
+    const measure = () => {
+      const bandWidth = band.clientWidth;
+      // Nothing to measure (hidden, or a test DOM): keep the percentage layout.
+      if (bandWidth === 0) return setLefts(null);
+      setLefts(placeZoneLabels(bandWidth, labels.map((label, index) => {
+        const width = labelRefs.current[index]?.offsetWidth ?? 0;
+        return { center: index === 0 ? width / 2 : (label.at / 100) * bandWidth, width };
+      })));
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(band);
+    return () => observer?.disconnect();
+    // labels is rebuilt each render from these values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [max, noticeableAmount, highAmount]);
+
   return (
     <div aria-hidden className="px-3">
       <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full">
@@ -41,24 +76,24 @@ export function ZoneBand({
           ) : null,
         )}
       </div>
-      <div className="relative mt-1 h-4 text-[10.5px] font-semibold">
-        <span className={`absolute left-0 ${ZONES[0].ink}`}>{ZONES[0].label}</span>
-        {at(noticeableAmount) < 88 ? (
-          <span
-            className={`figure absolute -translate-x-1/2 whitespace-nowrap ${ZONES[1].ink}`}
-            style={{ left: `${Math.max(at(noticeableAmount), 14)}%` }}
-          >
-            {formatMoney(noticeableAmount)}
-          </span>
-        ) : null}
-        {at(highAmount) < 92 ? (
-          <span
-            className={`figure absolute -translate-x-1/2 whitespace-nowrap ${ZONES[2].ink}`}
-            style={{ left: `${at(highAmount)}%` }}
-          >
-            {formatMoney(highAmount)}
-          </span>
-        ) : null}
+      <div ref={bandRef} className="relative mt-1 h-4 text-[10.5px] font-semibold">
+        {labels.map((label, index) => {
+          // A zone that starts past the slider's end has nothing to label.
+          if (index > 0 && label.at >= 100) return null;
+          const left = lefts?.[index];
+          // A label with no room stays in the DOM, invisible, so it can be measured again on resize.
+          return (
+            <span
+              key={index}
+              ref={(node) => { labelRefs.current[index] = node; }}
+              className={`absolute whitespace-nowrap ${label.figure ? "figure" : ""} ${label.ink} ${
+                lefts || index === 0 ? "" : "-translate-x-1/2"} ${lefts && left === null ? "invisible" : ""}`}
+              style={{ left: lefts ? `${left ?? 0}px` : `${label.at}%` }}
+            >
+              {label.text}
+            </span>
+          );
+        })}
       </div>
     </div>
   );

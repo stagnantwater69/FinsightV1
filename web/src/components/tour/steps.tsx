@@ -89,8 +89,8 @@ export const TOUR_STEPS: TourStep[] = [
   },
   {
     id: "quick-add",
-    title: "Quick add",
-    body: "Add a sale or an expense, scan a receipt photo, or import records from a CSV file. It is on every page.",
+    title: "Quick actions",
+    body: "Add a sale or an expense, scan a receipt photo, or import records from a CSV file, right from your dashboard.",
     target: '[data-tour="quick-add"]',
     placement: "bottom",
     mascot: { pose: POSES.clipboard, prop: IconPlus },
@@ -125,7 +125,7 @@ export const TOUR_STEPS: TourStep[] = [
     body: "Start with something you have on hand, like today's sales or the receipt from a recent purchase.",
     mascot: { pose: POSES.celebrating },
     // Three, so they fit one row on a phone. A scanned receipt becomes an
-    // expense, and Quick add covers expenses without one.
+    // expense, and the dashboard's Add expense covers expenses without one.
     finalActions: [
       { label: "Add a sale", to: "/records/sales/new" },
       { label: "Scan a receipt", to: "/records/receipts/new" },
