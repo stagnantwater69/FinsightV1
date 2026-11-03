@@ -40,6 +40,9 @@ export function useTransactionDate(initial?: string) {
   }
 
   // A refused save must focus after the submitting fieldset becomes enabled.
+  // No deps on purpose: it re-checks after every render until the field is
+  // enabled, and clearing focusRequest ends it.
+  // oxlint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!focusRequest) return;
     const sameAccount = focusRequest.account

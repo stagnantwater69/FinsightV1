@@ -24,6 +24,9 @@ const here = (p: string) => path.resolve(__dirname, p);
  */
 export default defineConfig({
   test: {
+    // One worker per core starved render tests past their timeouts on a busy
+    // 12-core workstation; different tests failed each run.
+    maxWorkers: '50%',
     projects: [
       {
         test: {
