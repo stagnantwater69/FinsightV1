@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
-import { Alert, TextInput } from "react-native";
+import { type TextInputInstance, Alert } from "react-native";
 import { Button, Card, ErrorNote, Field, ScreenHeader } from "../../components/ui";
 import { FormScreen } from "../../components/FormScreen";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
@@ -65,8 +65,8 @@ export function AddExpenseScreen({ navigation }: RecordsScreenProps<"AddExpense"
    * they cannot carry a return key at all. So the keyboard chain starts at the
    * first field that actually has one and runs to the end of the form.
    */
-  const vendorRef = useRef<TextInput>(null);
-  const amountRef = useRef<TextInput>(null);
+  const vendorRef = useRef<TextInputInstance>(null);
+  const amountRef = useRef<TextInputInstance>(null);
 
   if (!selected) return null;
 

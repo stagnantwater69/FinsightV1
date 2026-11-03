@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View, useWindowDimensions } from "react-native";
+import { type TextInputInstance, KeyboardAvoidingView, Platform, Pressable, ScrollView, View, useWindowDimensions } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -51,7 +51,7 @@ import { useTheme } from "../context/ThemeContext";
  */
 function focusFirstInvalid<F extends string>(
   invalid: FieldErrors<F>,
-  order: readonly (readonly [F, React.RefObject<TextInput | null>])[],
+  order: readonly (readonly [F, React.RefObject<TextInputInstance | null>])[],
 ) {
   const first = order.find(([field]) => invalid[field]);
   first?.[1].current?.focus();
@@ -303,13 +303,13 @@ export function LoginScreen({ navigation }: any) {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<LoginField>>({});
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
-  const emailRef = useRef<TextInput>(null);
-  const passwordRef = useRef<TextInput>(null);
+  const emailRef = useRef<TextInputInstance>(null);
+  const passwordRef = useRef<TextInputInstance>(null);
   /** Every field's ref, in the order the form reads — see `focusFirstInvalid`. */
   const fieldOrder = [
     ["email", emailRef],
     ["password", passwordRef],
-  ] as const satisfies readonly (readonly [LoginField, React.RefObject<TextInput | null>])[];
+  ] as const satisfies readonly (readonly [LoginField, React.RefObject<TextInputInstance | null>])[];
 
   const clearField = (field: LoginField) =>
     setFieldErrors((prev) => (prev[field] ? { ...prev, [field]: undefined } : prev));
@@ -502,14 +502,14 @@ export function RegisterScreen({ navigation }: any) {
     // making the owner submit again to find out whether they fixed it.
     setFieldErrors((prev) => (prev[k as RegisterField] ? { ...prev, [k]: undefined } : prev));
   };
-  const firstNameRef = useRef<TextInput>(null);
-  const lastNameRef = useRef<TextInput>(null);
-  const middleNameRef = useRef<TextInput>(null);
-  const emailRef = useRef<TextInput>(null);
-  const phoneNumberRef = useRef<TextInput>(null);
+  const firstNameRef = useRef<TextInputInstance>(null);
+  const lastNameRef = useRef<TextInputInstance>(null);
+  const middleNameRef = useRef<TextInputInstance>(null);
+  const emailRef = useRef<TextInputInstance>(null);
+  const phoneNumberRef = useRef<TextInputInstance>(null);
   const focusEmailOnReturn = useRef(false);
-  const passwordRef = useRef<TextInput>(null);
-  const confirmPasswordRef = useRef<TextInput>(null);
+  const passwordRef = useRef<TextInputInstance>(null);
+  const confirmPasswordRef = useRef<TextInputInstance>(null);
   useEffect(() => {
     if (acknowledgement === null && focusEmailOnReturn.current) {
       focusEmailOnReturn.current = false;
@@ -525,7 +525,7 @@ export function RegisterScreen({ navigation }: any) {
     ["phoneNumber", phoneNumberRef],
     ["password", passwordRef],
     ["confirmPassword", confirmPasswordRef],
-  ] as const satisfies readonly (readonly [RegisterField, React.RefObject<TextInput | null>])[];
+  ] as const satisfies readonly (readonly [RegisterField, React.RefObject<TextInputInstance | null>])[];
 
   async function submit() {
     if (submitting.current) return;
@@ -814,7 +814,7 @@ export function RecoverPasswordScreen({ navigation, route, initialEmail = "", on
   const [emailError, setEmailError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
-  const emailRef = useRef<TextInput>(null);
+  const emailRef = useRef<TextInputInstance>(null);
   const cooldown = useResendCooldown();
   const focusEmailOnReturn = useRef(false);
   useEffect(() => {
@@ -1040,17 +1040,17 @@ export function ResetPasswordScreen({
   const [done, setDone] = useState(false);
   const [refreshRevocationConfirmed, setRefreshRevocationConfirmed] = useState(true);
 
-  const codeRef = useRef<TextInput>(null);
+  const codeRef = useRef<TextInputInstance>(null);
   const codeFieldOrder = [
     ["code", codeRef],
-  ] as const satisfies readonly (readonly [RecoveryCodeField, React.RefObject<TextInput | null>])[];
+  ] as const satisfies readonly (readonly [RecoveryCodeField, React.RefObject<TextInputInstance | null>])[];
 
-  const newPasswordRef = useRef<TextInput>(null);
-  const confirmRef = useRef<TextInput>(null);
+  const newPasswordRef = useRef<TextInputInstance>(null);
+  const confirmRef = useRef<TextInputInstance>(null);
   const fieldOrder = [
     ["newPassword", newPasswordRef],
     ["confirmPassword", confirmRef],
-  ] as const satisfies readonly (readonly [ResetPasswordField, React.RefObject<TextInput | null>])[];
+  ] as const satisfies readonly (readonly [ResetPasswordField, React.RefObject<TextInputInstance | null>])[];
 
   const set = (k: keyof typeof form) => (v: string) => {
     setForm((f) => ({ ...f, [k]: v }));

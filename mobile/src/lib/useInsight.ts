@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { api, errorMessage } from "./api";
 import {
@@ -137,7 +137,7 @@ export function useServerStateQuery<T>(
   );
 
   useEffect(() => {
-    let previous: AppStateStatus | null = AppState.currentState;
+    let previous = AppState.currentState;
     const subscription = AppState.addEventListener("change", (next) => {
       const returning = (previous === "background" || previous === "inactive") && next === "active";
       previous = next;

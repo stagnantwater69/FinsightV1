@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert as RNAlert, Image, Modal, Pressable, ScrollView, TextInput, View } from "react-native";
+import { type TextInputInstance, ActivityIndicator, Alert as RNAlert, Image, Modal, Pressable, ScrollView, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -382,12 +382,12 @@ export function BusinessProfileFormScreen({ navigation, route }: MoreScreenProps
   };
   // One ref per field the return key hands off TO — the first field is never a
   // destination, so it needs none.
-  const typeRef = useRef<TextInput>(null);
-  const nameRef = useRef<TextInput>(null);
-  const fundsRef = useRef<TextInput>(null);
-  const monthlyRef = useRef<TextInput>(null);
-  const operatingDaysRef = useRef<TextInput>(null);
-  const thresholdRef = useRef<TextInput>(null);
+  const typeRef = useRef<TextInputInstance>(null);
+  const nameRef = useRef<TextInputInstance>(null);
+  const fundsRef = useRef<TextInputInstance>(null);
+  const monthlyRef = useRef<TextInputInstance>(null);
+  const operatingDaysRef = useRef<TextInputInstance>(null);
+  const thresholdRef = useRef<TextInputInstance>(null);
 
   async function submit() {
     if (submitting.current) return;

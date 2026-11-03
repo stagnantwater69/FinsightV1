@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  type TextInputInstance,
   ActivityIndicator,
   Image,
   ImageSourcePropType,
@@ -307,7 +308,7 @@ type FieldProps = {
  * wholesale, focus border included. No caller passes one today; if one ever
  * needs to, compose it as an array here rather than at the call site.
  */
-export const Field = forwardRef<TextInput, FieldProps>(function Field(
+export const Field = forwardRef<TextInputInstance, FieldProps>(function Field(
   { label, value, onChangeText, onFocus, onBlur, secureTextEntry, error, icon, ...rest },
   ref,
 ) {

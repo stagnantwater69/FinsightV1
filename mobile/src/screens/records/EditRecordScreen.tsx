@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert as RNAlert, TextInput, View } from "react-native";
+import { type TextInputInstance, Alert as RNAlert, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Card, ErrorNote, Field, Screen, T } from "../../components/ui";
 import { FormScreen } from "../../components/FormScreen";
@@ -55,8 +55,8 @@ export function EditRecordScreen({ route, navigation }: RecordsScreenProps<"Edit
    * A chain hard-wired to `vendorRef` would simply dead-end on half the
    * records this screen opens, with the return key doing nothing.
    */
-  const vendorRef = useRef<TextInput>(null);
-  const amountRef = useRef<TextInput>(null);
+  const vendorRef = useRef<TextInputInstance>(null);
+  const amountRef = useRef<TextInputInstance>(null);
   const afterDescription = () => (isExpense ? vendorRef : amountRef).current?.focus();
 
   /**

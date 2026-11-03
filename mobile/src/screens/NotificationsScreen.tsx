@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  type TextInstance,
   AccessibilityInfo,
   ActivityIndicator,
   Pressable,
@@ -84,7 +85,7 @@ function AlertRow({ notification, clock, opening, disabled, onPress }: {
   const t = useTheme();
   const [expanded, setExpanded] = useState(false);
   const [needsDisclosure, setNeedsDisclosure] = useState(false);
-  const fullText = useRef<Text>(null);
+  const fullText = useRef<TextInstance>(null);
   const presentation = presentationFor(notification.type);
   const warning = alertKindFromType(notification.type) === "large-expense";
   const time = relativeTime(notification.dateCreated, clock);
@@ -568,7 +569,7 @@ export function NotificationsScreen({ navigation }: NotificationsScreenProps) {
             {initialLoading ? <ActivityIndicator accessibilityLabel="Loading alerts" color={t.textPrimary} style={{ marginVertical: space.xxl }} /> : null}
           </View>
         }
-        ListEmptyComponent={loading || loadFailure || !hasLoaded ? null : currentNotifications.length === 0 ? (
+        ListEmptyComponent={loading || loadFailure || !hasLoaded ? undefined : currentNotifications.length === 0 ? (
           <AlertsEmpty title="No alerts yet" body="FinSight will flag possible duplicates, unusually large expenses and anything else worth a second look here." icon="notifications-outline" />
         ) : (
           <AlertsEmpty title="All alerts read" body="You can still review the records behind earlier alerts." icon="checkmark-circle-outline"

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { AccessibilityInfo, findNodeHandle, Platform, ScrollView, View } from "react-native";
+import { type ScrollViewInstance, type ViewInstance, AccessibilityInfo, findNodeHandle, Platform, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { SubpageCard } from "../../components/SubpageKit";
 import { TAP_FLOOR } from "../../components/touchTarget";
@@ -43,9 +43,9 @@ function LegalDocument({
 }) {
   const t = useTheme();
   const [indexOpen, setIndexOpen] = useState(false);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const sectionOffsets = useRef<number[]>([]);
-  const headingRefs = useRef<(View | null)[]>([]);
+  const headingRefs = useRef<(ViewInstance | null)[]>([]);
 
   function jumpToSection(index: number) {
     const offset = sectionOffsets.current[index];
@@ -56,7 +56,7 @@ function LegalDocument({
     if (Platform.OS === "web") heading.focus();
     else {
       const handle = findNodeHandle(heading);
-      if (handle !== null) AccessibilityInfo.setAccessibilityFocus(handle);
+      if (handle != null) AccessibilityInfo.setAccessibilityFocus(handle);
     }
   }
 

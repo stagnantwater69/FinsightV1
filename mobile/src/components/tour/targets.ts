@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { NativeScrollEvent, NativeSyntheticEvent, ScrollView, View } from "react-native";
+import type { NativeScrollEvent, NativeSyntheticEvent, ScrollViewInstance, ViewInstance } from "react-native";
 import { eligibilityTarget, type TourTargetKey } from "./steps";
 import { scrollDeltaToReveal, type Padding, type TourRect } from "./geometry";
 
@@ -50,7 +50,7 @@ export interface TourTargetOptions {
 }
 
 interface Registration extends TourTargetOptions {
-  get: () => View | null;
+  get: () => ViewInstance | null;
 }
 
 /** Live registrations. Module scope because the tour is a singleton. */
@@ -81,7 +81,7 @@ let scroller: TourScroller | null = null;
  * step would silently skip, on one platform only.
  */
 export function useTourTarget(key: TourTargetKey | undefined, options?: TourTargetOptions) {
-  const ref = useRef<View | null>(null);
+  const ref = useRef<ViewInstance | null>(null);
   // Serialised so a fresh options object on every render does not re-register
   // the target on every render.
   const optionsKey = JSON.stringify(options ?? {});
@@ -123,7 +123,7 @@ export function tourTargetOptions(key: TourTargetKey): TourTargetOptions | undef
  * to keep in sync.
  */
 export function useTourScrollView() {
-  const ref = useRef<ScrollView | null>(null);
+  const ref = useRef<ScrollViewInstance | null>(null);
   const offset = useRef(0);
   const pending = useRef<{ settle: () => void; finish: (moved: boolean) => void } | null>(null);
 

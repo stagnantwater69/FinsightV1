@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/react-native';
 import type { RecordItem } from '../../src/lib/types';
 
-vi.mock('react-native-gesture-handler', () => ({
-  Swipeable: ({ children, renderLeftActions, renderRightActions }: {
+vi.mock('react-native-gesture-handler/ReanimatedSwipeable', () => ({
+  default: ({ children, renderLeftActions, renderRightActions }: {
     children: React.ReactNode;
     renderLeftActions?: () => React.ReactNode;
     renderRightActions?: () => React.ReactNode;

@@ -57,8 +57,8 @@ vi.mock('../../src/components/HomeHeader', () => ({
 vi.mock('../../src/components/GreetingHero', () => ({ GreetingHero: () => null }));
 vi.mock('../../src/components/PeriodSelector', () => ({ PeriodSelector: () => null, PeriodPill: () => null, PeriodStatus: () => null }));
 // RecordCard (Recent records on Home) swipes; the harness has no native gesture module.
-vi.mock('react-native-gesture-handler', () => ({
-  Swipeable: ({ children }: { children: React.ReactNode }) => children,
+vi.mock('react-native-gesture-handler/ReanimatedSwipeable', () => ({
+  default: ({ children }: { children: React.ReactNode }) => children,
 }));
 vi.mock('../../src/components/AskFinSight', () => ({ AskFinSight: () => null }));
 vi.mock('../../src/components/AskFinSightFab', () => ({

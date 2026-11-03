@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, useWindowDimensions, View } from "react-native";
+import { type ScrollViewInstance, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { T } from "./ui";
 import { TAP_FLOOR } from "./touchTarget";
@@ -14,7 +14,7 @@ export function NumberedPagination({ page, totalPages, reachablePages, busy, ava
   const { width, fontScale } = useWindowDimensions();
   const [measuredWidth, setMeasuredWidth] = useState<number | null>(null);
   const [contentWidth, setContentWidth] = useState<number | null>(null);
-  const numbersRef = useRef<ScrollView>(null);
+  const numbersRef = useRef<ScrollViewInstance>(null);
   const count = Math.max(1, totalPages ?? reachablePages);
   const availableWidth = measuredWidth ?? width - space.lg * 2;
   const arrowCount = 4;

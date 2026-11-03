@@ -188,30 +188,40 @@ function OpportunityCard({
   );
 
   return (
-    <View style={{ borderWidth: 1, borderColor: t.border, borderRadius: radius.md, backgroundColor: t.surface, padding: space.lg, gap: space.lg }}>
-      <View style={{ gap: space.sm }}>
-        <T variant="caption" style={{ color: t.textMuted }}>Reduction opportunity</T>
-        <T accessibilityRole="header" style={{ fontSize: typeScale.display, fontFamily: font.sansSemibold, color: t.brandHeading }}>{opportunity.categoryName}</T>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
+    /*
+     * One heading level, one headline figure. The card used to open with a
+     * "Reduction opportunity" eyebrow (the section title right above already
+     * says it), then the category name and the amount both at `display` size,
+     * the size the type scale reserves for the single hero figure on Home. Two
+     * of those per card, a card per opportunity, read as a stack of heroes.
+     * Now the category is the card's title and this period's amount sits
+     * beside it, so the pair is read as one line: what, and how much.
+     */
+    <View style={{ borderWidth: 1, borderColor: t.border, borderRadius: radius.lg, backgroundColor: t.surface, padding: space.lg, gap: space.md }}>
+      <View style={{ gap: space.xs }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", columnGap: space.md, rowGap: space.xs }}>
+          <T accessibilityRole="header" style={{ flexShrink: 1, fontSize: typeScale.subpageTitle, fontFamily: font.sansSemibold, color: t.brandHeading }}>{opportunity.categoryName}</T>
+          <View style={{ alignItems: "flex-end" }}>
+            <T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.title, color: t.textPrimary, fontVariant: ["tabular-nums"] }}>{formatMoney(evidence.currentAmount, { decimals: true })}</T>
+            <T variant="caption">This period</T>
+          </View>
+        </View>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: space.md, rowGap: space.xs }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, maxWidth: "100%" }}>
-            <Ionicons name="alert-circle" size={20} color={t.statusText[priority.tone]} />
+            <Ionicons name="alert-circle" size={18} color={t.statusText[priority.tone]} />
             <T style={{ color: t.statusText[priority.tone], fontSize: typeScale.bodySm, fontFamily: font.sansMedium, flexShrink: 1 }}>{priority.label}</T>
           </View>
           <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, maxWidth: "100%" }}>
-            <Ionicons name="cellular-outline" size={18} color={t.textSecondary} />
+            <Ionicons name="cellular-outline" size={16} color={t.textSecondary} />
             <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, flexShrink: 1 }}>{CONFIDENCE_LABEL[opportunity.confidence]}</T>
           </View>
         </View>
       </View>
-      <View style={{ gap: space.sm }}>
-        <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>This period</T>
-        <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.display, color: t.brandHeading, fontVariant: ["tabular-nums"] }}>{formatMoney(evidence.currentAmount, { decimals: true })}</T>
-        <T style={{ color: t.textSecondary }}>{opportunity.observation}</T>
-      </View>
+      <T style={{ color: t.textSecondary }}>{opportunity.observation}</T>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md, borderTopWidth: 1, borderBottomWidth: 1, borderColor: t.border, paddingVertical: space.md }}>
         <View style={{ flex: 1, minWidth: 115, gap: space.xs }}>
           <T variant="caption">Share of expenses</T>
-          <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.title, color: t.brandHeading }}>{evidence.expenseSharePercent.toFixed(1)}%</T>
+          <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, color: t.brandHeading }}>{evidence.expenseSharePercent.toFixed(1)}%</T>
         </View>
         <View style={{ flex: 1, minWidth: 115, gap: space.xs }}>
           <T variant="caption">Change</T>
@@ -221,7 +231,7 @@ function OpportunityCard({
       {opportunity.type === "FREQUENT_PURCHASE_ACCUMULATION" ? <T style={{ color: t.textSecondary }}>{evidence.recordCount} records this period</T> : opportunity.type === "RECORD_REVIEW_FIRST" ? <T style={{ color: t.textSecondary }}>{evidence.possibleDuplicateCount} possible duplicates · {evidence.unusualRecordCount} unusual records</T> : null}
       {previous !== null ? (
         <View style={{ gap: space.md }}>
-          <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, color: t.brandHeading }}>Compared with last period</T>
+          <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodySm, color: t.textPrimary }}>Compared with last period</T>
           {[
             { label: "Previous period", amount: previous, color: t.textMuted },
             { label: "This period", amount: evidence.currentAmount, color: t.brandFill },

@@ -14,7 +14,6 @@ import type {
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { TAP_FLOOR } from "./touchTarget";
 import { ChartPlotPressArea, ChartValueReadout, useChartSelection, type ChartDatum } from "./ChartInteraction";
-import { KpiWatermark, type KpiWatermarkIcon } from "./KpiWatermark";
 
 /** Above this share of recorded funds, spending is drawn as a warning. */
 export const FUNDS_SHARE_WARNING = 75;
@@ -56,20 +55,37 @@ function FundsRing({ percent, warn }: { percent: number; warn: boolean }) {
   );
 }
 
+/**
+ * The one colour a tile surface may carry: a thin bar across its top edge in
+ * the critical tone, for the tile that needs acting on. Matches web's
+ * `.stat-tile[data-alert]`. It replaced a full status-coloured wash, which
+ * made one tile in the grid shout over its neighbours; the tile's own text
+ * and icon still say what is wrong.
+ */
+function AlertBar() {
+  const t = useTheme();
+  return (
+    <View
+      aria-hidden
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, backgroundColor: t.statusSolid.critical }}
+    />
+  );
+}
+
 function GlanceTile({
   children,
   caption,
   onPress,
   accessibilityLabel,
   tone = "plain",
-  watermarkIcon,
 }: {
   children: ReactNode;
   caption: string;
   onPress?: () => void;
   accessibilityLabel?: string;
   tone?: "plain" | "attention";
-  watermarkIcon?: KpiWatermarkIcon;
 }) {
   const t = useTheme();
   const style = {
@@ -77,8 +93,9 @@ function GlanceTile({
     minHeight: 112,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: tone === "attention" ? t.statusBorder.serious : t.border,
-    backgroundColor: tone === "attention" ? t.statusSurface.serious : t.surface,
+    borderColor: t.border,
+    backgroundColor: t.surface,
+    overflow: "hidden" as const,
     alignItems: "center" as const,
     justifyContent: "center" as const,
     gap: space.sm,
@@ -86,7 +103,7 @@ function GlanceTile({
   };
   const body = (
     <>
-      {watermarkIcon ? <KpiWatermark name={watermarkIcon} size={80} /> : null}
+      {tone === "attention" ? <AlertBar /> : null}
       {children}
       <T style={{ fontSize: typeScale.caption, fontFamily: font.sansMedium, color: t.textSecondary, textAlign: "center" }}>{caption}</T>
     </>
@@ -143,7 +160,7 @@ export function ExpenseGlance({
     <View style={{ flexDirection: "row", gap: space.sm }}>
       <GlanceTile
         caption={fundsCaption}
-        watermarkIcon="pie-chart-outline"
+       
         tone={fundsWarn ? "attention" : "plain"}
         accessibilityLabel={
           fundsKnown
@@ -162,7 +179,7 @@ export function ExpenseGlance({
       {summary.top ? (
         <GlanceTile
           caption={summary.top.categoryName}
-          watermarkIcon="cube-outline"
+         
           accessibilityLabel={`Largest category ${summary.top.categoryName}, ${summary.topShare.toFixed(1)}% of spending, ${formatMoney(summary.top.current)}`}
         >
           <ChartPlotPressArea selection={glanceSelection} count={glanceData.length} chartLabel="Largest spending category" indexAtPoint={() => 1}>
@@ -259,13 +276,11 @@ function SummaryTile({
   onPress,
   tone = "plain",
   children,
-  watermarkIcon,
 }: {
   point: SummaryPoint;
   onPress?: () => void;
   tone?: "plain" | "attention";
   children: ReactNode;
-  watermarkIcon?: KpiWatermarkIcon;
 }) {
   const t = useTheme();
   const style = {
@@ -277,13 +292,14 @@ function SummaryTile({
     padding: space.md,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: tone === "attention" ? t.statusBorder.critical : t.border,
-    backgroundColor: tone === "attention" ? t.statusSurface.critical : t.surfaceSunken,
+    borderColor: t.border,
+    backgroundColor: t.surfaceSunken,
+    overflow: "hidden" as const,
   };
   if (!onPress) {
     return (
       <View accessible accessibilityLabel={spoken(point.segments)} style={style}>
-        {watermarkIcon ? <KpiWatermark name={watermarkIcon} size={80} /> : null}
+        {tone === "attention" ? <AlertBar /> : null}
         {children}
       </View>
     );
@@ -296,7 +312,7 @@ function SummaryTile({
       onPress={onPress}
       style={({ pressed }) => ({ ...style, opacity: pressed ? 0.75 : 1 })}
     >
-      {watermarkIcon ? <KpiWatermark name={watermarkIcon} size={80} /> : null}
+      {tone === "attention" ? <AlertBar /> : null}
       {children}
     </Pressable>
   );
@@ -369,7 +385,7 @@ export function ExpenseSummaryCard({
           {points.map((point) => {
             if (point.kind === "top" && summary.top) {
               return (
-                <SummaryTile key={point.kind} point={point} watermarkIcon="cube-outline">
+                <SummaryTile key={point.kind} point={point}>
                   <ChartPlotPressArea selection={summarySelection} count={summaryData.length} chartLabel="Largest category share" indexAtPoint={() => summaryData.findIndex((row) => row.key === "top")} style={{ alignSelf: "flex-start" }}><ShareRing percent={summary.topShare} /></ChartPlotPressArea>
                   <Caption strong={summary.top.categoryName} rest="is your biggest cost" />
                 </SummaryTile>
@@ -377,7 +393,7 @@ export function ExpenseSummaryCard({
             }
             if (point.kind === "increase" && summary.biggestIncrease) {
               return (
-                <SummaryTile key={point.kind} point={point} watermarkIcon="trending-up-outline">
+                <SummaryTile key={point.kind} point={point}>
                   <Badge icon="trending-up" color={t.statusText.serious} surface={t.statusSurface.serious} />
                   <Figure color={t.statusText.serious}>{`+${formatMoney(summary.biggestIncrease.change)}`}</Figure>
                   <Caption strong={summary.biggestIncrease.categoryName} rest="went up the most" />
@@ -388,7 +404,7 @@ export function ExpenseSummaryCard({
               const up = summary.periodDelta > 0;
               const color = up ? t.statusText.serious : t.statusText.good;
               return (
-                <SummaryTile key={point.kind} point={point} watermarkIcon="stats-chart-outline">
+                <SummaryTile key={point.kind} point={point}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
                     <Ionicons name={up ? "arrow-up" : "arrow-down"} size={22} color={color} />
                     <Figure color={color}>{`${Math.abs(summary.periodPercent).toFixed(0)}%`}</Figure>
@@ -411,7 +427,7 @@ export function ExpenseSummaryCard({
               return (
                 <SummaryTile key={point.kind} point={point} tone="attention" onPress={flaggedCount > 0 ? onReviewFlags : undefined}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-                    <Badge icon="flag" color={t.statusText.critical} surface={t.surface} />
+                    <Badge icon="flag" color={t.statusText.critical} surface={t.statusSurface.critical} />
                     {flaggedCount > 0 && onReviewFlags ? <Ionicons name="chevron-forward" size={18} color={t.statusText.critical} style={{ marginLeft: "auto" }} /> : null}
                   </View>
                   <Figure>{String(flaggedCount > 0 ? flaggedCount : unusualCount)}</Figure>

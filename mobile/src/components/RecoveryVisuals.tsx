@@ -8,7 +8,6 @@ import { Money, T } from "./ui";
 import { resolveMonthStatus } from "../lib/recoveryStatus";
 import { TAP_FLOOR } from "./touchTarget";
 import { ChartPlotPressArea, ChartValueReadout, useChartSelection, type ChartDatum } from "./ChartInteraction";
-import { KpiWatermark } from "./KpiWatermark";
 import * as haptics from "../lib/haptics";
 import { compactAmount, formatMoney } from "../lib/money";
 import { formatOperatingDays, recoveryPeriodLabel, recoveryPeriodStatusLabel } from "../lib/recoveryPeriodView";
@@ -224,7 +223,6 @@ export function TodayGoalCard({ data, children }: { data: RecoveryInsight; child
         padding: space.lg,
       }}
     >
-      <KpiWatermark name="calendar-outline" borderRadius={24} />
       <T accessibilityRole="header" style={{ fontSize: typeScale.caption, fontFamily: font.sansSemibold, color: t.ACCENT.text }}>
         {`Today's goal · ${longDate(data.reportingPeriod?.asOfDate ?? data.asOfDate ?? data.today)}`}
       </T>

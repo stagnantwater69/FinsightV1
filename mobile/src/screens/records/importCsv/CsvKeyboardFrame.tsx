@@ -1,10 +1,10 @@
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { HeaderHeightContext } from "@react-navigation/elements";
-import { Keyboard, KeyboardAvoidingView, Platform, View } from "react-native";
+import { type ViewInstance, Keyboard, KeyboardAvoidingView, Platform, View } from "react-native";
 
 /** Apply only the Android keyboard overlap left after any system resize. */
 export function CsvKeyboardFrame({ children }: { children: ReactNode }) {
-  const frame = useRef<View>(null);
+  const frame = useRef<ViewInstance>(null);
   const keyboardTop = useRef<number | null>(null);
   const mounted = useRef(true);
   const [overlap, setOverlap] = useState(0);

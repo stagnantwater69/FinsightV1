@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Dimensions, Modal, Pressable, View } from "react-native";
+import { type ViewInstance, Dimensions, Modal, Pressable, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { T } from "./ui";
 import { useTheme } from "../context/ThemeContext";
@@ -38,7 +38,7 @@ export function GranularityDropdown({
   const { brand, ink, paper } = t;
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
-  const anchorRef = useRef<View>(null);
+  const anchorRef = useRef<ViewInstance>(null);
   const current = GRANULARITY_OPTIONS.find((o) => o.value === value)!;
 
   return (

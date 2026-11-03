@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  type ViewInstance,
   AccessibilityInfo,
   Animated,
   BackHandler,
@@ -109,7 +110,7 @@ export function TourOverlay() {
   const navigationLock = useRef(false);
   const tourRef = useRef(tour);
   tourRef.current = tour;
-  const headingRef = useRef<View | null>(null);
+  const headingRef = useRef<ViewInstance | null>(null);
   const [headingFocused, setHeadingFocused] = useState(false);
   const mounted = useRef(true);
   const layoutRevision = useRef(0);
@@ -124,7 +125,7 @@ export function TourOverlay() {
   /** The overlay's own position and size, in window coordinates. */
   const [origin, setOrigin] = useState<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState<Size>({ width: 0, height: 0 });
-  const rootRef = useRef<View | null>(null);
+  const rootRef = useRef<ViewInstance | null>(null);
 
   const [rect, setRect] = useState<TourRect | null>(null);
   /**
@@ -272,7 +273,7 @@ export function TourOverlay() {
       if (Platform.OS === "web") (headingRef.current as (View & { focus?: () => void }) | null)?.focus?.();
       else {
         const handle = findNodeHandle(headingRef.current);
-        if (handle !== null) AccessibilityInfo.setAccessibilityFocus(handle);
+        if (handle != null) AccessibilityInfo.setAccessibilityFocus(handle);
         AccessibilityInfo.announceForAccessibility(`Step ${position} of ${total}. ${step.title}. ${step.body}`);
       }
     }, reduceMotion ? 0 : 180);

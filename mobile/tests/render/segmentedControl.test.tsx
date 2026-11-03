@@ -73,7 +73,7 @@ async function atWindow(
 
 /** The axis the track lays its segments out on, read off the rendered style. */
 function trackAxis(segment: { parent: unknown }): string | undefined {
-  const track = (segment as { parent: { props: { style: unknown } } }).parent;
+  const track = (segment as { parent: { props: { style: Parameters<typeof StyleSheet.flatten>[0] } } }).parent;
   return (StyleSheet.flatten(track.props.style) as { flexDirection?: string } | undefined)
     ?.flexDirection;
 }

@@ -4,7 +4,7 @@ import { ExpensePagination } from "../components/ExpensePagination";
 import { useCursorCollection } from "../lib/useCursorCollection";
 import { LargeExpenseFlags } from "../components/LargeExpenseFlags";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
-import { Pressable, RefreshControl, ScrollView, useWindowDimensions, View } from "react-native";
+import { type ScrollViewInstance, Pressable, RefreshControl, useWindowDimensions, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import * as haptics from "../lib/haptics";
 import { useFocusEffect } from "@react-navigation/native";
@@ -151,7 +151,7 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
    * what carries the urgency, and it does so without taking the choice away.
    */
   const [section, setSection] = useState<"overview" | "alerts" | "recurring">("overview");
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   // Where each overview part sits inside the overview container, for the jump chips.
   const overviewTop = useRef(0);
   const anchors = useRef<Partial<Record<"summary" | "spending" | "categories" | "savings", number>>>({});

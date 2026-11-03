@@ -1,10 +1,10 @@
 import { forwardRef } from "react";
-import { ScrollView, type ScrollViewProps } from "react-native";
+import { type ScrollViewInstance, ScrollView, type ScrollViewProps } from "react-native";
 
 export const CONTENT_WIDTH = 720;
 
 /** Keeps forms and reading content usable in an expanded window. */
-export const ContentScrollView = forwardRef<ScrollView, ScrollViewProps>(function ContentScrollView(
+export const ContentScrollView = forwardRef<ScrollViewInstance, ScrollViewProps>(function ContentScrollView(
   { contentContainerStyle, keyboardShouldPersistTaps = "handled", keyboardDismissMode = "on-drag", ...props },
   ref,
 ) {

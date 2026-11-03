@@ -1,12 +1,12 @@
 import { ContentScrollView } from "../../components/ContentScrollView";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  type TextInputInstance,
   Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
-  TextInput,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -90,6 +90,7 @@ import {
   type ReceiptUploadIssue,
 } from "../../lib/receiptUploadContract";
 import { localFileByteSize } from "../../lib/localFileSize";
+import { appendLocalFile } from "../../lib/localFilePart";
 import { ReceiptProviderConsent } from "./scanReceipt/ReceiptProviderConsent";
 import { ReceiptEvidenceViewer } from "./scanReceipt/ReceiptEvidenceViewer";
 import { ActiveReceiptQueue, type ReceiptResumeAction } from "./scanReceipt/ActiveReceiptQueue";
@@ -245,8 +246,8 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
   const resetReviewDraft = reviewDraft.reset;
 
   /** The review form's chain: Description → Vendor → Amount. */
-  const vendorRef = useRef<TextInput>(null);
-  const amountRef = useRef<TextInput>(null);
+  const vendorRef = useRef<TextInputInstance>(null);
+  const amountRef = useRef<TextInputInstance>(null);
 
   /*
    * The camera never outlives this screen.
@@ -450,13 +451,12 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
       const downscaled = checkUri !== uri;
       if (downscaled) analysisCopy = checkUri;
       const form = new FormData();
-      // React Native's FormData takes this {uri,name,type} shape rather than
-      // a Blob — the browser's File API isn't available here.
-      form.append("file", {
+      await appendLocalFile(form, "file", {
         uri: checkUri,
         name: downscaled ? `quality-${Date.now()}.jpg` : fileName,
         type: downscaled ? "image/jpeg" : mimeType,
-      } as any);
+      });
+      if (!operation.current(task)) return;
       const quality = await api.upload<CapturedPage["quality"]>("/records/receipts/quality-check", form, task.controller.signal);
       if (!operation.current(task)) return;
       setPages((prev) => prev.map((p) => (p.key === key ? { ...p, quality, checkingQuality: false } : p)));
@@ -588,14 +588,15 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
     for (const object of inspection.objects) {
       const page = list[object.pageNumber - 1]!;
       const originalExtension = object.mediaType === "image/png" ? "png" : object.mediaType === "image/webp" ? "webp" : "jpg";
-      form.append(object.variant === "processed" ? "files" : "originalFiles", {
+      await appendLocalFile(form, object.variant === "processed" ? "files" : "originalFiles", {
         uri: object.uri,
         name: object.variant === "processed"
           ? page.fileName
           : `receipt-section-${object.pageNumber}-original.${originalExtension}`,
         type: object.mediaType,
-      } as any);
+      });
     }
+    if (!operation.current(task)) return null;
     form.append("captureMetadata", JSON.stringify(list.map((page) => ({
       captureMode: page.captureMode,
       source: page.captureSource,

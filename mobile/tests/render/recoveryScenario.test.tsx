@@ -616,7 +616,7 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
   it('ignores a saved-plan delete alert after its business subtree unmounts', async () => {
     let delayedRemove: (() => void | Promise<void>) | undefined;
     const alert = vi.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
-      delayedRemove = buttons?.find((button) => button.style === 'destructive')?.onPress;
+      delayedRemove = buttons?.find((button) => button.style === 'destructive')?.onPress as (() => void | Promise<void>) | undefined;
     });
     const queries = await renderScreenWithPlan(savedPlan);
     await queries.findByText("My saved plan · for reference only");

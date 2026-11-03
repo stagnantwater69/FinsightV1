@@ -194,13 +194,13 @@ export function ChatHistoryPanel({
           </View>
         }
         ListEmptyComponent={
-          loading || error ? null : (
+          loading || error ? undefined : (
             <T variant="caption" style={{ padding: space.md, lineHeight: 18 }}>
               {query ? "No conversations match this title. Try another search." : "Your conversations will appear here once you ask something."}
             </T>
           )
         }
-        ListFooterComponent={hasMore && onLoadMore ? <Button title="Load older conversations" variant="secondary" loading={loadingMore} onPress={onLoadMore} /> : null}
+        ListFooterComponent={hasMore && onLoadMore ? <Button title="Load older conversations" variant="secondary" loading={loadingMore} onPress={onLoadMore} /> : undefined}
       />
     </Animated.View>
   );

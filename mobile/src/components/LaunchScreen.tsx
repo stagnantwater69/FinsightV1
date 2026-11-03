@@ -189,7 +189,7 @@ export function LaunchScreen({
 
   return (
     <View style={{ flex: 1, backgroundColor: PLATE }}>
-      <StatusBar barStyle="dark-content" backgroundColor={PLATE} />
+      <StatusBar barStyle="dark-content" />
 
       <View
         accessibilityElementsHidden

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
-import { Alert, TextInput } from "react-native";
+import { type TextInputInstance, Alert } from "react-native";
 import { Button, Card, ErrorNote, Field, ScreenHeader, T } from "../../components/ui";
 import { FormScreen } from "../../components/FormScreen";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
@@ -55,7 +55,7 @@ export function AddSalesScreen({ navigation }: RecordsScreenProps<"AddSales">) {
   }, [owner?.id, selected?.id, clearBaselineDecision]);
   useFocusEffect(useCallback(() => () => { if (flight.current) flight.current.unknown = true; operation.cancel(); setBusy(false); }, [operation]));
   // The date field is a pressable, so the chain is Description → Amount.
-  const amountRef = useRef<TextInput>(null);
+  const amountRef = useRef<TextInputInstance>(null);
 
   if (!selected) return null;
 

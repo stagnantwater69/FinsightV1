@@ -45,6 +45,7 @@ it("uses measured Android keyboard overlap and removes padding after system resi
     easing: "keyboard",
     startCoordinates: { screenX: 0, screenY: 800, width: 390, height: 350 },
     endCoordinates: { screenX: 0, screenY: 450, width: 390, height: 350 },
+    isEventFromThisApp: true,
   };
   await act(() => { for (const listener of listeners.get("keyboardDidShow") ?? []) listener(event); });
   expect(StyleSheet.flatten(keyboardProps(q).style).paddingBottom).toBe(320);

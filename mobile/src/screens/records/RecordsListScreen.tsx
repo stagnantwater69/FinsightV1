@@ -3,14 +3,17 @@ import { CONTENT_WIDTH } from "../../components/ContentScrollView";
 import {
   AppState,
   Alert as RNAlert,
-  FlatList,
   Pressable,
-  RefreshControl,
   TextInput,
   useWindowDimensions,
   View,
   type ListRenderItem,
 } from "react-native";
+// Gesture handler's list, not React Native's: every row is a swipeable, and
+// only this list lets the handler decide between a vertical scroll and a
+// row's horizontal swipe. On the plain list both claim the same drag and the
+// scroll stalls. Its RefreshControl keeps pull-to-refresh in that arbitration.
+import { FlatList, RefreshControl } from "react-native-gesture-handler";
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Callout, Card, EmptyState, ErrorNote, Screen, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
@@ -31,7 +34,7 @@ import { recordUpdatePath } from "../../lib/recordUpdate";
 import { TAP, font, radius, space, typeScale } from "../../theme/tokens";
 import { useTheme } from "../../context/ThemeContext";
 import { RECORD_SOURCE_LABELS, type RecordItem, type RecordSource } from "../../lib/types";
-import { RecordCard } from "./RecordCard";
+import { RecordCard, type RecordCardPosition } from "./RecordCard";
 import { NumberedPagination } from "../../components/NumberedPagination";
 import { RecordFilterSheet } from "./RecordFilterSheet";
 import { TAP_FLOOR } from "../../components/touchTarget";
@@ -371,7 +374,7 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
   );
 
   useEffect(() => {
-    let previousState = AppState.currentState;
+    let previousState = AppState.currentState ?? "";
     const subscription = AppState.addEventListener("change", (nextState) => {
       const returningToForeground =
         /inactive|background/.test(previousState) && nextState === "active";
@@ -560,33 +563,41 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
     [categories],
   );
   const renderRecord = useCallback<ListRenderItem<RecordItem>>(
-    ({ item, index }) => (
-      <>
-      {index === 0 || visibleRecordsRef.current[index - 1]?.date.slice(0, 10) !== item.date.slice(0, 10) ? (
-        <T
-          accessibilityRole="header"
-          style={{
-            marginTop: index === 0 ? 0 : space.md,
-            marginBottom: space.sm,
-            fontSize: typeScale.caption,
-            fontFamily: font.sansSemibold,
-            color: t.textMuted,
-            textTransform: "uppercase",
-            letterSpacing: 0.5,
-          }}
-        >
-          {dayHeading(item.date)}
-        </T>
-      ) : null}
-      <RecordCard
-        r={item}
-        categoryName={categoryNames.get(item.categoryId ?? -1) ?? "—"}
-        onPress={() => navigation.navigate("EditRecord", { record: item })}
-        onDelete={() => confirmDelete(item)}
-        onResolve={() => resolve(item)}
-      />
-      </>
-    ),
+    ({ item, index }) => {
+      const dayKey = item.date.slice(0, 10);
+      const startsDay = index === 0 || visibleRecordsRef.current[index - 1]?.date.slice(0, 10) !== dayKey;
+      const endsDay = visibleRecordsRef.current[index + 1]?.date.slice(0, 10) !== dayKey;
+      // One card per day, like a statement — see RecordCardPosition.
+      const position: RecordCardPosition = startsDay ? (endsDay ? "solo" : "first") : endsDay ? "last" : "middle";
+      return (
+        <>
+        {startsDay ? (
+          <T
+            accessibilityRole="header"
+            style={{
+              marginTop: index === 0 ? 0 : space.md,
+              marginBottom: space.sm,
+              fontSize: typeScale.caption,
+              fontFamily: font.sansSemibold,
+              color: t.textMuted,
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
+            {dayHeading(item.date)}
+          </T>
+        ) : null}
+        <RecordCard
+          r={item}
+          categoryName={categoryNames.get(item.categoryId ?? -1) ?? "—"}
+          onPress={() => navigation.navigate("EditRecord", { record: item })}
+          onDelete={() => confirmDelete(item)}
+          onResolve={() => resolve(item)}
+          position={position}
+        />
+        </>
+      );
+    },
     [categoryNames, confirmDelete, navigation, resolve, t],
   );
 
@@ -627,6 +638,9 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
         ref={scrollRef}
         data={visibleRecords}
         renderItem={renderRecord}
+        // Each row reads its neighbours (day header above it, group edges
+        // around it), so a delete or an edit to a neighbour must re-render it.
+        extraData={visibleRecords}
         keyExtractor={(item) => `${item.type}-${item.id}`}
         initialNumToRender={10}
         maxToRenderPerBatch={8}
@@ -637,7 +651,7 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => load(true)}
+            onRefresh={() => { void load(true); }}
             tintColor={brand[600]}
           />
         }
@@ -901,7 +915,7 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
             month of expenses. The notice above already says what happened and
             offers the retry, so this branch draws nothing more.
           */
-          null
+          undefined
         ) : (
           <EmptyState
             title={keyword ? "No records match that search" : "You haven't added any records yet"}
@@ -927,7 +941,7 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
                 <NumberedPagination page={visiblePageIndex} totalPages={loadedPageCount} reachablePages={loadedPageCount} busy={loadingMore || refreshing || revalidating} available={!switchingQuery} hasNext={visiblePageIndex + 1 < loadedPageCount} onPage={changePage} onNext={() => changePage(visiblePageIndex + 1)} />
                 {visibleNextCursor ? <Button title="Load more records" accessibilityLabel="Load more records" variant="secondary" loading={loadingMore} disabled={loadingMore || refreshing || revalidating || switchingQuery} onPress={() => void load(false, visibleNextCursor, true)} style={{ marginTop: space.md }} /> : null}
               </Card>
-          ) : null
+          ) : undefined
         }
       />
 
