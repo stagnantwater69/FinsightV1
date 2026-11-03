@@ -318,9 +318,11 @@ export function PageHead({
         {subtitle ? <p className="mt-1 max-w-2xl text-sm text-ink-500">{subtitle}</p> : null}
       </div>
       {/* `ml-auto` keeps the actions on the right when the title block is
-          visually hidden (inBreadcrumb, lg up) and they are the only item in the row. */}
+          visually hidden (inBreadcrumb, lg up) and they are the only item in the row.
+          `min-w-0` lets the group shrink to the column, so an action row that
+          scrolls sideways (Records) scrolls inside itself, not the page. */}
       {actions ? (
-        <div className={`flex flex-wrap items-center gap-2 ${inBreadcrumb ? "lg:ml-auto" : ""}`}>{actions}</div>
+        <div className={`flex min-w-0 flex-wrap items-center gap-2 ${inBreadcrumb ? "lg:ml-auto" : ""}`}>{actions}</div>
       ) : null}
     </div>
   );
