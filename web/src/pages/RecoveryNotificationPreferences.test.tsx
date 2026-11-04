@@ -82,8 +82,8 @@ describe("RecoveryNotificationPreferences", () => {
 
   it("marks the two inert triggers as coming soon, not currently active", async () => {
     renderPage();
-    expect(await screen.findByLabelText(/Open day ending with no sales \(coming soon\)/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Projection crosses to shortfall \(coming soon\)/)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Open day ending with no sales\s*Coming soon/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Projection crosses to shortfall\s*Coming soon/)).toBeInTheDocument();
     expect(screen.getByText(/Not active yet — FinSight can't yet reliably tell/)).toBeInTheDocument();
   });
 

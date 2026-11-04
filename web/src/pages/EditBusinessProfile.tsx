@@ -5,7 +5,7 @@ import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { BusinessProfileForm } from "../components/BusinessProfileForm";
 import { FinancialPositionPanel } from "../components/FinancialPositionPanel";
 import { AvatarUpload } from "../components/Avatar";
-import { ButtonLink } from "../components/Button";
+import { ButtonLink, classesFor } from "../components/Button";
 import { useToast } from "../components/Toast";
 import { Card, PageHead } from "../components/ui";
 import { getErrorMessage } from "../lib/errors";
@@ -50,10 +50,11 @@ export function BusinessProfileEditor({
   }
 
   return (
-    <div className="w-full max-w-6xl">
+    <div className="w-full">
       <PageHead
         title="Business profile"
         subtitle="Settings apply to this business only."
+        inBreadcrumb
         actions={
           <ButtonLink to="/business-profiles/all" variant="secondary" size="sm">
             View all businesses
@@ -158,14 +159,22 @@ function ManagementLink({
       className="group flex min-w-0 items-start gap-3 rounded-lg py-5 transition-colors hover:bg-paper-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 lg:pr-6 lg:last:pl-6 lg:last:pr-0"
     >
       <Icon size={20} className="mt-0.5 shrink-0 text-tone-brand" aria-hidden />
-      <div className="min-w-0">
+      {/* A column with the action pushed to the bottom, so the two tools'
+          buttons line up even when one description wraps further. */}
+      <div className="flex min-w-0 flex-col self-stretch">
         <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
-        <p className="mt-1 max-w-[52ch] text-sm leading-relaxed text-ink-500">
+        <p className="mb-4 mt-1 max-w-[52ch] text-sm leading-relaxed text-ink-500">
           {description}
         </p>
-        <span className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-tone-brand group-hover:underline">
+        {/* The same secondary button as "View all businesses" above, as a
+            span because the whole row is the link. */}
+        <span className={classesFor("secondary", "sm", false, "mt-auto self-start")}>
           {action}
-          <ChevronRight size={16} aria-hidden />
+          <ChevronRight
+            size={16}
+            aria-hidden
+            className="transition-transform duration-150 motion-safe:group-hover:translate-x-0.5 motion-safe:group-focus-visible:translate-x-0.5"
+          />
         </span>
       </div>
     </Link>
