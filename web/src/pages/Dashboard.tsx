@@ -10,7 +10,8 @@ import { SkeletonDashboard } from "../components/Skeleton";
 import { EmptyState, SetupProgress } from "../components/EmptyState";
 import { GreetingHero } from "../components/GreetingHero";
 import { TourInvite } from "../components/tour/TourInvite";
-import { ButtonLink } from "../components/Button";
+import { Button, ButtonLink } from "../components/Button";
+import { useAddRecordPopups } from "../components/useAddRecordPopups";
 import { formatMoney } from "../components/Money";
 import { DonutChart } from "../components/DonutChart";
 import { PeriodFilter } from "../components/PeriodFilter";
@@ -202,6 +203,13 @@ function DashboardPage() {
       : null,
     !!summary,
   );
+  // The dashboard stays on screen behind the popup, so it refreshes itself.
+  const addRecord = useAddRecordPopups(() => {
+    reload();
+    reloadExpenseOverview();
+    cashflow.reload();
+    recent.reload();
+  });
 
   const topCategory = summary?.expenseCategoryBreakdown?.length
     ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0]
@@ -281,20 +289,24 @@ function DashboardPage() {
           ) : undefined} shortcuts={
             <nav aria-label="Quick actions" data-tour="quick-add" className="grid grid-cols-4 gap-1 sm:w-[23rem] sm:gap-2">
               {[
-                { to: "/records/sales/new", label: "Add sale", icon: Plus },
-                { to: "/records/expenses/new", label: "Add expense", icon: Receipt },
+                { onClick: addRecord.openSales, label: "Add sale", icon: Plus },
+                { onClick: addRecord.openExpense, label: "Add expense", icon: Receipt },
                 { to: "/records/receipts/new", label: "Scan receipt", icon: ScanLine },
                 { to: "/records/csv-imports/new", label: "Import CSV", icon: FileUp },
-              ].map(({ to, label, icon }) => (
-                <Link
-                  key={to}
-                  to={to}
-                  className="group flex min-h-tap flex-col items-center gap-2 rounded-xl px-1 py-3 text-center text-xs font-semibold text-ink-700 transition-colors hover:bg-paper-50 hover:text-ink-900"
-                >
-                  <IconTile icon={icon} />
-                  {label}
-                </Link>
-              ))}
+              ].map(({ to, onClick, label, icon }) => {
+                const className = "group flex min-h-tap flex-col items-center gap-2 rounded-xl px-1 py-3 text-center text-xs font-semibold text-ink-700 transition-colors hover:bg-paper-50 hover:text-ink-900";
+                return to ? (
+                  <Link key={label} to={to} className={className}>
+                    <IconTile icon={icon} />
+                    {label}
+                  </Link>
+                ) : (
+                  <button key={label} type="button" onClick={onClick} className={className}>
+                    <IconTile icon={icon} />
+                    {label}
+                  </button>
+                );
+              })}
             </nav>
           } />
         </div>
@@ -309,7 +321,7 @@ function DashboardPage() {
           steps={[
             { label: "Set up your business profile", done: !!selected, href: "/onboarding" },
             { label: "Add an expense category", done: categories.length > 0, href: selected ? "/categories" : undefined },
-            { label: "Record your first expense or sale", done: hasAnyRecords, href: selected ? "/records/expenses/new" : undefined },
+            { label: "Record your first expense or sale", done: hasAnyRecords, onClick: selected ? addRecord.openExpense : undefined },
             {
               label: "Set your expected monthly expenses",
               done: !recoveryNeedsSetup,
@@ -457,7 +469,7 @@ function DashboardPage() {
           </section>
 
           <div className="grid gap-5 lg:grid-cols-12">
-            <RecoveryFocus summary={summary} needsSetup={recoveryNeedsSetup} action={recoveryAction} />
+            <RecoveryFocus summary={summary} needsSetup={recoveryNeedsSetup} action={recoveryAction} onAddSale={addRecord.openSales} />
             <Panel title={<PanelTitle icon={BellRing}>Needs attention</PanelTitle>} className="min-w-0 lg:col-span-5" bodyClassName="!px-0 !pb-1">
               <ul className="divide-y divide-paper-200 border-t border-paper-200">
                 <AttentionRow
@@ -679,9 +691,9 @@ function DashboardPage() {
               image="/mascot/01-onboarding/emptydashboard.webp"
               title="No records yet"
               action={
-                <ButtonLink to="/records/expenses/new" variant="primary">
+                <Button variant="primary" onClick={addRecord.openExpense}>
                   Add your first expense
-                </ButtonLink>
+                </Button>
               }
             >
               Record an expense or import a CSV to see your figures.
@@ -690,6 +702,7 @@ function DashboardPage() {
         </div>
       )}
 
+      {addRecord.popups}
       <AskFinSightButton originModule="Dashboard" />
     </div>
   );

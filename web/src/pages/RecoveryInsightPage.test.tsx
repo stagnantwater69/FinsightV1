@@ -107,6 +107,11 @@ let postHandler: (body: unknown) => unknown;
 let currentRecovery: RecoveryInsight = recovery;
 let recoveryGets = 0;
 
+// The add-sales form has its own tests; here it only has to open.
+vi.mock("../components/AddSalesModal", () => ({
+  AddSalesModal: () => <div role="dialog" aria-label="Add sales" />,
+}));
+
 vi.mock("../lib/api", () => ({
   api: {
     get: async (url: string) => {
@@ -508,13 +513,11 @@ describe("Recovery Target — state-specific primary action (plan §10.1/§10.2)
     expect(document.activeElement).toBe(target);
   });
 
-  it('shows "Record today\'s sales" linking to the add-sales-record route for on_pace', async () => {
+  it('shows "Record today\'s sales" opening the add-sales popup for on_pace', async () => {
     currentRecovery = { ...recovery, status: "on_pace" };
     renderPage();
-    const link = await screen.findByRole("link", {
-      name: "Record today's sales",
-    });
-    expect(link).toHaveAttribute("href", "/records/sales/new");
+    fireEvent.click(await screen.findByRole("button", { name: "Record today's sales" }));
+    expect(screen.getByRole("dialog", { name: "Add sales" })).toBeInTheDocument();
   });
 
   it('shows "Maintain current pace" as plain text, not a link, for ahead', async () => {

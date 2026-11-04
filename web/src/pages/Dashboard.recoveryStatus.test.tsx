@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ThemeProvider } from "../context/ThemeContext";
 import { Dashboard } from "./Dashboard";
@@ -57,6 +57,11 @@ function summaryWithStatus(status: RecoveryStatus): DashboardSummary {
 
 let preferences: UserPreferences;
 let currentSummary: DashboardSummary;
+
+// The add-sales form has its own tests; here it only has to open.
+vi.mock("../components/AddSalesModal", () => ({
+  AddSalesModal: () => <div role="dialog" aria-label="Add sales" />,
+}));
 
 vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({ profile: { id: 1, firstName: "Ken" }, preferences }),
@@ -121,7 +126,8 @@ describe("Dashboard recovery-status KPI — status-driven rendering", () => {
     currentSummary = summaryWithStatus("no_current_month_data");
     renderDashboard();
     await waitFor(() => expect(screen.getByText("No sales yet")).toBeInTheDocument());
-    expect(screen.getByRole("link", { name: "Add sale" })).toHaveAttribute("href", "/records/sales/new");
+    fireEvent.click(screen.getByRole("button", { name: "Add sale" }));
+    expect(screen.getByRole("dialog", { name: "Add sales" })).toBeInTheDocument();
   });
 
   it("shows 'Target reached' for covered", async () => {

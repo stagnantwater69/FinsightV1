@@ -1,5 +1,5 @@
 import { AlertTriangle, CalendarDays, CheckCircle2, Clock, Gauge, Plus, Target } from "lucide-react";
-import { ButtonLink } from "../../components/Button";
+import { Button, ButtonLink } from "../../components/Button";
 import { formatMoney } from "../../components/Money";
 import { ProgressRing } from "../../components/MiniCharts";
 import { Pill } from "../../components/ui";
@@ -8,10 +8,11 @@ import { monthLabel } from "../../lib/reportingPeriod";
 import { todayIso } from "../../lib/dates";
 import type { DashboardSummary } from "../../lib/types";
 
-export function RecoveryFocus({ summary, needsSetup, action }: {
+export function RecoveryFocus({ summary, needsSetup, action, onAddSale }: {
   summary: DashboardSummary;
   needsSetup: boolean;
   action: { to: string; label: string };
+  onAddSale: () => void;
 }) {
   const recovery = summary.recoveryStatus;
   const incomplete = recovery.status === "data_incomplete";
@@ -28,10 +29,14 @@ export function RecoveryFocus({ summary, needsSetup, action }: {
             : onPace ? "On track" : "Behind pace";
   const actions = (
     <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
-      <ButtonLink to={needsSetup ? action.to : "/records/sales/new"} variant="primary">
-        {needsSetup ? null : <Plus aria-hidden className="h-4 w-4" />}
-        {needsSetup ? action.label : "Add sale"}
-      </ButtonLink>
+      {needsSetup ? (
+        <ButtonLink to={action.to} variant="primary">{action.label}</ButtonLink>
+      ) : (
+        <Button variant="primary" onClick={onAddSale}>
+          <Plus aria-hidden className="h-4 w-4" />
+          Add sale
+        </Button>
+      )}
       {!needsSetup ? (
         <ArrowLink to={action.to === "/records/sales/new" ? "/insights/recovery" : action.to} className="text-sm">
           {action.to === "/records/sales/new" ? "View recovery plan" : action.label}
