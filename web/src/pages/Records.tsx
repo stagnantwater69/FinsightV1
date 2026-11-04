@@ -699,7 +699,7 @@ export function Records() {
       align: "right",
       sortable: true,
       cell: (r) => (
-        <span className={`font-medium ${r.type === "expense" ? "text-ink-900" : "text-brand-700"}`}>
+        <span className={`font-medium ${r.type === "expense" ? "text-ink-900" : "text-tone-brand"}`}>
           {/* Centavos, because this column is the record itself rather than a
               summary of it: a scanned 8.70 shown as "9" misstates what was
               saved, and the tooltip that carries the exact figure is not
@@ -1167,7 +1167,7 @@ export function Records() {
                   <div className="flex shrink-0 flex-col items-end gap-1.5">
                     <p
                       className={`text-right font-semibold ${
-                        r.type === "expense" ? "text-ink-900" : "text-brand-700"
+                        r.type === "expense" ? "text-ink-900" : "text-tone-brand"
                       }`}
                     >
                       {/* Same reasoning as the table column, and more so here:
