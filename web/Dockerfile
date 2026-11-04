@@ -24,7 +24,7 @@ RUN node scripts/precompress.mjs dist
 # The CSP is computed from this exact build: see scripts/csp.mjs.
 RUN node scripts/write-csp.mjs > /app/finsight-csp.conf
 
-FROM nginx:1.28-alpine
+FROM nginx:1.30-alpine
 # The stock server answers every unmatched host with the nginx welcome page.
 RUN rm /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
