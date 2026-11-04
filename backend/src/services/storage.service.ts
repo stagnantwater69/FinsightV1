@@ -343,8 +343,12 @@ export async function deletePublicImageUrl(url: string): Promise<boolean> {
   return path ? deletePublicImagePath(path) : true;
 }
 
-/** Lists canonical and legacy-extension objects owned by one user or business. */
-export async function listPublicImagePaths(prefix: string): Promise<string[]> {
+/**
+ * Lists every object owned by one user or business: `<id>.<random>` uploads
+ * and the older `<id>` / `<id>.<ext>` keys. With `settledBefore`, objects
+ * created at or after it (or with no creation time) are left out.
+ */
+export async function listPublicImagePaths(prefix: string, settledBefore?: Date): Promise<string[]> {
   const match = /^(users|businesses)\/([1-9]\d*)$/.exec(prefix);
   if (!match) throw new Error("Invalid public-image ownership prefix");
   const [, folder, stem] = match;
@@ -367,6 +371,7 @@ export async function listPublicImagePaths(prefix: string): Promise<string[]> {
     }
     for (const object of data) {
       if (!object.id || object.name.includes("/")) continue;
+      if (settledBefore && !(object.created_at && new Date(object.created_at) < settledBefore)) continue;
       if (object.name === stem || object.name.startsWith(`${stem}.`)) {
         paths.push(`${folder}/${object.name}`);
       }
@@ -377,10 +382,18 @@ export async function listPublicImagePaths(prefix: string): Promise<string[]> {
   return paths;
 }
 
-/** Best-effort cleanup for extension-based objects created before canonical keys. */
-export async function deleteSupersededPublicImages(prefix: string, keepPath = prefix): Promise<boolean> {
+/**
+ * Best-effort cleanup of an owner's replaced or orphaned images. Objects
+ * younger than the upload settle window are skipped: another upload may
+ * have written one and not yet committed its URL.
+ */
+export async function deleteSupersededPublicImages(
+  prefix: string,
+  keepPaths: readonly (string | null)[],
+): Promise<boolean> {
   try {
-    const paths = (await listPublicImagePaths(prefix)).filter((path) => path !== keepPath);
+    const settledBefore = new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS);
+    const paths = (await listPublicImagePaths(prefix, settledBefore)).filter((path) => !keepPaths.includes(path));
     const removed = await Promise.all(paths.map((path) => deletePublicImagePath(path)));
     return removed.every(Boolean);
   } catch (error) {
@@ -534,8 +547,9 @@ export async function validatePublicImageUpload(
   return validated;
 }
 
-// An extensionless owner key makes every upload an upsert of one object.
-// Deletion inventories the prefix because Storage may commit before the DB URL.
+// The bucket is public, so a random suffix keeps one owner's image from
+// being found by counting ids. Deletion inventories the prefix because
+// Storage may commit before the DB URL.
 async function uploadPublicImage(
   prefix: string,
   buffer: Buffer,
@@ -551,13 +565,10 @@ async function uploadPublicImage(
   ) {
     await validatePublicImageUpload(buffer, mimetype);
   }
-  const path = prefix;
+  const path = `${prefix}.${randomUUID()}`;
+  // upsert keeps a retried attempt from failing on the first one's object.
   await uploadWithRetry(AVATAR_BUCKET, path, buffer, mimetype, { upsert: true });
-  const { data } = supabaseAdmin.storage.from(AVATAR_BUCKET).getPublicUrl(path);
-  // Cache-bust: the path (and therefore the URL) is stable across re-uploads,
-  // so without this the browser and CDN would keep serving the old cached
-  // image after a photo change.
-  return `${data.publicUrl}?v=${Date.now()}`;
+  return supabaseAdmin.storage.from(AVATAR_BUCKET).getPublicUrl(path).data.publicUrl;
 }
 
 export async function uploadUserAvatar(

@@ -25,6 +25,9 @@ const {
   uploadUserAvatar,
 } = await import("../../src/services/storage.service");
 
+const UUID_KEY = (prefix: string) =>
+  new RegExp(`^${prefix}\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`);
+
 let jpeg: Buffer;
 let png: Buffer;
 let webp: Buffer;
@@ -64,24 +67,26 @@ describe("public profile-image uploads", () => {
     ["image/jpeg", "avatar.client.png", () => jpeg],
     ["image/png", "avatar.client.webp", () => png],
     ["image/webp", "avatar.client.jpg", () => webp],
-  ])("uses one canonical user key for valid %s bytes", async (mimetype, originalname, bytes) => {
+  ])("stores valid %s bytes under an unguessable user key", async (mimetype, originalname, bytes) => {
     const url = await uploadUserAvatar(7, bytes(), mimetype, originalname);
 
     expect(upload).toHaveBeenCalledWith(
-      "users/7",
+      expect.stringMatching(UUID_KEY("users/7")),
       bytes(),
       { contentType: mimetype, upsert: true },
     );
-    expect(url).toMatch(/^https:\/\/storage\.test\/storage\/v1\/object\/public\/avatars\/users\/7\?v=\d+$/);
+    const path = upload.mock.calls[0]![0] as string;
+    expect(url).toBe(`https://storage.test/storage/v1/object/public/avatars/${path}`);
+    expect(publicImagePathFromUrl(url)).toBe(path);
   });
 
-  it("uses one canonical business key across filename extensions", async () => {
+  it("gives every business logo upload a new key, whatever the filename", async () => {
     await uploadBusinessLogo(19, png, "image/png", "logo.any-extension");
-    expect(upload).toHaveBeenCalledWith(
-      "businesses/19",
-      png,
-      { contentType: "image/png", upsert: true },
-    );
+    await uploadBusinessLogo(19, png, "image/png", "logo.any-extension");
+    const [first, second] = upload.mock.calls.map(([path]) => path as string);
+    expect(first).toMatch(UUID_KEY("businesses/19"));
+    expect(second).toMatch(UUID_KEY("businesses/19"));
+    expect(first).not.toBe(second);
   });
 
   it.each([
@@ -115,21 +120,25 @@ describe("public image inventory", () => {
     expect(list).toHaveBeenCalledTimes(12);
   });
 
-  it("deletes all legacy keys while preserving the canonical object", async () => {
+  it("deletes settled superseded keys while preserving the kept and still-settling objects", async () => {
+    const settled = new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 60_000).toISOString();
+    const fresh = new Date().toISOString();
     list.mockResolvedValue({
       data: [
-        { id: "canonical", name: "7" },
-        { id: "legacy-png", name: "7.png" },
-        { id: "legacy-jpeg", name: "7.jpeg" },
-        { id: "other-user", name: "70.png" },
+        { id: "current", name: "7.aaaa", created_at: settled },
+        { id: "legacy-canonical", name: "7", created_at: settled },
+        { id: "legacy-png", name: "7.png", created_at: settled },
+        { id: "in-flight", name: "7.bbbb", created_at: fresh },
+        { id: "no-time", name: "7.cccc" },
+        { id: "other-user", name: "70.png", created_at: settled },
       ],
       error: null,
     });
 
-    await expect(deleteSupersededPublicImages("users/7")).resolves.toBe(true);
+    await expect(deleteSupersededPublicImages("users/7", ["users/7.aaaa", null])).resolves.toBe(true);
     expect(remove).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenCalledWith(["users/7"]);
     expect(remove).toHaveBeenCalledWith(["users/7.png"]);
-    expect(remove).toHaveBeenCalledWith(["users/7.jpeg"]);
   });
 
   it("parses only owned avatar and logo URLs and ignores cache-bust parameters", () => {
