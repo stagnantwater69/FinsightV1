@@ -165,7 +165,7 @@ function verifiedCaptureMetadata(
 const confirmSharedShape = {
   expectedScanRevision: z.number().int().nonnegative().optional(),
   date: z.string().date(),
-  description: z.string().min(1).max(255),
+  description: z.string().trim().min(1).max(255),
   vendor: z.string().max(150).optional(),
   amount: moneyAmountSchema,
   includedInAvailableFundsBaseline: z.boolean().optional(),
@@ -182,7 +182,7 @@ const splitsSchema = z.array(
   z.object({
     categoryId: z.number().int().positive().max(2147483647),
     amount: moneyAmountSchema,
-    description: z.string().min(1).max(255).optional(),
+    description: z.string().trim().min(1).max(255).optional(),
   }).strict(),
 );
 
@@ -197,7 +197,7 @@ const itemAssignmentsSchema = z.array(
 // as an extracted item, since they end up in the same table.
 const additionalItemsSchema = z.array(
   z.object({
-    name: z.string().min(1).max(255),
+    name: z.string().trim().min(1).max(255),
     amount: moneyAmountSchema,
     categoryId: z.number().int().positive().max(2147483647),
   }).strict(),
