@@ -99,15 +99,30 @@ function cappedRatio(amount: number, baseline: number): number {
  * measured against — the same leave-one-out discipline the amount detector
  * follows.
  */
-export function featuresFor(candidate: IsolationForestRecord, prior: IsolationForestRecord[]): number[] {
+export function featuresFor(
+  candidate: IsolationForestRecord,
+  prior: IsolationForestRecord[],
+  normalizedText: Map<string, string> = new Map(),
+): number[] {
+  // Each row reads every row before it, so a batch normalises the same
+  // strings over and over; this map does each distinct string once.
+  const normalize = (text: string | null) => {
+    const key = text ?? "";
+    let normalized = normalizedText.get(key);
+    if (normalized === undefined) {
+      normalized = normalizeComparisonText(key);
+      normalizedText.set(key, normalized);
+    }
+    return normalized;
+  };
   const time = candidate.date.getTime();
   const categoryAmounts = prior
     .filter((record) => record.categoryId === candidate.categoryId)
     .map((record) => record.amount)
     .sort((a, b) => a - b);
-  const normalizedVendor = normalizeComparisonText(candidate.vendor);
+  const normalizedVendor = normalize(candidate.vendor);
   const vendorRecords = normalizedVendor
-    ? prior.filter((record) => normalizeComparisonText(record.vendor) === normalizedVendor)
+    ? prior.filter((record) => normalize(record.vendor) === normalizedVendor)
     : [];
   const vendorAmounts = vendorRecords.map((record) => record.amount).sort((a, b) => a - b);
 
@@ -126,7 +141,7 @@ export function featuresFor(candidate: IsolationForestRecord, prior: IsolationFo
   const similar = prior.filter(
     (record) =>
       record.categoryId === candidate.categoryId ||
-      (normalizedVendor !== "" && normalizeComparisonText(record.vendor) === normalizedVendor),
+      (normalizedVendor !== "" && normalize(record.vendor) === normalizedVendor),
   );
   const lastSimilarTime = similar.length ? Math.max(...similar.map((record) => record.date.getTime())) : null;
   const daysSinceSimilar =
@@ -143,8 +158,12 @@ export function featuresFor(candidate: IsolationForestRecord, prior: IsolationFo
     );
 
   const categoryShare = prior.length ? categoryAmounts.length / prior.length : 0;
+  // Repeated descriptions cannot raise the maximum, so each distinct one is
+  // compared once. Normalised text is passed on; normalising it again is a no-op.
+  const candidateDescription = normalize(candidate.description);
   const descriptionNovelty = prior.length
-    ? 1 - Math.max(...prior.map((record) => textSimilarity(candidate.description, record.description)))
+    ? 1 - Math.max(...[...new Set(prior.map((record) => normalize(record.description)))]
+      .map((description) => textSimilarity(candidateDescription, description)))
     : 1;
 
   return [
@@ -174,7 +193,11 @@ export function featuresFor(candidate: IsolationForestRecord, prior: IsolationFo
  * only the records that precede it.
  */
 export function buildFeatureMatrix(records: IsolationForestRecord[]): { id: number; features: number[] }[] {
-  return records.map((record, index) => ({ id: record.id, features: featuresFor(record, records.slice(0, index)) }));
+  const normalizedText = new Map<string, string>();
+  return records.map((record, index) => ({
+    id: record.id,
+    features: featuresFor(record, records.slice(0, index), normalizedText),
+  }));
 }
 
 /**
