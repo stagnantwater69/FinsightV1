@@ -6,14 +6,23 @@ import { useAddRecordPopups } from "./useAddRecordPopups";
 
 let selected: { id: number } | null = null;
 vi.mock("../context/BusinessProfileContext", () => ({ useBusinessProfiles: () => ({ selected }) }));
-vi.mock("./AddExpenseModal", () => ({
-  AddExpenseModal: ({ onSaved, onClose }: { onSaved: () => void; onClose: () => void }) => (
-    <div role="dialog" aria-label="Add expense">
-      <button type="button" onClick={() => { onSaved(); onClose(); }}>Save</button>
-    </div>
-  ),
+let expenseMounts = 0;
+vi.mock("./AddExpenseModal", async () => {
+  const { useEffect } = await import("react");
+  return {
+    AddExpenseModal: ({ open, onSaved, onClose }: { open: boolean; onSaved: () => void; onClose: () => void }) => {
+      useEffect(() => { expenseMounts += 1; }, []);
+      return open ? (
+        <div role="dialog" aria-label="Add expense">
+          <button type="button" onClick={() => { onSaved(); onClose(); }}>Save</button>
+        </div>
+      ) : null;
+    },
+  };
+});
+vi.mock("./AddSalesModal", () => ({
+  AddSalesModal: ({ open }: { open: boolean }) => (open ? <div role="dialog" aria-label="Add sales" /> : null),
 }));
-vi.mock("./AddSalesModal", () => ({ AddSalesModal: () => <div role="dialog" aria-label="Add sales" /> }));
 
 function Page({ onSaved }: { onSaved: () => void }) {
   const add = useAddRecordPopups(onSaved);
@@ -39,7 +48,7 @@ function renderPage(onSaved = () => {}) {
 }
 
 describe("add-record popups on any page", () => {
-  beforeEach(() => { selected = null; });
+  beforeEach(() => { selected = null; expenseMounts = 0; });
 
   it("opens one popup at a time in place, and closes it after a save", () => {
     selected = { id: 10 };
@@ -55,6 +64,17 @@ describe("add-record popups on any page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog")).toBeNull();
+
+    // Stays mounted once used, so closing can fade out and reopening is instant.
+    fireEvent.click(screen.getByRole("button", { name: "Add expense" }));
+    expect(screen.getByRole("dialog", { name: "Add expense" })).toBeInTheDocument();
+    expect(expenseMounts).toBe(1);
+  });
+
+  it("mounts no form until the owner opens one", () => {
+    selected = { id: 10 };
+    renderPage();
+    expect(expenseMounts).toBe(0);
   });
 
   it("goes to the full-page form when no business is selected", () => {

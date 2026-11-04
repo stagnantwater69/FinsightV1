@@ -9,8 +9,9 @@ import { AddSalesModal } from "./AddSalesModal";
  * that offers them. Render `popups` once on the page and call `openExpense` /
  * `openSales` from its buttons.
  *
- * Each form mounts only while it is open, so a page whose owner never adds
- * a record from it pays nothing for the forms, and every popup starts blank.
+ * Each form mounts the first time it opens and then stays mounted, as on
+ * Records: a page whose owner never adds a record from it pays nothing for
+ * the forms, and closing one fades out instead of vanishing.
  *
  * A record needs a business to belong to, so with none selected the buttons
  * go to the full-page forms instead, which explain what is missing.
@@ -19,16 +20,27 @@ export function useAddRecordPopups(onSaved: () => void = () => {}) {
   const { selected } = useBusinessProfiles();
   const navigate = useNavigate();
   const [open, setOpen] = useState<"expense" | "sales" | null>(null);
+  const [used, setUsed] = useState({ expense: false, sales: false });
 
+  const show = (kind: "expense" | "sales") => {
+    setUsed((current) => (current[kind] ? current : { ...current, [kind]: true }));
+    setOpen(kind);
+  };
   const close = () => setOpen(null);
-  const popups = !selected ? null
-    : open === "expense" ? <AddExpenseModal businessProfileId={selected.id} open onClose={close} onSaved={onSaved} />
-      : open === "sales" ? <AddSalesModal businessProfileId={selected.id} open onClose={close} onSaved={onSaved} />
-        : null;
+  const popups = selected ? (
+    <>
+      {used.expense ? (
+        <AddExpenseModal businessProfileId={selected.id} open={open === "expense"} onClose={close} onSaved={onSaved} />
+      ) : null}
+      {used.sales ? (
+        <AddSalesModal businessProfileId={selected.id} open={open === "sales"} onClose={close} onSaved={onSaved} />
+      ) : null}
+    </>
+  ) : null;
 
   return {
-    openExpense: () => (selected ? setOpen("expense") : navigate("/records/expenses/new")),
-    openSales: () => (selected ? setOpen("sales") : navigate("/records/sales/new")),
+    openExpense: () => (selected ? show("expense") : navigate("/records/expenses/new")),
+    openSales: () => (selected ? show("sales") : navigate("/records/sales/new")),
     popups,
   };
 }
