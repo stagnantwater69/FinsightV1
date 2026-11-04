@@ -47,14 +47,6 @@ export function dateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Today in the owner's own time zone, as a date key. */
-export function localTodayKey(now = new Date()): string {
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
 function keyToUtc(key: string): number {
   return Date.parse(`${key}T00:00:00.000Z`);
 }

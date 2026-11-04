@@ -6,11 +6,11 @@ import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
 import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
 import { getErrorMessage } from "../lib/errors";
+import { todayIso } from "../lib/dates";
 import {
   addDays,
   calendarEntries,
   isClosedDay,
-  localTodayKey,
   monthBounds,
   monthGrid,
   shiftMonth,
@@ -92,7 +92,8 @@ const OVERDUE_CHIP = "bg-tint-danger text-tone-danger ring-1 ring-edge-danger";
 
 export function PaymentCalendarPage() {
   const { selected } = useBusinessProfiles();
-  const today = localTodayKey();
+  // The business's calendar day, as the server and the record forms count it.
+  const today = todayIso(selected?.timezone);
   const [month, setMonth] = useState(today.slice(0, 7));
   /** The day open in the day popup, if any. */
   const [openDay, setOpenDay] = useState<string | null>(null);

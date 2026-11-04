@@ -391,6 +391,18 @@ describe("Payment calendar", () => {
     expect(screen.getByText("November 2026")).toBeInTheDocument();
   });
 
+  it("opens on the business's month, not the device's", async () => {
+    // 02:00 UTC on 1 Nov is still 31 Oct in Los Angeles, and 1 Nov in UTC and Manila.
+    vi.setSystemTime(new Date("2026-11-01T02:00:00Z"));
+    (profile as { timezone?: string }).timezone = "America/Los_Angeles";
+    try {
+      renderPage();
+      expect(await screen.findByText("October 2026")).toBeInTheDocument();
+    } finally {
+      delete (profile as { timezone?: string }).timezone;
+    }
+  });
+
   it("hides Watch this when schedules are switched off", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     schedulesResponse = "404";
