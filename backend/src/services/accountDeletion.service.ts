@@ -361,7 +361,9 @@ async function deleteClaimedRelationalData(job: ClaimedDeletion): Promise<boolea
     }
     await deleteRelationalDataInTransaction(tx, job.id);
     return true;
-  });
+    // The cascade for a large ledger outlasts Prisma's 5 s default; still well
+    // inside the 2-minute deletion lease.
+  }, { timeout: 60_000, maxWait: 10_000 });
 }
 
 async function claimDeletion(): Promise<ClaimedDeletion | null> {

@@ -514,4 +514,27 @@ describe("account deletion worker leases", () => {
     expect(await prisma.user.findUnique({ where: { id: owner.user.id } })).toBeNull();
     expect(await prisma.cSVSourcePurgeJob.findUnique({ where: { id: job.id } })).toBeNull();
   });
+
+  // Prisma's 5 s default expired mid-delete for an owner with 100k expenses
+  // and 100k sales (~15 s cascade), so the account retried until it gave up.
+  it("gives the relational delete more than Prisma's default transaction time", async () => {
+    const owner = await makeOwnerWithProfile({}, ["Inventory"]);
+    await markDeletionPending(owner.user.id);
+    await runAccountDeletionWorkerOnce();
+    await runAccountDeletionWorkerOnce();
+    await expect(prisma.user.findUniqueOrThrow({ where: { id: owner.user.id } })).resolves.toMatchObject({
+      deletionStage: AccountDeletionStage.AUTH_DELETED,
+    });
+    const transaction = vi.spyOn(prisma, "$transaction");
+    try {
+      expect(await runAccountDeletionWorkerOnce()).toBe(true);
+      expect(await prisma.user.findUnique({ where: { id: owner.user.id } })).toBeNull();
+      const interactive = transaction.mock.calls.filter(([work]) => typeof work === "function");
+      expect(interactive).toHaveLength(1);
+      const options = interactive[0]?.[1] as { timeout?: number } | undefined;
+      expect(options?.timeout ?? 5_000).toBeGreaterThanOrEqual(60_000);
+    } finally {
+      transaction.mockRestore();
+    }
+  });
 });
