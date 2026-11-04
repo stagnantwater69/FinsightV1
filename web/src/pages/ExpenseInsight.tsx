@@ -44,6 +44,7 @@ import {
 import { EmptyState } from "../components/EmptyState";
 import { SectionNav, type SectionNavItem } from "../components/SectionNav";
 import { Button, ButtonLink } from "../components/Button";
+import { useAddRecordPopups } from "../components/useAddRecordPopups";
 import { formatMoney } from "../components/Money";
 import { CATEGORICAL_PALETTE, STATUS_INK } from "../lib/chartPalette";
 
@@ -1494,6 +1495,8 @@ function ExpenseInsightPage() {
     total: data?.categoryTrends.length ?? 0,
     resetKey: expenseScopeKey,
   });
+  // Saving refreshes this page through its server-state subscriptions.
+  const addRecord = useAddRecordPopups();
   const flaggedDisclosure = useListDisclosure({
     total: flaggedExpenses.length,
     limit: MAX_FLAGGED_SHOWN,
@@ -1719,9 +1722,9 @@ function ExpenseInsightPage() {
             icon="◔"
             action={
               <>
-                <ButtonLink to="/records/expenses/new" variant="primary">
+                <Button variant="primary" onClick={addRecord.openExpense}>
                   Add an expense
-                </ButtonLink>
+                </Button>
                 <ButtonLink to="/records/csv-imports/new" variant="secondary">
                   Import CSV
                 </ButtonLink>
@@ -2660,6 +2663,7 @@ function ExpenseInsightPage() {
         onSaved={() => void loadRecurring(undefined, true)}
       />
 
+      {addRecord.popups}
       <AskFinSightButton originModule="Expense Insights" />
     </div>
   );

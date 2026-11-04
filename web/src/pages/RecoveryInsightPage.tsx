@@ -54,6 +54,7 @@ import { monthToneAndCopy } from "../lib/recoveryMonthState";
 import { PeriodFilter } from "../components/PeriodFilter";
 import { DataTable, type Column } from "../components/DataTable";
 import { Button, ButtonLink, classesFor } from "../components/Button";
+import { useAddRecordPopups } from "../components/useAddRecordPopups";
 import { PageTip } from "../components/PageTip";
 import { Field, FormError, MoneyInput } from "../components/Field";
 import {
@@ -840,9 +841,11 @@ function RecoverySectionNav({
 function RecoveryPrimaryAction({
   status,
   businessProfileId,
+  onAddSale,
 }: {
   status: RecoveryStatus | undefined;
   businessProfileId: number;
+  onAddSale: () => void;
 }) {
   const anchorClassName = classesFor("primary", "sm", false, "");
 
@@ -886,9 +889,9 @@ function RecoveryPrimaryAction({
       );
     case "on_pace":
       return (
-        <ButtonLink to="/records/sales/new" variant="primary" size="sm">
+        <Button variant="primary" size="sm" onClick={onAddSale}>
           Record today's sales
-        </ButtonLink>
+        </Button>
       );
     case "ahead":
       // Informational only — there is nothing to navigate to, so this is
@@ -2434,6 +2437,7 @@ function RecoveryInsightContent() {
   }>({ scopeKey: null, plan: null, state: "ready", updatedAt: null });
   const [planLoading, setPlanLoading] = useState(false);
   const planRequestId = useRef(0);
+  const addRecord = useAddRecordPopups(() => void load(undefined, true));
   const ownsPlanResult = planScopeKey !== null && planResult.scopeKey === planScopeKey;
   const plan = ownsPlanResult ? planResult.plan : null;
   const planState = ownsPlanResult ? planResult.state : "ready";
@@ -2806,6 +2810,7 @@ function RecoveryInsightContent() {
                   <RecoveryPrimaryAction
                     status={currentMonthMeterData?.status}
                     businessProfileId={selected.id}
+                    onAddSale={addRecord.openSales}
                   />
                 ) : null
               }
@@ -3309,6 +3314,7 @@ function RecoveryInsightContent() {
         </div>
       ) : null}
 
+      {addRecord.popups}
       <AskFinSightButton originModule="Recovery Target" />
     </div>
   );

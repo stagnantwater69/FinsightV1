@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DashboardSummary } from "../../lib/types";
 import { RecoveryFocus } from "./RecoveryFocus";
 
@@ -17,14 +17,15 @@ const baseRecovery = {
   onTrack: false,
 };
 
-function renderRecovery(recovery: Partial<DashboardSummary["recoveryStatus"]> = {}, needsSetup = false) {
+function renderRecovery(recovery: Partial<DashboardSummary["recoveryStatus"]> = {}, needsSetup = false, onAddSale = () => {}) {
   const summary = { recoveryStatus: { ...baseRecovery, ...recovery } } as DashboardSummary;
-  return render(<MemoryRouter><RecoveryFocus summary={summary} needsSetup={needsSetup} action={{ to: "/insights/recovery", label: "View recovery plan" }} /></MemoryRouter>);
+  return render(<MemoryRouter><RecoveryFocus summary={summary} needsSetup={needsSetup} action={{ to: "/insights/recovery", label: "View recovery plan" }} onAddSale={onAddSale} /></MemoryRouter>);
 }
 
 describe("dashboard today's target", () => {
   it("turns a negative server gap into the remaining sale amount with an Add sale action", () => {
-    renderRecovery();
+    const onAddSale = vi.fn();
+    renderRecovery({}, false, onAddSale);
 
     const target = screen.getByRole("region", { name: "Today’s recovery target" });
     expect(within(target).getByText("PHP 750")).toBeVisible();
@@ -32,7 +33,9 @@ describe("dashboard today's target", () => {
     expect(within(target).getByText("PHP 500")).toBeVisible();
     expect(within(target).getByText("PHP 1,250")).toBeVisible();
     expect(within(target).getByText("Current month · September 2026")).toBeVisible();
-    expect(within(target).getByRole("link", { name: "Add sale" })).toHaveAttribute("href", "/records/sales/new");
+    // Opens the add-sales popup in place, as Records does.
+    fireEvent.click(within(target).getByRole("button", { name: "Add sale" }));
+    expect(onAddSale).toHaveBeenCalledTimes(1);
   });
 
   it("shows a reached daily target when sales exceed the target", () => {

@@ -90,7 +90,7 @@ export function EmptyState({
 export function SetupProgress({
   steps,
 }: {
-  steps: { label: string; done: boolean; href?: string }[];
+  steps: { label: string; done: boolean; href?: string; onClick?: () => void }[];
 }) {
   const done = steps.filter((s) => s.done).length;
   const total = steps.length;
@@ -133,6 +133,10 @@ export function SetupProgress({
               <Link className="tap-inline link-action" to={s.href}>
                 {s.label}
               </Link>
+            ) : s.onClick && !s.done ? (
+              <button type="button" className="tap-inline link-action text-left" onClick={s.onClick}>
+                {s.label}
+              </button>
             ) : (
               <span className={s.done ? "text-ink-600 line-through" : "text-ink-700"}>{s.label}</span>
             )}
