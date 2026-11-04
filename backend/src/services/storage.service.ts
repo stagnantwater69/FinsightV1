@@ -332,6 +332,20 @@ export function publicImagePathFromUrl(url: string): string | null {
   }
 }
 
+const RANDOM_PUBLIC_IMAGE_KEY = /\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** True for an avatar/logo key written before uploads got a random suffix. */
+export function isGuessablePublicImagePath(path: string): boolean {
+  return !RANDOM_PUBLIC_IMAGE_KEY.test(path);
+}
+
+/** Reads one avatar/logo object back, or null when it cannot be fetched. */
+export async function downloadPublicImage(path: string): Promise<{ buffer: Buffer; mimetype: string } | null> {
+  const { data, error } = await supabaseAdmin.storage.from(AVATAR_BUCKET).download(path);
+  if (error || !data) return null;
+  return { buffer: Buffer.from(await data.arrayBuffer()), mimetype: data.type };
+}
+
 /** Deletes one known avatar/logo object key. */
 export async function deletePublicImagePath(path: string): Promise<boolean> {
   return removeObject(AVATAR_BUCKET, path);
