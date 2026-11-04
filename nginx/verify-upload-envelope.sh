@@ -42,7 +42,7 @@ docker run -d --rm \
   --network "$network" \
   -p 127.0.0.1::80 \
   -v "$SCRIPT_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" \
-  nginx:1.27-alpine >/dev/null
+  nginx:1.28-alpine >/dev/null
 
 port=$(docker inspect --format '{{(index (index .NetworkSettings.Ports "80/tcp") 0).HostPort}}' "$proxy_container")
 ready=0

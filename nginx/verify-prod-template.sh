@@ -29,13 +29,13 @@ output=$(docker run --rm --add-host backend:127.0.0.1 \
   -v "$SCRIPT_DIR/templates:/etc/nginx/templates:ro" \
   -v "$scratch:/etc/letsencrypt:ro" \
   -v "$scratch/snippets:/etc/nginx/snippets:ro" \
-  nginx:1.27-alpine nginx -t 2>&1) || { echo "$output" >&2; exit 1; }
+  nginx:1.28-alpine nginx -t 2>&1) || { echo "$output" >&2; exit 1; }
 echo "$output" | tail -n 2
 
 # The rendered file must have no ${...} left that the entrypoint skipped.
 rendered=$(docker run --rm -e DOMAIN="$DOMAIN" -e HSTS_MAX_AGE=86400 \
   -v "$SCRIPT_DIR/templates:/etc/nginx/templates:ro" \
-  nginx:1.27-alpine sh -c '/docker-entrypoint.d/20-envsubst-on-templates.sh >/dev/null && cat /etc/nginx/conf.d/finsight.conf')
+  nginx:1.28-alpine sh -c '/docker-entrypoint.d/20-envsubst-on-templates.sh >/dev/null && cat /etc/nginx/conf.d/finsight.conf')
 if echo "$rendered" | grep -q '\${'; then
   echo "unrendered placeholder in the production template:" >&2
   echo "$rendered" | grep -n '\${' >&2
