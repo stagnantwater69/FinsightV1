@@ -85,7 +85,6 @@ export const STATUS_COLORS = {
 // ink, so the "is this measured?" question has one answer:
 //
 //   Alert.tsx        the severity bar, the glyph disc, and AlertBadge
-//   RecoveryMeter    the month-coverage solid
 //   RecoveryInsight  the per-day status pill
 //
 // Spending Impact's impact-band chip used to be a fourth. It painted

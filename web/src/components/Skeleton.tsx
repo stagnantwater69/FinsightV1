@@ -16,7 +16,7 @@ export function SkeletonLine({ className = "" }: { className?: string }) {
   return <div className={`skeleton h-3 ${className}`.trim()} aria-hidden />;
 }
 
-/** Matches StatTile: label, big figure, optional sublabel. */
+/** A stat tile placeholder: label, big figure, optional sublabel. */
 export function SkeletonStatTile() {
   return (
     <div className="rounded-2xl bg-paper p-5 border border-paper-200 shadow-sm">
