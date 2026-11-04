@@ -72,6 +72,9 @@ check_env() {
   elif [ -z "$(env_value .env BACKUP_AGE_RECIPIENT)" ]; then
     fail ".env: BACKUP_S3_BUCKET is set without BACKUP_AGE_RECIPIENT, so every nightly backup would refuse to upload (see deploy/backup-db.sh)"
   fi
+  if [ -z "$(env_value .env STORAGE_BACKUP_ACCESS_KEY_ID)" ]; then
+    echo "deploy: note: STORAGE_BACKUP_ACCESS_KEY_ID is empty, so receipt images and CSVs are not backed up (see deploy/backup-storage.sh)"
+  fi
   if [ -n "$(env_value .env BACKUP_AGE_RECIPIENT)" ] && ! command -v age >/dev/null; then
     fail "BACKUP_AGE_RECIPIENT is set but age is not installed: sudo apt-get install age"
   fi
@@ -131,6 +134,7 @@ fi
 has_certificate || issue_certificate
 install_cron "17 3 * * *" deploy/renew-certs.sh finsight-renew.log "a daily certificate renewal check"
 install_cron "30 2 * * *" deploy/backup-db.sh finsight-backup.log "a daily database backup"
+install_cron "45 2 * * *" deploy/backup-storage.sh finsight-storage-backup.log "a daily Storage backup"
 
 echo "deploy: starting services"
 "${COMPOSE[@]}" up -d --remove-orphans
