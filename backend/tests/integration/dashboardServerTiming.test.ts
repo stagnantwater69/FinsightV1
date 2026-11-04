@@ -43,6 +43,7 @@ beforeEach(async () => {
         description: "Summary timing sentinel",
         amount: SUMMARY_SENTINEL,
         source: "MANUAL_ENTRY",
+        reviewStatus: "Reviewed",
       },
       {
         businessProfileId: ctx.profile.id,
@@ -51,6 +52,7 @@ beforeEach(async () => {
         description: "Cashflow timing sentinel",
         amount: CASHFLOW_SENTINEL,
         source: "MANUAL_ENTRY",
+        reviewStatus: "Reviewed",
       },
     ],
   });

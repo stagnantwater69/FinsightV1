@@ -27,6 +27,7 @@ import {
 import { requireOwnedBusinessContext } from "../../src/services/ownedBusinessContext.service";
 import * as insights from "../../src/services/insights.service";
 import { getDashboardSummary } from "../../src/services/dashboard.service";
+import { simulateReductionOpportunity } from "../../src/services/reductionOpportunity.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
 
 const NOW = new Date("2026-10-15T04:00:00.000Z");
@@ -384,6 +385,25 @@ describe("recorded available funds", () => {
 
     expect(impact.periodExpenses).toEqual({ before: 200, after: 250 });
     expect(impact.availableFundsCalculation.confirmedExpensesDeducted).toBe(200);
+  });
+
+  it("counts only confirmed, final expenses in the dashboard, expense insight and reduction totals", async () => {
+    await expense({ amount: 200 });
+    await expense({ amount: 300, reviewStatus: "Needs Review" });
+    await expense({ amount: 400, duplicateStatus: "Flagged" });
+    await expense({ amount: 500, source: "CSV_UPLOAD", importBatchId: (await csvBatch("PROCESSING")).id });
+
+    const dashboard = await getDashboardSummary(ctx.user.id, ctx.profile.id, { kind: "all" });
+    expect(dashboard.overview.totalExpenses).toBe(200);
+    const behavior = await insights.getExpenseBehavior(ctx.user.id, ctx.profile.id, { kind: "all" });
+    expect(behavior.totals.current).toBe(200);
+    const reduction = await simulateReductionOpportunity(ctx.user.id, {
+      businessProfileId: ctx.profile.id,
+      categoryId: ctx.categories.Inventory!,
+      reduction: { kind: "percent", value: 10 },
+      period: { kind: "all" },
+    });
+    expect(reduction.totalExpenses.before).toBe(200);
   });
 
   it("keeps Spending Impact thresholds nonnegative when recorded funds are below zero", async () => {

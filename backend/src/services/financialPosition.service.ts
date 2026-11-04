@@ -92,6 +92,9 @@ export const COUNTED = {
   duplicateOfRecordId: null,
 } as const;
 
+/** The expenses every money total counts: reviewed, not a duplicate, and final. */
+export const COUNTED_EXPENSE = { ...COUNTED, ...FINAL_EXPENSE_SOURCE } satisfies Prisma.ExpenseRecordWhereInput;
+
 function calculation(
   profile: OwnedBusinessContext["profile"],
   asOfDate: Date,

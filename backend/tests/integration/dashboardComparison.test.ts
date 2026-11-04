@@ -30,6 +30,7 @@ async function addExpense(date: string, amount: number) {
       description: "Inventory purchase",
       amount,
       source: "MANUAL_ENTRY",
+      reviewStatus: "Reviewed",
     },
   });
 }

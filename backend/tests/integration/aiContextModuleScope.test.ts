@@ -175,6 +175,7 @@ describe("bounded category context", () => {
         description: `Sparse category expense ${index + 1}`,
         amount: index + 1,
         source: "MANUAL_ENTRY",
+        reviewStatus: "Reviewed",
       })),
     });
 
