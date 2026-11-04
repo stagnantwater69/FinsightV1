@@ -97,6 +97,23 @@ describe("computeRecoveryTarget — month boundaries", () => {
     expect(r.adjustedDailyTarget).toBe(115000);
   });
 
+  it("caps the approximated open days at the month's length", () => {
+    // operatingDays allows 31; February 2026 has 28 days, so the target is
+    // spread over 28 days, not 31 that don't exist.
+    const today = utc(2026, 2, 1);
+    const r = computeRecoveryTarget({ ...base, operatingDays: 31, salesThisMonth: 0, salesToday: 0, today });
+    expect(r.operatingDaysThisMonth).toBe(28);
+    expect(r.dailyNeededTarget).toBeCloseTo(125000 / 28, 6);
+    expect(r.remainingOperatingDays).toBe(28);
+    const checkpoints = deriveRecoveryCheckpoints({
+      today,
+      dailyNeededTarget: r.dailyNeededTarget,
+      operatingDays: 31,
+      salesByDay: new Map(),
+    });
+    expect(checkpoints[checkpoints.length - 1]?.cumulativeTarget).toBeCloseTo(125000, 6);
+  });
+
   it("handles February in a leap year", () => {
     const r = computeRecoveryTarget({ ...base, today: utc(2028, 2, 29) });
     expect(r.daysInMonth).toBe(29);
@@ -204,19 +221,19 @@ describe("daysInMonth", () => {
 // ============================================================
 
 describe("computeRecoveryTarget — expected pace to date and pace variance (§9.4)", () => {
-  it("reproduces the mockup worked example's -5,000 pace variance (behind)", () => {
-    // dailyNeededTarget 5,000, remainingOperatingDays 15 (see the mockup test
-    // above) => elapsedOperatingDays = 25 - 15 = 10 => expected-to-date 50,000.
-    // Recorded 45,000 => variance -5,000, well past the tolerance band.
+  it("reproduces the mockup worked example as behind, counting today as elapsed", () => {
+    // dailyNeededTarget 5,000; 13 of April's 30 days done, today included =>
+    // elapsedOperatingDays = round(25 * 13/30) = 11 => expected-to-date 55,000.
+    // Recorded 45,000 => variance -10,000, well past the tolerance band.
     const r = computeRecoveryTarget({ ...base, today: utc(2026, 4, 13) });
-    expect(r.expectedSalesToDate).toBe(50000);
-    expect(r.paceVarianceAmount).toBe(-5000);
+    expect(r.expectedSalesToDate).toBe(55000);
+    expect(r.paceVarianceAmount).toBe(-10000);
     expect(r.status).toBe("behind");
   });
 
-  it("on the 1st of the month, zero elapsed days means zero expected-to-date and on_pace", () => {
-    const r = computeRecoveryTarget({ ...base, salesThisMonth: 0, salesToday: 0, today: utc(2026, 7, 1) });
-    expect(r.expectedSalesToDate).toBe(0);
+  it("on the 1st of the month, today's target is already expected, as in exact mode", () => {
+    const r = computeRecoveryTarget({ ...base, salesThisMonth: 5000, salesToday: 5000, today: utc(2026, 7, 1) });
+    expect(r.expectedSalesToDate).toBe(5000);
     expect(r.paceVarianceAmount).toBe(0);
     expect(r.status).toBe("on_pace");
   });
@@ -224,8 +241,9 @@ describe("computeRecoveryTarget — expected pace to date and pace variance (§9
 
 describe("computeRecoveryTarget — status precedence (§9.7, Phase 1 subset)", () => {
   // Fixed calendar point for all cases below: 2026-07-15, so
-  // remainingOperatingDays = round(25 * 17/31) = 14, elapsedOperatingDays = 11,
-  // expectedSalesToDate = 5,000 x 11 = 55,000, tolerance = max(0.005, 250) = 250.
+  // remainingOperatingDays = round(25 * 17/31) = 14, elapsedOperatingDays =
+  // round(25 * 15/31) = 12, expectedSalesToDate = 5,000 x 12 = 60,000,
+  // tolerance = max(0.005, 250) = 250.
   const today = utc(2026, 7, 15);
 
   it("needs_setup takes precedence over everything else, even an ostensibly covered month", () => {
@@ -243,26 +261,26 @@ describe("computeRecoveryTarget — status precedence (§9.7, Phase 1 subset)", 
 
   it("ahead when pace variance clears the tolerance on the positive side", () => {
     const r = computeRecoveryTarget({ ...base, salesThisMonth: 80000, today });
-    expect(r.expectedSalesToDate).toBe(55000);
-    expect(r.paceVarianceAmount).toBe(25000);
+    expect(r.expectedSalesToDate).toBe(60000);
+    expect(r.paceVarianceAmount).toBe(20000);
     expect(r.status).toBe("ahead");
   });
 
   it("behind when pace variance clears the tolerance on the negative side", () => {
     const r = computeRecoveryTarget({ ...base, salesThisMonth: 30000, today });
-    expect(r.paceVarianceAmount).toBe(-25000);
+    expect(r.paceVarianceAmount).toBe(-30000);
     expect(r.status).toBe("behind");
   });
 
   it("on_pace when pace variance sits inside the tolerance band", () => {
-    const r = computeRecoveryTarget({ ...base, salesThisMonth: 55100, today }); // variance = +100, tolerance = 250
+    const r = computeRecoveryTarget({ ...base, salesThisMonth: 60100, today }); // variance = +100, tolerance = 250
     expect(r.paceVarianceAmount).toBe(100);
     expect(r.status).toBe("on_pace");
   });
 
   it("on_pace exactly at the tolerance boundary counts as within it, not ahead/behind", () => {
     const tolerance = recoveryPaceTolerance(5000);
-    const r = computeRecoveryTarget({ ...base, salesThisMonth: 55000 + tolerance, today });
+    const r = computeRecoveryTarget({ ...base, salesThisMonth: 60000 + tolerance, today });
     expect(r.status).toBe("on_pace");
   });
 });

@@ -96,7 +96,7 @@ services:
     stop_grace_period: 35s
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.30-alpine
     depends_on:
       backend:
         condition: service_healthy

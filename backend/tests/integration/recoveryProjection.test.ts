@@ -73,11 +73,11 @@ async function loadTargetsAnd(today: Date) {
 }
 
 describe("computeRecoveryProjection — reads confirmed-only sales (real seeded data)", () => {
-  it("computes the projection from 7 confirmed lookback days, excluding a provisional-only day", async () => {
-    // May 2026 (31 days), every day open (operatingDays = 30 default isn't
-    // used here since no schedule is configured => approximation mode).
-    // Confirmed sales on the 1st through the 7th (7 completed open days by
-    // the 8th), and a provisional-only sale on the 8th that must not count
+  it("computes the projection from the completed lookback days, excluding a provisional-only day", async () => {
+    // May 2026 (31 days), no schedule configured => approximation mode with
+    // the default 30 operating days: round(30 * 8/31) = 8 completed open days
+    // through the 8th. Confirmed sales on the 1st through the 7th, and a
+    // provisional-only sale on the 8th that must not count
     // as "recent" evidence toward staleness being false (it's still within
     // the 3-day staleness window on day 9) nor into the confirmed average.
     for (let d = 1; d <= 7; d++) await addConfirmedSale(2026, 5, d, 1000);
@@ -100,10 +100,10 @@ describe("computeRecoveryProjection — reads confirmed-only sales (real seeded 
     );
 
     expect(projection.status).toBe("available");
-    expect(projection.lookbackOperatingDays).toBe(PROJECTION_LOOKBACK_OPEN_DAYS);
-    // 7,000 confirmed / 7 days = 1,000/day average — the 999,999 provisional
-    // sale on day 8 must be completely absent from this rate.
-    const expectedRate = 1000;
+    expect(projection.lookbackOperatingDays).toBe(PROJECTION_LOOKBACK_OPEN_DAYS + 1);
+    // 7,000 confirmed / 8 days = 875/day — the provisional sale on day 8 must
+    // be completely absent from this rate.
+    const expectedRate = 7000 / 8;
     const expected = targets.confirmedSalesThisMonth + expectedRate * targets.remainingOperatingDays;
     expect(projection.projectedMonthEndSales).toBeCloseTo(expected, 6);
     expect(projection.projectedVarianceAmount).toBeCloseTo(expected - 150000, 6);

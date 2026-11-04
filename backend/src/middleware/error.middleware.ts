@@ -4,7 +4,7 @@ import { MulterError } from "multer";
 import { Prisma } from "@prisma/client";
 import { logger } from "../config/logger";
 import { reportError } from "../config/errorReporting";
-import { refundRateLimitsForError } from "./rateLimit.middleware";
+import { REFUND_NOT_FOUND, REFUND_VALIDATION_FAILED, refundRateLimitsForError } from "./rateLimit.middleware";
 
 /*
  * Codes for "the database was not reachable", as opposed to "the query was
@@ -130,7 +130,13 @@ export function notFoundHandler(req: Request, res: Response) {
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
   if (err instanceof ZodError) {
-    return res.status(400).json({ error: "Validation failed", details: err.flatten() });
+    const send = () => res.status(400).json({ error: "Validation failed", details: err.flatten() });
+    const refund = refundRateLimitsForError(res, REFUND_VALIDATION_FAILED);
+    if (refund) {
+      void refund.then(send);
+      return;
+    }
+    return send();
   }
 
   if (err instanceof ApiError) {
@@ -152,7 +158,8 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
       ...(err.code ? { code: err.code } : {}),
       ...(err.responseDetails ?? {}),
     });
-    const refund = err.code ? refundRateLimitsForError(res, err.code) : null;
+    const refundCode = err.code ?? (err.status === 404 ? REFUND_NOT_FOUND : undefined);
+    const refund = refundCode ? refundRateLimitsForError(res, refundCode) : null;
     if (refund) {
       void refund.then(send);
       return;

@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
+import { ArrowLeft, X } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
 import { apiPage } from "../lib/apiPage";
 import { getErrorMessage } from "../lib/errors";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
-import { Button } from "../components/Button";
+import { Button, ButtonLink } from "../components/Button";
 import { Field, FormError, SelectInput, TextInput } from "../components/Field";
-import { Callout, Card, FormPage, Panel } from "../components/ui";
+import { Callout, PageHead, Panel, Pill } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { SkeletonPanel } from "../components/Skeleton";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
@@ -62,7 +63,6 @@ function defaultOverrideRange(): { from: string; to: string } {
 export function OperatingSchedule() {
   const { id } = useParams<{ id: string }>();
   const { profiles } = useBusinessProfiles();
-  const navigate = useNavigate();
   const confirm = useConfirm();
   const toast = useToast();
 
@@ -248,17 +248,25 @@ export function OperatingSchedule() {
     }
   }
 
+  const openDays = entries.filter((e) => e.isOpen).length;
+
   return (
-    <FormPage
-      eyebrow="Management"
-      title={`Operating schedule — ${profile.name}`}
-      subtitle="Set which days this business is normally open, plus any one-off holidays or special openings. FinSight uses this to calculate exact operating days instead of an estimate."
-      wide
-    >
+    <div>
+      <PageHead
+        eyebrow={profile.name}
+        title="Operating schedule"
+        subtitle="Set which days this business is normally open, plus any one-off holidays or special openings. FinSight uses this to calculate exact operating days instead of an estimate."
+        actions={
+          <ButtonLink to={`/business-profiles/${profile.id}/edit`} variant="secondary" size="sm">
+            <ArrowLeft size={16} aria-hidden />
+            Business profile
+          </ButtonLink>
+        }
+      />
       {loading ? (
-        <div className="space-y-6">
-          <SkeletonPanel lines={4} />
+        <div className="space-y-4">
           <SkeletonPanel lines={3} />
+          <SkeletonPanel lines={6} />
         </div>
       ) : loadError ? (
         <Callout tone="warn">
@@ -270,17 +278,16 @@ export function OperatingSchedule() {
           </div>
         </Callout>
       ) : (
-        <div className="space-y-6">
+        // Stacked, each panel full width: side by side, the short weekly
+        // panel left a tall empty gap beside the long holidays panel.
+        <div className="space-y-4">
           <Panel
             title="Weekly schedule"
             eyebrow="Recurring"
           >
-            <p className="mb-4 text-sm text-ink-500">
-              Set which days of the week your business is normally open. FinSight uses this to calculate
-              exact operating days instead of an estimate.
-            </p>
             <form onSubmit={handleSaveSchedule} className="space-y-4">
-              <div className="flex flex-wrap gap-2">
+              <p className="text-sm text-ink-500">Select a day to switch it between open and closed.</p>
+              <div className="grid grid-cols-4 gap-2 sm:grid-cols-7 sm:gap-3">
                 {WEEKDAYS.map((w) => {
                   const entry = entries.find((e) => e.weekday === w.weekday);
                   const isOpen = entry?.isOpen ?? true;
@@ -290,14 +297,16 @@ export function OperatingSchedule() {
                       type="button"
                       aria-pressed={isOpen}
                       onClick={() => toggleDay(w.weekday)}
-                      className={`tap min-w-[4.5rem] rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${
+                      // flex-col over `.tap`'s inline-flex row: stacked, the
+                      // day and its state no longer run together as "MonOpen".
+                      className={`tap flex-col rounded-xl border px-2 py-2.5 text-sm font-semibold sm:py-3.5 transition motion-safe:active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 ${
                         isOpen
                           ? "border-edge-brand bg-tint-brand text-tone-brand"
-                          : "border-ink-200 bg-paper-100 text-ink-600"
+                          : "border-paper-200 bg-paper-100 text-ink-600 hover:text-ink-700"
                       }`}
                     >
-                      <span className="block">{w.short}</span>
-                      <span className="mt-0.5 block text-[11px] font-normal">
+                      <span>{w.short}</span>
+                      <span className="mt-0.5 text-[11px] font-normal">
                         {isOpen ? "Open" : "Closed"}
                       </span>
                     </button>
@@ -308,7 +317,10 @@ export function OperatingSchedule() {
               {scheduleError ? <FormError>{scheduleError}</FormError> : null}
               {scheduleSaved ? <Callout tone="brand">Operating schedule saved.</Callout> : null}
 
-              <div className="flex justify-end">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-paper-200 pt-4">
+                <p className="text-sm text-ink-500">
+                  <span className="font-semibold text-ink-900">{openDays}</span> open {openDays === 1 ? "day" : "days"} a week
+                </p>
                 <Button type="submit" variant="primary" disabled={savingSchedule}>
                   {savingSchedule ? "Saving…" : "Save weekly schedule"}
                 </Button>
@@ -321,102 +333,105 @@ export function OperatingSchedule() {
               Mark a specific date as closed (a holiday, an emergency) or open (a special opening on a day
               you'd normally be closed). A date override always takes precedence over the weekly schedule.
             </p>
-            <form className="mb-4 flex flex-wrap items-end gap-3" onSubmit={(event) => { event.preventDefault(); void loadOverridePage(null, range); }}>
-              <Field label="From" htmlFor="override-range-from"><TextInput id="override-range-from" type="date" required value={range.from} onChange={(event) => setRange((current) => ({ ...current, from: event.target.value }))} /></Field>
-              <Field label="To" htmlFor="override-range-to"><TextInput id="override-range-to" type="date" required value={range.to} onChange={(event) => setRange((current) => ({ ...current, to: event.target.value }))} /></Field>
-              <Button type="submit" variant="secondary" disabled={loadingOlder}>Show dates</Button>
-            </form>
-            <p className="mb-3 text-xs text-ink-500">Showing {formatCalendarDate(visibleRange.from)} through {formatCalendarDate(visibleRange.to)}.</p>
-            {historyError ? <div className="mb-3"><p role="alert" className="text-sm text-tone-danger">{historyError}</p><Button type="button" variant="secondary" onClick={() => {
-              const failed = failedOverrideRequestRef.current;
-              if (failed?.profileId === profileId) void loadOverridePage(failed.cursor, failed.range);
-              else void loadOverridePage(null, range);
-            }}>Retry dates</Button></div> : null}
 
-            <Card as="form" onSubmit={handleAddOverride} className="mb-4 p-4">
-              <div className="grid gap-3 sm:grid-cols-[auto_auto_1fr_auto] sm:items-end">
-                <Field label="Date" htmlFor="override-date">
-                  <TextInput
-                    id="override-date"
-                    type="date"
-                    value={overrideDate}
-                    onChange={(e) => setOverrideDate(e.target.value)}
-                    required
-                  />
-                </Field>
-                <Field label="Type" htmlFor="override-type">
-                  <SelectInput
-                    id="override-type"
-                    value={overrideType}
-                    onChange={(e) => setOverrideType(e.target.value as OperatingDayOverrideType)}
-                  >
-                    <option value="CLOSED">Closed</option>
-                    <option value="OPEN">Open</option>
-                  </SelectInput>
-                </Field>
-                <Field label="Reason" htmlFor="override-reason" optional>
-                  <TextInput
-                    id="override-reason"
-                    value={overrideReason}
-                    onChange={(e) => setOverrideReason(e.target.value)}
-                    maxLength={FIELD_LIMITS.operatingOverrideReason}
-                    placeholder="e.g. Typhoon, Fiesta"
-                  />
-                </Field>
-                <Button type="submit" variant="secondary" disabled={addingOverride}>
-                  {addingOverride ? "Adding…" : "Add"}
-                </Button>
-              </div>
-              {overrideError ? (
-                <div className="mt-3">
-                  <FormError>{overrideError}</FormError>
-                </div>
-              ) : null}
-            </Card>
-
-            {overrides.length === 0 && !historyError && !loadingOlder ? (
-              <EmptyState compact title="No date overrides in this range" icon="📅">
-                Choose other dates to see earlier holidays and special openings.
-              </EmptyState>
-            ) : (
-              <ul className="divide-y divide-paper-200">
-                {overrides.map((o) => (
-                  <li key={o.id} className="flex items-center justify-between gap-3 py-2.5">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-ink-900">
-                        {o.date}{" "}
-                        <span
-                          className={`ml-1 text-xs font-semibold ${
-                            o.type === "CLOSED" ? "text-tone-danger" : "text-tone-brand"
-                          }`}
-                        >
-                          {o.type === "CLOSED" ? "Closed" : "Open"}
-                        </span>
-                      </p>
-                      {o.reason ? <p className="mt-0.5 text-xs text-ink-500">{o.reason}</p> : null}
-                    </div>
-                    <button
-                      type="button"
-                      aria-label={`Remove override for ${o.date}`}
-                      onClick={() => handleDeleteOverride(o)}
-                      className="tap-inline shrink-0 rounded-lg px-2 py-1 text-ink-500 transition hover:bg-tint-danger hover:text-tone-danger"
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
+              {/* A tinted well rather than a nested Card: it groups the add
+                  form without drawing a second card inside this one. */}
+              <form onSubmit={handleAddOverride} className="rounded-xl border border-paper-200 bg-paper-50 p-4 sm:p-5">
+                <h3 className="mb-3 text-sm font-semibold text-ink-900">Add a date</h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Date" htmlFor="override-date">
+                    <TextInput
+                      id="override-date"
+                      type="date"
+                      value={overrideDate}
+                      onChange={(e) => setOverrideDate(e.target.value)}
+                      required
+                    />
+                  </Field>
+                  <Field label="Type" htmlFor="override-type">
+                    <SelectInput
+                      id="override-type"
+                      value={overrideType}
+                      onChange={(e) => setOverrideType(e.target.value as OperatingDayOverrideType)}
                     >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {overrideCursor ? <Button type="button" variant="secondary" className="mt-3" disabled={loadingOlder} onClick={() => void loadOverridePage(overrideCursor)}>{loadingOlder ? "Loading dates…" : "More dates"}</Button> : null}
-          </Panel>
+                      <option value="CLOSED">Closed</option>
+                      <option value="OPEN">Open</option>
+                    </SelectInput>
+                  </Field>
+                  <div className="sm:col-span-2">
+                    <Field label="Reason" htmlFor="override-reason" optional>
+                      <TextInput
+                        id="override-reason"
+                        value={overrideReason}
+                        onChange={(e) => setOverrideReason(e.target.value)}
+                        maxLength={FIELD_LIMITS.operatingOverrideReason}
+                        placeholder="e.g. Typhoon, Fiesta"
+                      />
+                    </Field>
+                  </div>
+                  <Button type="submit" variant="brand" disabled={addingOverride} className="sm:col-span-2">
+                    {addingOverride ? "Adding…" : "Add"}
+                  </Button>
+                </div>
+                {overrideError ? (
+                  <div className="mt-3">
+                    <FormError>{overrideError}</FormError>
+                  </div>
+                ) : null}
+              </form>
 
-          <div className="flex justify-end">
-            <Button type="button" variant="ghost" onClick={() => navigate(`/business-profiles/${profile.id}/edit`)}>
-              Back to business profile
-            </Button>
-          </div>
+              <div className="min-w-0">
+                <div className="mb-3">
+                  <h3 className="text-sm font-semibold text-ink-900">Saved dates</h3>
+                  <p className="mt-0.5 text-xs text-ink-500">Showing {formatCalendarDate(visibleRange.from)} through {formatCalendarDate(visibleRange.to)}.</p>
+                  <form className="mt-3 grid grid-cols-2 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]" onSubmit={(event) => { event.preventDefault(); void loadOverridePage(null, range); }}>
+                    <Field label="From" htmlFor="override-range-from"><TextInput id="override-range-from" type="date" required value={range.from} onChange={(event) => setRange((current) => ({ ...current, from: event.target.value }))} /></Field>
+                    <Field label="To" htmlFor="override-range-to"><TextInput id="override-range-to" type="date" required value={range.to} onChange={(event) => setRange((current) => ({ ...current, to: event.target.value }))} /></Field>
+                    <Button type="submit" variant="secondary" disabled={loadingOlder} className="col-span-2 sm:col-span-1">Show dates</Button>
+                  </form>
+                </div>
+                {historyError ? <div className="mb-3"><p role="alert" className="text-sm text-tone-danger">{historyError}</p><Button type="button" variant="secondary" onClick={() => {
+                  const failed = failedOverrideRequestRef.current;
+                  if (failed?.profileId === profileId) void loadOverridePage(failed.cursor, failed.range);
+                  else void loadOverridePage(null, range);
+                }}>Retry dates</Button></div> : null}
+
+                {overrides.length === 0 && !historyError && !loadingOlder ? (
+                  <EmptyState compact title="No date overrides in this range" icon="📅">
+                    Choose other dates to see earlier holidays and special openings.
+                  </EmptyState>
+                ) : (
+                  <ul className="divide-y divide-paper-200">
+                    {overrides.map((o) => (
+                      <li key={o.id} className="flex animate-fade-up items-center justify-between gap-3 py-3">
+                        <div className="min-w-0">
+                          <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-ink-900">
+                            <time dateTime={o.date}>{formatCalendarDate(o.date)}</time>
+                            <Pill tone={o.type === "CLOSED" ? "danger" : "ok"}>
+                              {o.type === "CLOSED" ? "Closed" : "Open"}
+                            </Pill>
+                          </p>
+                          {o.reason ? <p className="mt-1 text-xs text-ink-500">{o.reason}</p> : null}
+                        </div>
+                        <button
+                          type="button"
+                          aria-label={`Remove override for ${o.date}`}
+                          onClick={() => handleDeleteOverride(o)}
+                          className="tap shrink-0 rounded-lg text-ink-500 transition hover:bg-tint-danger hover:text-tone-danger"
+                        >
+                          <X size={18} aria-hidden />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {overrideCursor ? <Button type="button" variant="secondary" className="mt-3" disabled={loadingOlder} onClick={() => void loadOverridePage(overrideCursor)}>{loadingOlder ? "Loading dates…" : "More dates"}</Button> : null}
+              </div>
+            </div>
+          </Panel>
         </div>
       )}
-    </FormPage>
+    </div>
   );
 }

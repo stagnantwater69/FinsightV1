@@ -1013,7 +1013,7 @@ function RecoveryChangeSincePreviousDay({
  * deliberately, elsewhere.
  *
  * Visually distinct from the real target on purpose (plan §13.1/§13.2's own
- * requirement): the real figures above use the ordinary `StatTile`/`Panel`
+ * requirement): the real figures above use the ordinary `Panel`
  * surface, so the result here renders inside a dashed, differently-toned box
  * with its own "hypothetical, not saved" label repeated beside every figure
  * it produces — not just once at the top, where it would be easy to scroll

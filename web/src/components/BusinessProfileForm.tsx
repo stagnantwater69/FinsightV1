@@ -167,43 +167,53 @@ export function BusinessProfileForm({
     return (
       <>
         <form ref={formRef} onSubmit={handleSubmit} noValidate>
-          <Card className="overflow-hidden shadow-none">
-            <section className="p-5 sm:p-7">
-              <SettingsSectionHeading
-                title="Business identity"
-                description="The name, type, and logo for this business."
-              />
-              <div className={`mt-6 grid gap-6 ${logo ? "lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)] lg:gap-8" : ""}`}>
-                {logo ? <div className="min-w-0">{logo}</div> : null}
-                <div className="min-w-0 space-y-5">
-                  <BusinessBasicsFields
-                    key={resetVersion}
+          {/* Two cards, side by side once there is room for both: identity and
+              money are edited for different reasons, so they read as separate
+              groups. The logo sits beside the fields only while the identity
+              card spans the full width; in the half-width column it stacks. */}
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Card className="p-5 shadow-none sm:p-7">
+              <section aria-labelledby="business-identity-heading">
+                <SettingsSectionHeading
+                  id="business-identity-heading"
+                  title="Business identity"
+                  description="The name, type, and logo for this business."
+                />
+                <div className={`mt-6 grid gap-6 ${logo ? "lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)] lg:gap-8 xl:grid-cols-1 xl:gap-6" : ""}`}>
+                  {logo ? <div className="min-w-0">{logo}</div> : null}
+                  <div className="min-w-0 space-y-5">
+                    <BusinessBasicsFields
+                      key={resetVersion}
+                      draft={draft}
+                      errors={fieldErrors}
+                      update={update}
+                      autoFocus={false}
+                      settings
+                    />
+                  </div>
+                </div>
+              </section>
+            </Card>
+
+            <Card className="p-5 shadow-none sm:p-7">
+              <section aria-labelledby="starting-figures-heading">
+                <SettingsSectionHeading
+                  id="starting-figures-heading"
+                  title="Starting figures"
+                  description="Your balance and estimates. Calculated figures from confirmed records appear below."
+                />
+                <div className="mt-6 space-y-5">
+                  <BusinessNumbersFields
                     draft={draft}
                     errors={fieldErrors}
                     update={update}
-                    autoFocus={false}
+                    existingProfile={Boolean(initialValues)}
                     settings
                   />
                 </div>
-              </div>
-            </section>
-
-            <section className="border-t border-paper-200 p-5 sm:p-7">
-              <SettingsSectionHeading
-                title="Starting figures"
-                description="Your balance and estimates. Calculated figures from confirmed records appear below."
-              />
-              <div className="mt-6 space-y-5">
-                <BusinessNumbersFields
-                  draft={draft}
-                  errors={fieldErrors}
-                  update={update}
-                  existingProfile={Boolean(initialValues)}
-                  settings
-                />
-              </div>
-            </section>
-          </Card>
+              </section>
+            </Card>
+          </div>
 
           {error ? <div className="mt-4"><FormError>{error}</FormError></div> : null}
 
@@ -336,15 +346,17 @@ function sameDraft(a: BusinessProfileDraft, b: BusinessProfileDraft) {
 }
 
 function SettingsSectionHeading({
+  id,
   title,
   description,
 }: {
+  id: string;
   title: string;
   description: string;
 }) {
   return (
     <div className="min-w-0">
-      <h2 className="font-display text-lg font-semibold text-ink-900">
+      <h2 id={id} className="font-display text-lg font-semibold text-ink-900">
         {title}
       </h2>
       <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-ink-500">

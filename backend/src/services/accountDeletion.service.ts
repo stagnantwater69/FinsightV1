@@ -321,19 +321,66 @@ async function deleteRelationalDataInTransaction(tx: Prisma.TransactionClient, u
   await tx.user.delete({ where: { id: userId } });
 }
 
+async function lockClaimedDeletion(tx: Prisma.TransactionClient, job: ClaimedDeletion): Promise<void> {
+  const locked = await tx.$queryRaw<{ id: number }[]>(Prisma.sql`
+    SELECT "User_ID" AS id
+    FROM "User"
+    WHERE "User_ID" = ${job.id}
+      AND "User_Status" = ${AccountStatus.DELETION_PENDING}::"AccountStatus"
+      AND "User_DeletionStage" = ${job.stage}::"AccountDeletionStage"
+      AND "User_DeletionWorkerID" = ${DELETION_WORKER_ID}
+      AND "User_DeletionClaimVersion" = ${job.claimVersion}
+    FOR UPDATE
+  `);
+  if (locked.length !== 1) throw new AccountDeletionLeaseLostError(job.id);
+}
+
+export const BULK_DELETE_BATCH_SIZE = 5_000;
+
+/*
+ * Expenses and sales are the tables that grow without bound. Removed first in
+ * short lease-guarded batches, they leave the final cascade small however big
+ * the ledger was; one cascade over 200k rows took ~15 s, and Postgres stops
+ * any single statement at 30 s. Everything that references these rows either
+ * cascades or is set null, and the account's sign-in is already gone by this
+ * stage, so a partly emptied ledger is never visible to anyone.
+ */
+async function deleteBulkRecordsInBatches(job: ClaimedDeletion): Promise<void> {
+  const deleteBatch: Array<(tx: Prisma.TransactionClient) => Promise<number>> = [
+    async (tx) => {
+      const rows = await tx.expenseRecord.findMany({
+        where: { businessProfile: { userId: job.id } },
+        select: { id: true },
+        take: BULK_DELETE_BATCH_SIZE,
+      });
+      if (rows.length === 0) return 0;
+      return (await tx.expenseRecord.deleteMany({ where: { id: { in: rows.map((row) => row.id) } } })).count;
+    },
+    async (tx) => {
+      const rows = await tx.salesReferenceRecord.findMany({
+        where: { businessProfile: { userId: job.id } },
+        select: { id: true },
+        take: BULK_DELETE_BATCH_SIZE,
+      });
+      if (rows.length === 0) return 0;
+      return (await tx.salesReferenceRecord.deleteMany({ where: { id: { in: rows.map((row) => row.id) } } })).count;
+    },
+  ];
+  for (const remove of deleteBatch) {
+    let deleted: number;
+    do {
+      deleted = await prisma.$transaction(async (tx) => {
+        await lockClaimedDeletion(tx, job);
+        return remove(tx);
+      }, { timeout: 30_000, maxWait: 10_000 });
+    } while (deleted === BULK_DELETE_BATCH_SIZE);
+  }
+}
+
 async function deleteClaimedRelationalData(job: ClaimedDeletion): Promise<boolean> {
+  await deleteBulkRecordsInBatches(job);
   return prisma.$transaction(async (tx) => {
-    const locked = await tx.$queryRaw<{ id: number }[]>(Prisma.sql`
-      SELECT "User_ID" AS id
-      FROM "User"
-      WHERE "User_ID" = ${job.id}
-        AND "User_Status" = ${AccountStatus.DELETION_PENDING}::"AccountStatus"
-        AND "User_DeletionStage" = ${job.stage}::"AccountDeletionStage"
-        AND "User_DeletionWorkerID" = ${DELETION_WORKER_ID}
-        AND "User_DeletionClaimVersion" = ${job.claimVersion}
-      FOR UPDATE
-    `);
-    if (locked.length !== 1) throw new AccountDeletionLeaseLostError(job.id);
+    await lockClaimedDeletion(tx, job);
     const profiles = await tx.businessProfile.findMany({ where: { userId: job.id }, select: { id: true } });
     const profileIds = profiles.map((profile) => profile.id);
     const pendingCsvPurges = profileIds.length === 0
@@ -361,7 +408,9 @@ async function deleteClaimedRelationalData(job: ClaimedDeletion): Promise<boolea
     }
     await deleteRelationalDataInTransaction(tx, job.id);
     return true;
-  });
+    // Room for the cascade over everything the batches leave behind; still
+    // well inside the 2-minute deletion lease.
+  }, { timeout: 60_000, maxWait: 10_000 });
 }
 
 async function claimDeletion(): Promise<ClaimedDeletion | null> {

@@ -10,7 +10,8 @@
 # there is no http or events wrapper here.
 #
 # The upload limits and timeouts mirror nginx/nginx.conf; see the comments
-# there for how they are derived. CI checks that the two agree.
+# there for how they are derived. CI checks that the upload limits agree;
+# keep the timeouts in step by hand.
 # ---------------------------------------------------------------------------
 
 client_max_body_size 81m;

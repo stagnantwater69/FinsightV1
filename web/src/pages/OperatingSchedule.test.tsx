@@ -251,9 +251,10 @@ describe("OperatingSchedule — date overrides", () => {
     ];
     renderPage();
 
-    const dates = await screen.findAllByText(/2026-08-(01|25)/);
-    expect(dates[0]).toHaveTextContent("2026-08-01");
-    expect(dates[1]).toHaveTextContent("2026-08-25");
+    // Displayed formatted; the ISO date stays on each row's <time dateTime>.
+    await screen.findByText("Fiesta");
+    const dates = [...document.querySelectorAll("li time")].map((t) => t.getAttribute("dateTime"));
+    expect(dates).toEqual(["2026-08-01", "2026-08-25"]);
     expect(screen.getByText("Fiesta")).toBeInTheDocument();
   });
 

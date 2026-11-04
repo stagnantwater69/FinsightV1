@@ -4,6 +4,7 @@ import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { ApiError } from "../middleware/error.middleware";
 import { resolveBusinessToday, utcDateKey, utcToday } from "../lib/dates";
 import { resolveReportingWindow, windowDateFilter, type PeriodSelection } from "../lib/reportingPeriod";
+import { COUNTED_EXPENSE } from "./financialPosition.service";
 import {
   getExpenseBehaviorForOwnedBusiness,
   type ExpenseBehaviorResult,
@@ -830,11 +831,11 @@ export async function simulateReductionOpportunity(userId: number, input: Reduct
 
   const [categoryAgg, totalAgg] = await Promise.all([
     prisma.expenseRecord.aggregate({
-      where: { businessProfileId: input.businessProfileId, categoryId: input.categoryId, ...(dates ? { date: dates } : {}) },
+      where: { businessProfileId: input.businessProfileId, categoryId: input.categoryId, ...COUNTED_EXPENSE, ...(dates ? { date: dates } : {}) },
       _sum: { amount: true },
     }),
     prisma.expenseRecord.aggregate({
-      where: { businessProfileId: input.businessProfileId, ...(dates ? { date: dates } : {}) },
+      where: { businessProfileId: input.businessProfileId, ...COUNTED_EXPENSE, ...(dates ? { date: dates } : {}) },
       _sum: { amount: true },
     }),
   ]);

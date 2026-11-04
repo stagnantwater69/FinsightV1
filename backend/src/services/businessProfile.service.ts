@@ -298,7 +298,12 @@ export async function updateBusinessLogo(
   if (result.previousUrl && previousPath && previousPath !== currentPath) {
     await deletePublicImageUrl(result.previousUrl);
   }
-  await deleteSupersededPublicImages(`businesses/${id}`);
+  // Keep whatever a later upload has since committed, too.
+  const latest = await prisma.businessProfile.findUnique({ where: { id }, select: { logoUrl: true } });
+  await deleteSupersededPublicImages(`businesses/${id}`, [
+    currentPath,
+    latest?.logoUrl ? publicImagePathFromUrl(latest.logoUrl) : null,
+  ]);
   const { profile } = result;
   return toDTO(profile);
 }

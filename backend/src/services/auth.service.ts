@@ -1025,7 +1025,12 @@ export async function updateAvatar(userId: number, buffer: Buffer, mimetype: str
   if (result.previousUrl && previousPath && previousPath !== currentPath) {
     await deletePublicImageUrl(result.previousUrl);
   }
-  await deleteSupersededPublicImages(`users/${userId}`);
+  // Keep whatever a later upload has since committed, too.
+  const latest = await prisma.user.findUnique({ where: { id: userId }, select: { avatarUrl: true } });
+  await deleteSupersededPublicImages(`users/${userId}`, [
+    currentPath,
+    latest?.avatarUrl ? publicImagePathFromUrl(latest.avatarUrl) : null,
+  ]);
   const { user } = result;
   return toProfile(user);
 }

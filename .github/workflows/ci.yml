@@ -360,7 +360,7 @@ jobs:
       - run: |
           docker run --rm --add-host backend:127.0.0.1 \
             -v "$(pwd)/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
-            nginx:1.27-alpine nginx -t
+            nginx:1.30-alpine nginx -t
       - run: bash nginx/verify-upload-envelope.sh
       # The single-VM production overrides parse, and the TLS edge template
       # renders and passes `nginx -t` with a throwaway certificate.
@@ -732,13 +732,11 @@ jobs:
       # Critical production advisories are always a release blocker, even
       # while the lower-severity Expo migration below remains scheduled work.
       - run: npm audit --omit=dev --audit-level=critical --prefix mobile
-      # High/moderate findings remain report-only. As of 2026-09-27, `npm
-      # audit --omit=dev --prefix mobile` finds 18 findings (3 high,
-      # 15 moderate). The high findings are in Expo/Metro build tooling
-      # (`@xmldom/xmldom`, `image-size`, and `js-yaml`); the moderate set also
-      # includes React Navigation's `query-string` chain, so it must not be
-      # described as tooling-only. npm's proposed fixes cross major versions
-      # or downgrade Expo, which this pipeline must not do unilaterally.
+      # High/moderate findings remain report-only. As of 2026-11-04, `npm
+      # audit --omit=dev --prefix mobile` finds 8 moderate and no high, all in
+      # Expo's own tooling chain (`glob`/`minimatch` under `@expo/*`). npm's
+      # proposed fixes cross major versions or downgrade Expo, which this
+      # pipeline must not do unilaterally.
       # continue-on-error keeps the debt visible without applying an unsafe
       # automated migration.
       - run: npm audit --omit=dev --audit-level=high --prefix mobile

@@ -68,6 +68,7 @@ import {
 import { evaluateRecoveryNotifications } from "./recoveryNotification.service";
 import {
   calculateAvailableFundsForOwnedBusiness,
+  COUNTED_EXPENSE,
   resolveMonthlyExpenseBasisForOwnedBusiness,
   type MonthlyExpenseBasis,
 } from "./financialPosition.service";
@@ -863,9 +864,9 @@ export async function getExpenseBehaviorForOwnedBusiness(
   const periodDays = window.days ?? 0;
 
   const dateFilter = windowDateFilter(window, businessToday);
-  const currentWindow = { businessProfileId, ...(dateFilter ? { date: dateFilter } : {}) };
+  const currentWindow = { businessProfileId, ...COUNTED_EXPENSE, ...(dateFilter ? { date: dateFilter } : {}) };
   const previousWindow = window.previous
-    ? { businessProfileId, date: windowDateFilter(window.previous, businessToday) }
+    ? { businessProfileId, ...COUNTED_EXPENSE, date: windowDateFilter(window.previous, businessToday) }
     : null;
   const maximumAnalysisCategories = options.maximumAnalysisCategories === undefined
     ? null
@@ -1790,8 +1791,10 @@ export async function simulateSpendingImpact(
   const periodStart = window.start;
 
   const [expenseAgg, availableFundsCalculation] = await Promise.all([
+    // Same records Available Funds deducts: no pending review, flagged
+    // duplicate, unfinished import or unconfirmed receipt.
     prisma.expenseRecord.aggregate({
-      where: { businessProfileId, ...(dates ? { date: dates } : {}) },
+      where: { businessProfileId, ...COUNTED_EXPENSE, ...(dates ? { date: dates } : {}) },
       _sum: { amount: true },
     }),
     calculateAvailableFundsForOwnedBusiness(context, today),

@@ -70,6 +70,7 @@ async function legacyExpense(date: string, amount: number, description = "Stock"
       description,
       amount,
       source: "MANUAL_ENTRY",
+      reviewStatus: "Reviewed",
     },
   });
 }

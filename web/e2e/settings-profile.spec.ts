@@ -68,9 +68,10 @@ test("business profile exposes dirty, cancel, and saved states", async ({
   await page.setViewportSize({ width: 1440, height: 900 });
   await useTheme(page, "light");
 
+  // Visually hidden from lg up (the breadcrumb names the page); still the h1.
   await expect(
     page.getByRole("heading", { name: "Business profile", exact: true }),
-  ).toBeVisible();
+  ).toBeAttached();
   await expect(
     page.getByRole("heading", { name: "Business identity" }),
   ).toBeVisible();
@@ -172,7 +173,7 @@ test("business and personal profile layouts reflow in light and dark themes", as
             name: surface.heading,
             exact: true,
           }),
-        ).toBeVisible();
+        ).toBeAttached();
         await surface.assertActions();
         await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
         await expectNoHorizontalOverflow(page);

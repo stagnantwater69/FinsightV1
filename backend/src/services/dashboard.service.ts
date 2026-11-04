@@ -11,7 +11,7 @@ import {
   type PeriodSelection,
 } from "../lib/reportingPeriod";
 import { requireOwnedBusinessContext } from "./ownedBusinessContext.service";
-import { calculateAvailableFundsForOwnedBusiness } from "./financialPosition.service";
+import { calculateAvailableFundsForOwnedBusiness, COUNTED_EXPENSE } from "./financialPosition.service";
 
 /**
  * The period selector's "All time" setting.
@@ -135,7 +135,7 @@ export async function getDashboardSummary(
      */
     prisma.expenseRecord.groupBy({
       by: ["categoryId"],
-      where: { businessProfileId, ...(dateFilter ? { date: dateFilter } : {}) },
+      where: { businessProfileId, ...COUNTED_EXPENSE, ...(dateFilter ? { date: dateFilter } : {}) },
       _sum: { amount: true },
     }),
     prisma.salesReferenceRecord.aggregate({
@@ -182,7 +182,7 @@ export async function getDashboardSummary(
     calculateAvailableFundsForOwnedBusiness(context, today),
     previousWhere
       ? Promise.all([
-          prisma.expenseRecord.aggregate({ where: previousWhere, _sum: { amount: true } }),
+          prisma.expenseRecord.aggregate({ where: { ...previousWhere, ...COUNTED_EXPENSE }, _sum: { amount: true } }),
           prisma.salesReferenceRecord.aggregate({ where: previousWhere, _sum: { amount: true } }),
         ])
       : null,

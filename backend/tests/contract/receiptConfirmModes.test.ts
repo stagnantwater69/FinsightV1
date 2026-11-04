@@ -200,3 +200,20 @@ describe("unknown members", () => {
       .toHaveProperty("duplicateDecision");
   });
 });
+
+// Manual create and item edit both trim; confirm must not store a blank
+// description or line name that only looks filled in.
+describe("receipt confirm text fields", () => {
+  it("refuses a whitespace-only description, split description, or added line name", () => {
+    expect(issues({ ...shared, description: "   ", splits }).fieldErrors).toHaveProperty("description");
+    expect(confirmSchema.safeParse({ ...shared, splits: [{ ...splits[0], description: "  " }] }).success).toBe(false);
+    expect(
+      confirmSchema.safeParse({ ...shared, itemAssignments, additionalItems: [{ ...additionalItems[0], name: " " }] }).success,
+    ).toBe(false);
+  });
+
+  it("stores the trimmed description", () => {
+    const result = confirmSchema.safeParse({ ...shared, description: "  Grocery run  ", splits });
+    expect(result.success && result.data.description).toBe("Grocery run");
+  });
+});

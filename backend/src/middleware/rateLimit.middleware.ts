@@ -658,6 +658,10 @@ export const OWNER_DAILY_CAPS: readonly RateLimitOptions[] = Object.values(LIMIT
  * owner's own cap already refused never spends the shared budget, and the one
  * row every owner shares is locked last and for the shortest time.
  */
+/** Refund codes errorHandler uses for refusals that carry no code of their own. */
+export const REFUND_VALIDATION_FAILED = "VALIDATION_FAILED";
+export const REFUND_NOT_FOUND = "NOT_FOUND";
+
 const sharedBudget = (name: string, limit: number, message: (retryAfter: string) => string): RateLimitOptions => ({
   name,
   limit,
@@ -665,6 +669,10 @@ const sharedBudget = (name: string, limit: number, message: (retryAfter: string)
   identify: () => "all",
   refusal: { code: "DAILY_CAPACITY_REACHED", message },
   alertWhenExhausted: true,
+  // Input validation and ownership 404s happen before any provider call, so
+  // one owner's bad requests cannot drain everyone's budget. The per-owner
+  // limiters above still count them.
+  refundOnErrorCodes: [REFUND_VALIDATION_FAILED, REFUND_NOT_FOUND],
 });
 
 export const SHARED_BUDGETS = {

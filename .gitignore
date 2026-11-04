@@ -4,6 +4,10 @@ build/
 .env
 .env.local
 .env.production
+# Scratch copies (.env.citest, .env.bak, ...) hold live credentials too.
+.env.*
+!.env.example
+!.env.test
 .mcp.json
 *.log
 .DS_Store

@@ -71,7 +71,7 @@ beforeEach(async () => {
       date: new Date(`${date}T00:00:00.000Z`),
       description: `Overview fixture ${index + 1}`,
       amount: amount as number,
-      source: "MANUAL_ENTRY" as const,
+      source: "MANUAL_ENTRY" as const, reviewStatus: "Reviewed",
     })),
   });
 
