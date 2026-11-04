@@ -80,7 +80,7 @@ vi.mock("../../src/services/storage.service", async (importOriginal) => {
 
 import { prisma } from "../../src/config/prisma";
 import { transition } from "../../src/services/accountLifecycle.service";
-import { runAccountDeletionWorkerOnce } from "../../src/services/accountDeletion.service";
+import { BULK_DELETE_BATCH_SIZE, runAccountDeletionWorkerOnce } from "../../src/services/accountDeletion.service";
 import { updateAvatar } from "../../src/services/auth.service";
 import {
   PUBLIC_IMAGE_UPLOAD_SETTLE_MS,
@@ -529,12 +529,55 @@ describe("account deletion worker leases", () => {
     try {
       expect(await runAccountDeletionWorkerOnce()).toBe(true);
       expect(await prisma.user.findUnique({ where: { id: owner.user.id } })).toBeNull();
+      // The last interactive transaction is the cascade; the batches run before it.
       const interactive = transaction.mock.calls.filter(([work]) => typeof work === "function");
-      expect(interactive).toHaveLength(1);
-      const options = interactive[0]?.[1] as { timeout?: number } | undefined;
+      const options = interactive.at(-1)?.[1] as { timeout?: number } | undefined;
       expect(options?.timeout ?? 5_000).toBeGreaterThanOrEqual(60_000);
     } finally {
       transaction.mockRestore();
     }
   });
+
+  it("removes a ledger larger than one batch in separate transactions before the cascade", async () => {
+    const owner = await makeOwnerWithProfile({}, ["Inventory"]);
+    const day = new Date(Date.UTC(2026, 9, 1));
+    const count = BULK_DELETE_BATCH_SIZE * 2 + 7;
+    await prisma.expenseRecord.createMany({
+      data: Array.from({ length: count }, (_, index) => ({
+        businessProfileId: owner.profile.id,
+        categoryId: owner.categories.Inventory!,
+        date: day,
+        description: `row ${index}`,
+        amount: 1,
+        source: "MANUAL_ENTRY" as const,
+      })),
+    });
+    await prisma.salesReferenceRecord.createMany({
+      data: Array.from({ length: 3 }, (_, index) => ({
+        businessProfileId: owner.profile.id, date: day, description: `sale ${index}`, amount: 1, source: "MANUAL_ENTRY" as const,
+      })),
+    });
+    const other = await makeOwnerWithProfile({ name: "Other" }, ["Inventory"]);
+    await prisma.expenseRecord.create({
+      data: {
+        businessProfileId: other.profile.id, categoryId: other.categories.Inventory!, date: day,
+        description: "keep", amount: 1, source: "MANUAL_ENTRY",
+      },
+    });
+    await markDeletionPending(owner.user.id);
+    await runAccountDeletionWorkerOnce();
+    await runAccountDeletionWorkerOnce();
+
+    const transaction = vi.spyOn(prisma, "$transaction");
+    try {
+      expect(await runAccountDeletionWorkerOnce()).toBe(true);
+      expect(await prisma.user.findUnique({ where: { id: owner.user.id } })).toBeNull();
+      // 3 expense batches, 1 sales batch, then the cascade.
+      expect(transaction.mock.calls.filter(([work]) => typeof work === "function")).toHaveLength(5);
+    } finally {
+      transaction.mockRestore();
+    }
+    expect(await prisma.expenseRecord.count({ where: { businessProfile: { userId: owner.user.id } } })).toBe(0);
+    expect(await prisma.expenseRecord.count({ where: { businessProfileId: other.profile.id } })).toBe(1);
+  }, 60_000);
 });
