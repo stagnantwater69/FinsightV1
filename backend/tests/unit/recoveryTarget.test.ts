@@ -97,6 +97,23 @@ describe("computeRecoveryTarget — month boundaries", () => {
     expect(r.adjustedDailyTarget).toBe(115000);
   });
 
+  it("caps the approximated open days at the month's length", () => {
+    // operatingDays allows 31; February 2026 has 28 days, so the target is
+    // spread over 28 days, not 31 that don't exist.
+    const today = utc(2026, 2, 1);
+    const r = computeRecoveryTarget({ ...base, operatingDays: 31, salesThisMonth: 0, salesToday: 0, today });
+    expect(r.operatingDaysThisMonth).toBe(28);
+    expect(r.dailyNeededTarget).toBeCloseTo(125000 / 28, 6);
+    expect(r.remainingOperatingDays).toBe(28);
+    const checkpoints = deriveRecoveryCheckpoints({
+      today,
+      dailyNeededTarget: r.dailyNeededTarget,
+      operatingDays: 31,
+      salesByDay: new Map(),
+    });
+    expect(checkpoints[checkpoints.length - 1]?.cumulativeTarget).toBeCloseTo(125000, 6);
+  });
+
   it("handles February in a leap year", () => {
     const r = computeRecoveryTarget({ ...base, today: utc(2028, 2, 29) });
     expect(r.daysInMonth).toBe(29);

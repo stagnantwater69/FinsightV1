@@ -291,7 +291,10 @@ export function computeRecoveryTarget(input: RecoveryTargetInput): RecoveryTarge
   if (needsSetup) setupIssues.push("expected_expenses_missing");
   if (!operatingScheduleConfigured) setupIssues.push("operating_schedule_missing");
 
-  const operatingDaysThisMonth = exactOperatingCalendar ? exactOperatingCalendar.operatingDaysThisMonth : operatingDays;
+  const totalDays = utcDaysInMonth(today);
+  const operatingDaysThisMonth = exactOperatingCalendar
+    ? exactOperatingCalendar.operatingDaysThisMonth
+    : approximateOperatingDaysInMonth(operatingDays, today);
   const dailyNeededTarget = operatingDaysThisMonth > 0 ? expectedMonthlyExpenses / operatingDaysThisMonth : 0;
 
   // Floored at 0: once the month's expenses are covered there is no
@@ -299,7 +302,6 @@ export function computeRecoveryTarget(input: RecoveryTargetInput): RecoveryTarge
   // produce a nonsense negative adjusted daily target.
   const remainingTarget = Math.max(0, expectedMonthlyExpenses - salesThisMonth);
 
-  const totalDays = utcDaysInMonth(today);
   const calendarDaysLeftInMonth = totalDays - utcDayOfMonth(today) + 1;
 
   let remainingOperatingDays: number;
@@ -319,13 +321,13 @@ export function computeRecoveryTarget(input: RecoveryTargetInput): RecoveryTarge
     // sales can still be recorded against it.
     // Clamped to >= 1 so the last day of the month can't divide by zero (or
     // by a rounded-down 0 for a business with few operating days).
-    remainingOperatingDays = Math.max(1, Math.round(operatingDays * (calendarDaysLeftInMonth / totalDays)));
+    remainingOperatingDays = Math.max(1, Math.round(operatingDaysThisMonth * (calendarDaysLeftInMonth / totalDays)));
     // elapsedOperatingDays uses the SAME proportional approximation as
     // remainingOperatingDays above — there is no exact operating calendar
     // for this profile, so "days elapsed" is derived from it rather than
     // independently estimated, which would risk the two not summing to
-    // `operatingDays`.
-    elapsedOperatingDays = Math.max(0, operatingDays - remainingOperatingDays);
+    // `operatingDaysThisMonth`.
+    elapsedOperatingDays = Math.max(0, operatingDaysThisMonth - remainingOperatingDays);
   }
 
   // §9.5: in exact mode, zero true remaining open days with a positive
@@ -647,7 +649,7 @@ export function deriveRecoveryCheckpoints(input: DeriveRecoveryCheckpointsInput)
 
     const elapsedOpenDays = exactCalendar
       ? deriveOperatingCounts(exactCalendar, endDateKey).elapsedOperatingDays
-      : Math.round(operatingDays * (dayOfMonth / totalDaysInMonth));
+      : Math.round(approximateOperatingDaysInMonth(operatingDays, today) * (dayOfMonth / totalDaysInMonth));
     const cumulativeTarget = dailyNeededTarget * elapsedOpenDays;
 
     if (endDateKey > todayKey) {
@@ -867,8 +869,17 @@ export function deriveRecoveryProjection(input: DeriveRecoveryProjectionInput): 
 export function approximateElapsedOperatingDaysAsOf(operatingDays: number, asOf: Date): number {
   const totalDays = utcDaysInMonth(asOf);
   const calendarDaysLeft = totalDays - utcDayOfMonth(asOf) + 1;
-  const remaining = Math.max(1, Math.round(operatingDays * (calendarDaysLeft / totalDays)));
-  return Math.max(0, operatingDays - remaining);
+  const monthDays = approximateOperatingDaysInMonth(operatingDays, asOf);
+  const remaining = Math.max(1, Math.round(monthDays * (calendarDaysLeft / totalDays)));
+  return Math.max(0, monthDays - remaining);
+}
+
+/**
+ * The profile's monthly open-day count, capped at the month's length: the
+ * field allows 31, and February cannot hold 31 open days.
+ */
+function approximateOperatingDaysInMonth(operatingDays: number, today: Date): number {
+  return Math.min(operatingDays, utcDaysInMonth(today));
 }
 
 // ============================================================
