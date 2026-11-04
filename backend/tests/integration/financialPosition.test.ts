@@ -374,6 +374,18 @@ describe("recorded available funds", () => {
     });
   });
 
+  it("counts only confirmed, final expenses in Spending Impact's period total", async () => {
+    await expense({ amount: 200 });
+    await expense({ amount: 300, reviewStatus: "Needs Review" });
+    await expense({ amount: 400, duplicateStatus: "Flagged" });
+    await expense({ amount: 500, source: "CSV_UPLOAD", importBatchId: (await csvBatch("PROCESSING")).id });
+
+    const impact = await insights.simulateSpendingImpact(ctx.user.id, ctx.profile.id, 50, 30);
+
+    expect(impact.periodExpenses).toEqual({ before: 200, after: 250 });
+    expect(impact.availableFundsCalculation.confirmedExpensesDeducted).toBe(200);
+  });
+
   it("keeps Spending Impact thresholds nonnegative when recorded funds are below zero", async () => {
     await expense({ amount: 10_500 });
 

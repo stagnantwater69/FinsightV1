@@ -68,6 +68,8 @@ import {
 import { evaluateRecoveryNotifications } from "./recoveryNotification.service";
 import {
   calculateAvailableFundsForOwnedBusiness,
+  COUNTED,
+  FINAL_EXPENSE_SOURCE,
   resolveMonthlyExpenseBasisForOwnedBusiness,
   type MonthlyExpenseBasis,
 } from "./financialPosition.service";
@@ -1790,8 +1792,10 @@ export async function simulateSpendingImpact(
   const periodStart = window.start;
 
   const [expenseAgg, availableFundsCalculation] = await Promise.all([
+    // Same records Available Funds deducts: no pending review, flagged
+    // duplicate, unfinished import or unconfirmed receipt.
     prisma.expenseRecord.aggregate({
-      where: { businessProfileId, ...(dates ? { date: dates } : {}) },
+      where: { businessProfileId, ...COUNTED, ...FINAL_EXPENSE_SOURCE, ...(dates ? { date: dates } : {}) },
       _sum: { amount: true },
     }),
     calculateAvailableFundsForOwnedBusiness(context, today),

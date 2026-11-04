@@ -47,6 +47,7 @@ async function expense(owner: typeof ctx, date: string, amount: number, category
       description: `Expense ${date}`,
       amount,
       source: "MANUAL_ENTRY",
+      reviewStatus: "Reviewed",
     },
   });
 }

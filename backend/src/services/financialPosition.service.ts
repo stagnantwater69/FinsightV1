@@ -8,7 +8,7 @@ import {
 
 type FinancialDb = Prisma.TransactionClient | typeof prisma;
 
-const FINAL_EXPENSE_SOURCE = {
+export const FINAL_EXPENSE_SOURCE = {
   OR: [
     { source: "MANUAL_ENTRY" },
     {
@@ -86,7 +86,7 @@ function baselineDayDelta(profile: OwnedBusinessContext["profile"]) {
   };
 }
 
-const COUNTED = {
+export const COUNTED = {
   reviewStatus: "Reviewed",
   duplicateStatus: "Not a Duplicate",
   duplicateOfRecordId: null,
