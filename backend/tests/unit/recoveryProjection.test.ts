@@ -153,10 +153,11 @@ describe("deriveRecoveryProjection — confidence tiers", () => {
 });
 
 describe("approximateElapsedOperatingDaysAsOf", () => {
-  it("matches computeRecoveryTarget's approximation shape on the 1st of the month (zero elapsed)", () => {
-    // A 30-day month, evaluated as of day 1: calendarDaysLeft = 30, so
-    // remaining = round(operatingDays * 30/30) = operatingDays, elapsed = 0.
-    expect(approximateElapsedOperatingDaysAsOf(25, utc(2026, 4, 1))).toBe(0);
+  it("counts the asOf day itself as elapsed", () => {
+    // As of April 1 (yesterday, for a projection run on the 2nd), one day of
+    // the 30 is done: round(25 * 1/30) = 1 completed open day.
+    expect(approximateElapsedOperatingDaysAsOf(25, utc(2026, 4, 1))).toBe(1);
+    expect(approximateElapsedOperatingDaysAsOf(25, utc(2026, 4, 30))).toBe(25);
   });
 
   it("grows across the month, never exceeding operatingDays", () => {

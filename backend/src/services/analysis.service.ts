@@ -322,12 +322,9 @@ export function computeRecoveryTarget(input: RecoveryTargetInput): RecoveryTarge
     // Clamped to >= 1 so the last day of the month can't divide by zero (or
     // by a rounded-down 0 for a business with few operating days).
     remainingOperatingDays = Math.max(1, Math.round(operatingDaysThisMonth * (calendarDaysLeftInMonth / totalDays)));
-    // elapsedOperatingDays uses the SAME proportional approximation as
-    // remainingOperatingDays above — there is no exact operating calendar
-    // for this profile, so "days elapsed" is derived from it rather than
-    // independently estimated, which would risk the two not summing to
-    // `operatingDaysThisMonth`.
-    elapsedOperatingDays = Math.max(0, operatingDaysThisMonth - remainingOperatingDays);
+    // Elapsed scales by the fraction of the month done, today included, so
+    // today's target counts toward expected-to-date as in exact mode.
+    elapsedOperatingDays = approximateElapsedOperatingDaysAsOf(operatingDays, today);
   }
 
   // §9.5: in exact mode, zero true remaining open days with a positive
@@ -649,7 +646,7 @@ export function deriveRecoveryCheckpoints(input: DeriveRecoveryCheckpointsInput)
 
     const elapsedOpenDays = exactCalendar
       ? deriveOperatingCounts(exactCalendar, endDateKey).elapsedOperatingDays
-      : Math.round(approximateOperatingDaysInMonth(operatingDays, today) * (dayOfMonth / totalDaysInMonth));
+      : approximateElapsedOperatingDaysAsOf(operatingDays, endDate);
     const cumulativeTarget = dailyNeededTarget * elapsedOpenDays;
 
     if (endDateKey > todayKey) {
@@ -850,16 +847,10 @@ export function deriveRecoveryProjection(input: DeriveRecoveryProjectionInput): 
 }
 
 /**
- * Open days from the 1st of the month through `asOf`, inclusive, under the
- * SAME proportional
- * approximation `computeRecoveryTarget` already uses for `elapsedOperatingDays`
- * when no exact `BusinessOperatingDay` schedule is configured (see that
- * function's approximation branch above). Duplicated here rather than
- * exported/shared from there, deliberately: this is a small, stable,
- * already-tested formula, and importing it as a shared helper would mean the
- * one behavioral change to computeRecoveryTarget's approximation also has to
- * reason about this brand-new caller. If that formula's shape ever changes,
- * this one must change identically — see the cross-reference above.
+ * Open days from the 1st of the month through `asOf`, inclusive, when no
+ * exact `BusinessOperatingDay` schedule is configured: the month's open-day
+ * count scaled by the fraction of the month done. `computeRecoveryTarget`'s
+ * elapsed count and the recovery checkpoints use it too, so they agree.
  *
  * `computeRecoveryProjection` calls this with `asOf = yesterday` (business-
  * local), which is what makes it "elapsed as of yesterday" rather than
@@ -867,11 +858,7 @@ export function deriveRecoveryProjection(input: DeriveRecoveryProjectionInput): 
  * requires for the projection's lookback window.
  */
 export function approximateElapsedOperatingDaysAsOf(operatingDays: number, asOf: Date): number {
-  const totalDays = utcDaysInMonth(asOf);
-  const calendarDaysLeft = totalDays - utcDayOfMonth(asOf) + 1;
-  const monthDays = approximateOperatingDaysInMonth(operatingDays, asOf);
-  const remaining = Math.max(1, Math.round(monthDays * (calendarDaysLeft / totalDays)));
-  return Math.max(0, monthDays - remaining);
+  return Math.round(approximateOperatingDaysInMonth(operatingDays, asOf) * (utcDayOfMonth(asOf) / utcDaysInMonth(asOf)));
 }
 
 /**
