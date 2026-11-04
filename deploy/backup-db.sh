@@ -72,9 +72,12 @@ for schema in $SCHEMAS; do schema_args+=("--schema=$schema"); done
 
 echo "backup: dumping ${SCHEMAS} to $file"
 # The URL goes in through the environment, not the command line, so it never
-# shows up in `ps`. --no-owner/--no-privileges: Supabase's roles do not exist
-# in whatever database a restore targets.
-if ! docker run --rm -e DIRECT_URL="$DIRECT_URL" "$PG_IMAGE" \
+# shows up in `ps`: a bare `-e NAME` makes docker read the exported value
+# itself (`-e NAME="$VALUE"` would put the password in docker's own argv).
+# --no-owner/--no-privileges: Supabase's roles do not exist in whatever
+# database a restore targets.
+export DIRECT_URL
+if ! docker run --rm -e DIRECT_URL "$PG_IMAGE" \
   sh -c 'pg_dump --format=custom --no-owner --no-privileges "$@" --dbname="$DIRECT_URL"' \
   pg_dump "${schema_args[@]}" > "$file.partial"; then
   rm -f "$file.partial"
@@ -107,8 +110,10 @@ if [ -n "$BUCKET" ]; then
   endpoint_args=()
   [ -n "$ENDPOINT" ] && endpoint_args=(--endpoint-url "$ENDPOINT")
   echo "backup: copying to s3://$BUCKET/finsight/$name"
+  # Exported and passed by name, for the same reason as DIRECT_URL above.
+  export AWS_ACCESS_KEY_ID="$KEY_ID" AWS_SECRET_ACCESS_KEY="$SECRET" AWS_DEFAULT_REGION="$REGION"
   docker run --rm \
-    -e AWS_ACCESS_KEY_ID="$KEY_ID" -e AWS_SECRET_ACCESS_KEY="$SECRET" -e AWS_DEFAULT_REGION="$REGION" \
+    -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
     -v "$BACKUP_DIR:/backups:ro" "$AWS_IMAGE" \
     s3 cp "/backups/$name" "s3://$BUCKET/finsight/$name" "${endpoint_args[@]}" --only-show-errors
 else
