@@ -78,6 +78,10 @@ const MODULE_REDIRECTS = new Map(
       jestPresetMock('ViewNativeComponent'),
     'react-native/Libraries/Core/InitializeCore':
       jestPresetMock('InitializeCore'),
+    // React Native 0.88: the renderer requires this to install the native
+    // environment (performance, timers, error handling), which needs modules
+    // that only exist on a device. The preset maps it to the same mock.
+    'react-native/setup-env': jestPresetMock('InitializeCore'),
     'react-native/Libraries/Image/Image': jestPresetMock('Image'),
     'react-native/Libraries/Linking/Linking': jestPresetMock('Linking'),
     'react-native/Libraries/Modal/Modal': jestPresetMock('Modal'),
@@ -117,6 +121,11 @@ for (const [request, target] of MODULE_REDIRECTS) {
     ABSOLUTE_REDIRECTS.set(path.join(NM, request), target);
   }
 }
+// `react-native/setup-env` is a package `exports` alias, not a file path.
+ABSOLUTE_REDIRECTS.set(
+  path.join(NM, 'react-native', 'src', 'setup-env.js'),
+  MODULE_REDIRECTS.get('react-native/setup-env'),
+);
 
 const isFlowSource = (filename) =>
   FLOW_SOURCE_DIRS.some((dir) => filename.startsWith(dir));

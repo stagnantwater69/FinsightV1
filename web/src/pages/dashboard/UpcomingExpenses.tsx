@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { useState } from "react";
 import { AlertCircle, CalendarClock, CalendarDays, CalendarOff, Clock } from "lucide-react";
 import { Panel } from "../../components/ui";
 import { ArrowLink, IconTile, PanelTitle } from "./DashboardBits";
@@ -6,9 +6,13 @@ import { formatMoney } from "../../components/Money";
 import { formatDueDate } from "../../components/RecurringAgenda";
 import { FeedNotice } from "./FeedNotice";
 import { useUpcomingExpenses } from "./useDashboardFeeds";
+import { ScheduleFormModal } from "../RecurringScheduleForm";
+import type { RecurringSchedule } from "../../lib/types";
 
 export function UpcomingExpenses({ businessProfileId }: { businessProfileId: number }) {
   const { state, reload } = useUpcomingExpenses(businessProfileId);
+  // Add and edit open as a popup over the dashboard, not a separate page.
+  const [form, setForm] = useState<{ schedule: RecurringSchedule | null } | null>(null);
   const priority = { OVERDUE: 0, DUE_SOON: 1, SCHEDULED: 2 };
   const schedules = state.data?.filter((schedule) => schedule.isActive)
     .sort((a, b) => priority[a.dueState] - priority[b.dueState] || a.nextDueDate.localeCompare(b.nextDueDate))
@@ -41,9 +45,13 @@ export function UpcomingExpenses({ businessProfileId }: { businessProfileId: num
                   />
                   <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                    <Link to={`/insights/recurring-schedules/${schedule.id}/edit`} className="tap-inline text-sm link-action [overflow-wrap:anywhere]">
+                    <button
+                      type="button"
+                      onClick={() => setForm({ schedule })}
+                      className="tap-inline text-left text-sm link-action [overflow-wrap:anywhere]"
+                    >
                       {schedule.label}
-                    </Link>
+                    </button>
                     <span className="figure whitespace-nowrap text-sm font-semibold text-ink-900">{formatMoney(schedule.expectedAmount)}</span>
                   </div>
                   <p className={`text-xs ${schedule.dueState === "OVERDUE" ? "text-tone-danger" : "text-ink-500"}`}>
@@ -59,11 +67,23 @@ export function UpcomingExpenses({ businessProfileId }: { businessProfileId: num
             <div className="py-6">
               <p className="text-sm font-medium text-ink-800">No active recurring expenses</p>
               <p className="mt-1 text-xs leading-relaxed text-ink-500">Add rent, bills, or other repeat expenses to see what’s coming up.</p>
-              <ArrowLink to="/insights/recurring-schedules/new" className="mt-2 text-sm">Add a schedule</ArrowLink>
+              <button
+                type="button"
+                onClick={() => setForm({ schedule: null })}
+                className="tap-inline mt-2 text-sm link-action"
+              >
+                Add a schedule
+              </button>
             </div>
           )}
         </>
       )}
+      <ScheduleFormModal
+        open={form !== null}
+        schedule={form?.schedule ?? null}
+        onClose={() => setForm(null)}
+        onSaved={reload}
+      />
     </Panel>
   );
 }

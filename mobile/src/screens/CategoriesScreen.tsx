@@ -3,7 +3,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { CONTENT_WIDTH } from "../components/ContentScrollView";
 import { useImportOperation } from "../lib/useImportOperation";
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, TextInput, useWindowDimensions, View } from "react-native";
+import { type TextInputInstance, ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, TextInput, useWindowDimensions, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { errorMessage } from "../lib/api";
@@ -69,7 +69,7 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const { width, fontScale } = useWindowDimensions();
   const stackedActions = width < 390 || fontScale > 1.2;
-  const descriptionRef = useRef<TextInput>(null);
+  const descriptionRef = useRef<TextInputInstance>(null);
   useEffect(() => {
     setKeyword("");
     setAdding(false);
@@ -315,7 +315,7 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
           ) : (
             <EmptyState title="No categories yet" body="Start with the categories your business spends on most, such as supplies, rent or utilities." action={<Button title="Create your first category" variant="primary" onPress={() => setAdding(true)} />} />
           )
-        ) : null}
+        ) : undefined}
       />
       </KeyboardAvoidingView>
     </Screen>

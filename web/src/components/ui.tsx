@@ -293,20 +293,37 @@ export function PageHead({
   title,
   subtitle,
   actions,
+  inBreadcrumb = false,
 }: {
   eyebrow?: string;
   title: ReactNode;
   subtitle?: ReactNode;
   actions?: ReactNode;
+  /**
+   * For the sidebar tab pages: from lg up the topbar breadcrumb already names
+   * the page, so the visible title block steps aside (the h1 stays for screen
+   * readers). Below lg the breadcrumb is hidden and the title shows as usual.
+   */
+  inBreadcrumb?: boolean;
 }) {
   return (
-    <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
+    <div
+      className={`mb-5 flex flex-wrap items-start justify-between gap-3 ${
+        inBreadcrumb && !actions ? "lg:mb-0" : ""
+      }`}
+    >
+      <div className={`min-w-0 ${inBreadcrumb ? "lg:sr-only" : ""}`}>
         {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
         <h1 className="text-xl font-bold text-ink-900 sm:text-2xl">{title}</h1>
         {subtitle ? <p className="mt-1 max-w-2xl text-sm text-ink-500">{subtitle}</p> : null}
       </div>
-      {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+      {/* `ml-auto` keeps the actions on the right when the title block is
+          visually hidden (inBreadcrumb, lg up) and they are the only item in the row.
+          `min-w-0` lets the group shrink to the column, so an action row that
+          scrolls sideways (Records) scrolls inside itself, not the page. */}
+      {actions ? (
+        <div className={`flex min-w-0 flex-wrap items-center gap-2 ${inBreadcrumb ? "lg:ml-auto" : ""}`}>{actions}</div>
+      ) : null}
     </div>
   );
 }

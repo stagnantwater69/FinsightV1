@@ -113,6 +113,15 @@ const COVERED: Record<string, string> = {
   "/records/csv-imports/new": "ImportCsv",
   "/records/flagged": "FlaggedRecords",
   "/insights/expense-behavior": "ExpenseBehavior",
+  /*
+   * Web moved the full lists behind Expense insight's previews onto pages of
+   * their own so the side-by-side panels stay aligned. A phone has one column
+   * and no such problem: the Expense behavior screen already lists every
+   * finding, unusual expense, watched payment and suggestion, paged in place.
+   */
+  "/insights/expense-behavior/unusual": "ExpenseBehavior",
+  "/insights/expense-behavior/findings": "ExpenseBehavior",
+  "/insights/expense-behavior/recurring": "ExpenseBehavior",
   "/insights/recovery": "RecoveryTarget",
   /*
    * Recovery Target Improvement Plan §10.9/§11 Phase 7 — the month-end
@@ -177,6 +186,7 @@ const WEB_ONLY: Record<string, string> = {
   "/": "The marketing landing page. The app opens to a login or the dashboard — there is no equivalent surface, and an installed app has already done the job a landing page exists to do.",
   "/blogs": "Marketing content for visitors deciding whether to sign up. A signed-in owner opening the app is past that decision, and the app is not where they would look for it.",
   "/auth/google/callback": "Web needs a page for Google to return to. The app finishes Google sign-in inside the system auth sheet, which closes on finsight://auth/google/callback and hands the code straight back (lib/googleSignIn.ts), so there is no screen to land on.",
+  "/calendar": "A month grid of upcoming payments against open and closed days needs the width of a desktop to read. On a phone the same schedules are grouped by when they fall due on the Expense behavior screen; a mobile calendar has not been built.",
 };
 
 describe("web feature parity", () => {

@@ -26,7 +26,7 @@ export function SubpageHeader({ title, onBack, disabled = false, right }: {
     : {};
   return (
     <View style={{ paddingTop: insets.top, backgroundColor: t.surfaceSunken }}>
-      {focused ? <StatusBar barStyle={t.statusBarStyle === "dark" ? "dark-content" : "light-content"} backgroundColor={t.surfaceSunken} /> : null}
+      {focused ? <StatusBar barStyle={t.statusBarStyle === "dark" ? "dark-content" : "light-content"} /> : null}
       <View style={{ width: "100%", maxWidth: CONTENT_WIDTH, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, paddingVertical: space.sm }}>
         <Pressable
           accessibilityRole="button"

@@ -11,6 +11,11 @@ function message(id: number, content: string, role = "assistant") {
 }
 async function target(locator: Locator, name: string, measurements: unknown[]) {
   await expect(locator).toBeVisible();
+  // Measure the settled size: a dialog's scale-in transition eases slowly into
+  // place, so mid-entrance its controls are a hair under their final size.
+  await locator.evaluate(() => Promise.all(document.getAnimations()
+    .filter((animation) => animation.effect?.getTiming().iterations !== Infinity)
+    .map((animation) => animation.finished.catch(() => undefined))));
   const bounds = await locator.boundingBox();
   expect(bounds, name).not.toBeNull();
   expect(bounds!.width, `${name} width`).toBeGreaterThanOrEqual(44);

@@ -1,5 +1,5 @@
 import { useState, type ReactNode, type Ref } from "react";
-import { Platform, Pressable, ScrollView, View, type PressableProps, type ViewStyle } from "react-native";
+import { type ScrollViewInstance, Platform, Pressable, View, type PressableProps, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Screen, T } from "../../components/ui";
@@ -37,7 +37,7 @@ export function HelpPage({ title, intro, navigation, children, scrollRef, showSc
   intro?: string;
   navigation?: HelpNavigation;
   children: ReactNode;
-  scrollRef?: Ref<ScrollView>;
+  scrollRef?: Ref<ScrollViewInstance>;
   showScrollIndicator?: boolean;
 }) {
   const t = useTheme();

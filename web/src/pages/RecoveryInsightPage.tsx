@@ -332,29 +332,21 @@ function checkpointStatusLabel(status: RecoveryCheckpointStatus): string {
 /** Surface treatment per checkpoint status, from the themed status tokens. */
 const CHECKPOINT_LOOK: Record<
   RecoveryCheckpointStatus,
-  { wash: string; ring: string; track: string; fill: string }
+  { track: string; fill: string }
 > = {
   behind: {
-    wash: "from-tint-danger",
-    ring: "ring-edge-danger",
     track: "bg-edge-danger",
     fill: "bg-tone-danger",
   },
   on_pace: {
-    wash: "from-tint-info",
-    ring: "ring-edge-info",
     track: "bg-edge-info",
     fill: "bg-tone-info",
   },
   ahead: {
-    wash: "from-tint-brand",
-    ring: "ring-edge-brand",
     track: "bg-edge-brand",
     fill: "bg-tone-brand",
   },
   pending: {
-    wash: "from-tint-neutral",
-    ring: "ring-paper-200",
     track: "bg-paper-200",
     fill: "bg-tone-neutral",
   },
@@ -390,7 +382,8 @@ function CheckpointCard({
       : null;
   return (
     <div
-      className={`relative flex h-full flex-col rounded-xl bg-gradient-to-br ${look.wash} to-paper p-4 ring-1 ${look.ring}`}
+      data-alert={checkpoint.status === "behind" || undefined}
+      className="stat-tile h-full !shadow-none"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -1993,73 +1986,78 @@ function RecoveryPaceCard({
     ? period.sales - period.target
     : period.paceVarianceAmount;
   return (
+    // The grid stretches this card to the hero's height. The two figures share
+    // the space above the action and are centred in it, so they don't sit at
+    // the top of a half-empty card.
     <Card className="flex min-w-0 flex-col p-5 motion-safe:animate-fade-up">
-      <div className="flex items-start gap-3.5">
-        <IconTile icon={CalendarRange} />
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-ink-600">
-            Target for{" "}
-            {period.kind === "week" ? "this week" : recoveryPeriodLabel(period)}
-          </p>
-          <p className="figure mt-1 text-2xl font-semibold leading-none text-ink-900">
-            {formatMoney(period.target)}
-          </p>
-          <p className="mt-1.5 text-xs text-ink-500">
-            <span className="figure">{formatMoney(period.dailyTarget)}</span> per
-            operating day
-          </p>
+      <div className="flex flex-1 flex-col justify-center">
+        <div className="flex items-start gap-3.5">
+          <IconTile icon={CalendarRange} />
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-ink-600">
+              Target for{" "}
+              {period.kind === "week" ? "this week" : recoveryPeriodLabel(period)}
+            </p>
+            <p className="figure mt-1 text-2xl font-semibold leading-none text-ink-900">
+              {formatMoney(period.target)}
+            </p>
+            <p className="mt-1.5 text-xs text-ink-500">
+              <span className="figure">{formatMoney(period.dailyTarget)}</span> per
+              operating day
+            </p>
+          </div>
         </div>
-      </div>
-      <div className="my-4 border-t border-dashed border-paper-200" />
-      <div className="flex items-start gap-3.5">
-        <IconTile icon={Flag} />
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-semibold text-ink-600">
-            {period.isComplete ? "Final difference" : "Against expected pace"}
-          </p>
-          <p
-            className="figure mt-1 text-2xl font-semibold leading-none"
-            style={{
-              color:
-                variance < 0
-                  ? STATUS_INK.critical
-                  : variance > 0
-                    ? STATUS_INK.good
-                    : undefined,
-            }}
-          >
-            {variance === 0
-              ? "On pace"
-              : `${formatMoney(Math.abs(variance))} ${
-                  period.isComplete
-                    ? variance < 0
-                      ? "short"
-                      : "over"
-                    : variance < 0
-                      ? "behind"
-                      : "ahead"
-                }`}
-          </p>
-          <p className="mt-1.5 text-xs text-ink-500">
-            {period.isComplete
-              ? `${recoveryPeriodLabel(period)} is closed`
-              : `${formatOperatingDays(
-                  period.remainingOperatingDays,
-                  period.operatingDaysIsApproximated,
-                )} operating days left`}
-          </p>
-          {!period.isComplete && period.expectedSalesToDate > 0 ? (
-            <div className="mt-3">
-              <PaceComparison
-                recorded={period.sales}
-                expected={period.expectedSalesToDate}
-              />
-            </div>
-          ) : null}
+        <div className="my-4 border-t border-dashed border-paper-200" />
+        <div className="flex items-start gap-3.5">
+          <IconTile icon={Flag} />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-ink-600">
+              {period.isComplete ? "Final difference" : "Against expected pace"}
+            </p>
+            <p
+              className="figure mt-1 text-2xl font-semibold leading-none"
+              style={{
+                color:
+                  variance < 0
+                    ? STATUS_INK.critical
+                    : variance > 0
+                      ? STATUS_INK.good
+                      : undefined,
+              }}
+            >
+              {variance === 0
+                ? "On pace"
+                : `${formatMoney(Math.abs(variance))} ${
+                    period.isComplete
+                      ? variance < 0
+                        ? "short"
+                        : "over"
+                      : variance < 0
+                        ? "behind"
+                        : "ahead"
+                  }`}
+            </p>
+            <p className="mt-1.5 text-xs text-ink-500">
+              {period.isComplete
+                ? `${recoveryPeriodLabel(period)} is closed`
+                : `${formatOperatingDays(
+                    period.remainingOperatingDays,
+                    period.operatingDaysIsApproximated,
+                  )} operating days left`}
+            </p>
+            {!period.isComplete && period.expectedSalesToDate > 0 ? (
+              <div className="mt-3">
+                <PaceComparison
+                  recorded={period.sales}
+                  expected={period.expectedSalesToDate}
+                />
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
       {action ? (
-        <div className="mt-auto pt-5">
+        <div className="pt-5">
           <div className="border-t border-paper-200 pt-4">{action}</div>
         </div>
       ) : null}
@@ -2067,37 +2065,14 @@ function RecoveryPaceCard({
   );
 }
 
-// Each tone is a matched set from the themed tint/tone/edge tokens, used for
-// the tile's wash only; the icon itself is the shared, uniform IconTile.
-const INPUT_TILE_TONES = {
-  brand: {
-    wash: "from-tint-brand",
-    ring: "ring-edge-brand",
-    mark: "text-tone-brand",
-  },
-  info: {
-    wash: "from-tint-info",
-    ring: "ring-edge-info",
-    mark: "text-tone-info",
-  },
-  danger: {
-    wash: "from-tint-danger",
-    ring: "ring-edge-danger",
-    mark: "text-tone-danger",
-  },
-  neutral: {
-    wash: "from-tint-neutral",
-    ring: "ring-paper-200",
-    mark: "text-tone-neutral",
-  },
-} as const;
+// Tone no longer paints the tile (see `.stat-tile` in index.css); only a
+// danger tone marks it, with the shared alert bar.
+type InputTileTone = "brand" | "info" | "danger" | "neutral";
 
 /**
  * One input to the target. Each tile carries a small picture of its own
  * figure (elapsed days, the target's drift, today's progress) so the row
- * says something at a glance instead of being four boxed numbers. The faint
- * oversized glyph repeats the tile's icon to give each tile its own
- * silhouette; it is decoration only, so it sits behind the text, aria-hidden.
+ * says something at a glance instead of being four boxed numbers.
  */
 function InputTile({
   icon: Icon,
@@ -2112,23 +2087,19 @@ function InputTile({
   label: string;
   value: string;
   sublabel?: ReactNode;
-  tone: keyof typeof INPUT_TILE_TONES;
+  tone: InputTileTone;
   visual?: ReactNode;
   /** Position in the row, used to stagger the entrance in reading order. */
   order?: number;
 }) {
-  const t = INPUT_TILE_TONES[tone];
   return (
     <div
-      className={`relative isolate flex min-w-0 flex-col overflow-hidden rounded-2xl bg-gradient-to-br ${t.wash} to-paper p-4 shadow-sm ring-1 ${t.ring} motion-safe:animate-fade-up sm:p-5`}
+      data-alert={tone === "danger" || undefined}
+      className="stat-tile motion-safe:animate-fade-up"
       style={{ animationDelay: `${order * 70}ms` }}
     >
-      <Icon
-        aria-hidden
-        className={`pointer-events-none absolute -bottom-6 -right-6 -z-10 size-32 -rotate-12 opacity-[0.07] ${t.mark}`}
-      />
       <div className="flex items-center gap-3">
-        <IconTile icon={Icon} />
+        <IconTile icon={Icon} size="sm" />
         <p className="min-w-0 text-xs font-semibold text-ink-700">{label}</p>
       </div>
       <p className="figure mt-4 break-words text-[1.7rem] font-semibold leading-none text-ink-900">
@@ -2251,7 +2222,7 @@ function TodayProgressCard({ data }: { data: RecoveryInsight }) {
           color={ringColor}
           label={`${Math.round(percent)}% of today's target recorded`}
         />
-        <dl className="grid w-full min-w-0 gap-2.5 text-sm">
+        <dl className="grid w-full min-w-0 max-w-md gap-2.5 text-sm">
           <div className="flex items-baseline justify-between gap-3">
             <dt className="text-xs text-ink-500">Sales reference today</dt>
             <dd className="figure font-semibold text-ink-900">
@@ -2698,6 +2669,7 @@ function RecoveryInsightContent() {
   return (
     <div>
       <PageHead
+        inBreadcrumb
         eyebrow="Insights"
         title="Recovery target"
         subtitle={selected ? selected.name : undefined}

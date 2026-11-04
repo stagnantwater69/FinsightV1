@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Pressable, TextInput, View } from "react-native";
+import { type TextInputInstance, Pressable, View } from "react-native";
 import { Field, T } from "../../../components/ui";
 import { TAP_FLOOR } from "../../../components/touchTarget";
 import { useTheme } from "../../../context/ThemeContext";
@@ -28,7 +28,7 @@ export function AddedItemRow({
   onRemove: () => void;
 }) {
   const { ink, paper } = useTheme();
-  const amountRef = useRef<TextInput>(null);
+  const amountRef = useRef<TextInputInstance>(null);
   return (
     <View
       style={{

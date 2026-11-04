@@ -3,12 +3,14 @@ import { IconTile } from "../components/IconTile";
 import { Link } from "react-router-dom";
 import { isAxiosError } from "axios";
 import {
-  AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
   Boxes,
   ChartPie,
+  ChevronLeft,
+  ChevronRight,
   Flag,
+  Info,
   Lightbulb,
   ListFilter,
   MessageCircleQuestion,
@@ -50,10 +52,23 @@ import { CATEGORICAL_PALETTE, STATUS_INK } from "../lib/chartPalette";
 // chartPalette.ts), which is why it can be read here without the theme hook.
 const TOP_CATEGORY_COLOR = CATEGORICAL_PALETTE[0]!;
 import { RecurringAgenda } from "../components/RecurringAgenda";
-import { PageHead, Panel, Callout, Pill, type PillTone } from "../components/ui";
+import { ScheduleFormModal } from "./RecurringScheduleForm";
+import { PageHead, Panel, Callout, Pill } from "../components/ui";
 import { ReductionSimulationModal } from "../components/ReductionSimulationModal";
+import { Modal } from "../components/Modal";
 import { PeriodFilter } from "../components/PeriodFilter";
-import { Pagination } from "../components/Pagination";
+import { SeeAllFooter } from "../components/SeeAllFooter";
+import { CandidateRow, FindingCard } from "./expenseInsight/reviewItems";
+import {
+  CANDIDATES_PREVIEW_COUNT,
+  EXPENSE_FINDINGS_PATH,
+  EXPENSE_RECURRING_PATH,
+  FINDINGS_PREVIEW_COUNT,
+  SCHEDULES_PREVIEW_COUNT,
+  openFindingsRequest,
+  recurringPatternsRequest,
+  recurringSchedulesRequest,
+} from "./expenseInsight/reviewRequests";
 import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
 import {
   THIS_WEEK,
@@ -252,12 +267,6 @@ function ExpenseSectionNav({
 // disagree about what "a short list" means.
 const MAX_FLAGGED_SHOWN = 5;
 
-/** Severity is named by the pill; the icon beside it is the uniform tile. */
-const FINDING_SEVERITY_LOOK: Record<string, { pill: PillTone }> = {
-  HIGH: { pill: "danger" },
-  MEDIUM: { pill: "warn" },
-  LOW: { pill: "neutral" },
-};
 
 /**
  * How many flagged records this panel's short list asks the server for.
@@ -270,12 +279,9 @@ const FINDING_SEVERITY_LOOK: Record<string, { pill: PillTone }> = {
  */
 const FLAGGED_PANEL_PAGE_SIZE = 100;
 
-// The backend already caps `opportunities` at three (plan §4.6, §8.3), but the
-// UI does not trust that as its only guarantee — a future server bug here
-// would otherwise overwhelm the exact owner this feature is meant to help.
-const MAX_OPPORTUNITIES_SHOWN = 3;
-
-const FINDINGS_PER_PAGE = 3;
+// Three, not five: each unusual row carries a bar, so five ran well past the
+// large-expense flags beside it.
+const UNUSUAL_PREVIEW_COUNT = 3;
 
 const OPPORTUNITY_PRIORITY_LABEL: Record<
   ReductionOpportunity["priority"],
@@ -393,6 +399,105 @@ const OPPORTUNITY_ASK_QUESTION =
  * actions in the plan's own order (§10.2: "Do not render disabled
  * placeholder actions" — every action below has an implemented destination).
  */
+/**
+ * Reduction opportunities in a single horizontal row. Cards keep a readable
+ * width instead of being squeezed into columns; the rest are a swipe, a
+ * trackpad scroll or a Previous/Next press away. Snap points stop a card from
+ * resting half off the edge.
+ *
+ * Cards grow to share the row's width, so a short list fills the panel
+ * instead of floating in the middle; below their minimum width they stop
+ * shrinking and the row scrolls. The bar is hidden; the next card peeking
+ * past the edge says there is more.
+ */
+function OpportunityRow({
+  count,
+  className = "",
+  children,
+}: {
+  count: number;
+  className?: string;
+  children: ReactNode;
+}) {
+  const scrollerRef = useRef<HTMLUListElement>(null);
+  const [edges, setEdges] = useState({ atStart: true, atEnd: true });
+
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const update = () =>
+      setEdges({
+        atStart: el.scrollLeft <= 1,
+        atEnd: el.scrollLeft + el.clientWidth >= el.scrollWidth - 1,
+      });
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    return () => {
+      el.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, [count]);
+
+  // One card per press: the first card's width plus the gap between cards.
+  const step = (direction: 1 | -1) => {
+    const el = scrollerRef.current;
+    const card = el?.firstElementChild as HTMLElement | null;
+    if (!el || !card) return;
+    el.scrollBy({ left: direction * (card.offsetWidth + 12), behavior: "smooth" });
+  };
+
+  // Up to three cards is the usual case and needs no controls; past that,
+  // the buttons appear whenever the row actually overflows.
+  const showControls = count > 3 && !(edges.atStart && edges.atEnd);
+
+  return (
+    <div className={className}>
+      {/* `relative` makes the scroller the containing block for the
+          absolutely positioned sr-only labels inside its cards. Without it
+          they escape the overflow clip and widen the whole page on a phone. */}
+      <ul
+        ref={scrollerRef}
+        role="list"
+        aria-label={`Reduction opportunities, ${count} in all`}
+        tabIndex={0}
+        className="scroll-none relative flex snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain scroll-smooth rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 [&>li]:shrink-0 [&>li]:grow [&>li]:basis-[min(20rem,88%)] [&>li]:snap-start"
+      >
+        {children}
+      </ul>
+      {showControls ? (
+        <div className="mt-3 flex items-center justify-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => step(-1)}
+            disabled={edges.atStart}
+            aria-label="Previous opportunity"
+          >
+            <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => step(1)}
+            disabled={edges.atEnd}
+            aria-label="Next opportunity"
+          >
+            <ChevronRight className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const OPPORTUNITY_ACTION =
+  "tap flex min-h-tap items-center justify-center rounded-lg border font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500";
+// Icon over label keeps three tiles side by side even in the narrowest card.
+const OPPORTUNITY_TILE = `${OPPORTUNITY_ACTION} flex-col gap-1 border-paper-200 bg-paper px-1.5 py-2 text-[11px] leading-tight text-ink-700 hover:border-edge-brand hover:bg-tint-brand hover:text-tone-brand`;
+
 function OpportunityCard({
   opportunity,
   businessProfileId,
@@ -407,6 +512,7 @@ function OpportunityCard({
   // module never varies, so there is nothing for a shared instance to buy.
   const askFinSight = useAskFinSight("Expense Insights");
   const [simulateOpen, setSimulateOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   // Feedback — plan §15 Phase 5. Write-only: the backend has no read-back
   // endpoint for prior feedback, so this always starts unset on load, even
@@ -486,98 +592,54 @@ function OpportunityCard({
           ))}
         </dl>
 
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
-          <Link
-            to={`/records?type=expense&categoryId=${opportunity.categoryId}`}
-            aria-label={`View related records for ${opportunity.categoryName}`}
-            className="tap-inline inline-flex items-center text-xs link-action"
-          >
-            <ListFilter
-              aria-hidden
-              className="mr-1.5 size-3.5"
-            />
-            View records
-            <span className="sr-only"> for {opportunity.categoryName}</span>
-          </Link>
-          <button
-            type="button"
-            aria-label={`Ask FinSight about this reduction opportunity for ${opportunity.categoryName}`}
-            onClick={() => askFinSight(OPPORTUNITY_ASK_QUESTION, opportunity)}
-            className="tap-inline inline-flex items-center text-xs link-action"
-          >
-            <MessageCircleQuestion
-              aria-hidden
-              className="mr-1.5 size-3.5"
-            />
-            Ask FinSight
-            <span className="sr-only">
-              {" "}
-              reduction opportunity for {opportunity.categoryName}
-            </span>
-          </button>
+        {/* Simulate is the card's main action, so it gets the full width;
+            the other three are equal tiles below it. Details is a popup
+            rather than an inline disclosure: in the horizontal row an
+            expanded card grew every card beside it to the same height. */}
+        <div className="mt-3 space-y-2">
           <button
             type="button"
             onClick={() => setSimulateOpen(true)}
-            className="tap-inline inline-flex items-center text-xs link-action"
+            className={`${OPPORTUNITY_ACTION} w-full flex-row gap-2 border-edge-brand bg-tint-brand py-2 text-sm text-tone-brand hover:border-brand-600 hover:bg-brand-600 hover:text-white`}
           >
-            <SlidersHorizontal
-              aria-hidden
-              className="mr-1.5 size-3.5"
-            />
+            <SlidersHorizontal aria-hidden className="size-4" />
             Simulate reduction
             <span className="sr-only"> for {opportunity.categoryName}</span>
           </button>
-        </div>
-
-        <details className="group mt-3 border-t border-paper-200 pt-3">
-          <summary className="disclosure">
-            <span className="group-open:hidden">Details</span>
-            <span className="hidden group-open:inline">Hide details</span>
-          </summary>
-          <div className="mt-3 rounded-xl bg-paper-100 p-3.5">
-            <div className="flex flex-wrap gap-2">
-              <Pill tone="neutral">
-                {OPPORTUNITY_CONFIDENCE_LABEL[opportunity.confidence]}
-              </Pill>
-              {costBehaviorLabel ? (
-                <Pill tone="info">{costBehaviorLabel}</Pill>
-              ) : null}
-            </div>
-            <p className="mt-3 text-xs text-ink-600">
-              <span className="font-semibold text-ink-700">Why: </span>
-              {opportunity.rationale}
-            </p>
-            {costBehaviorNote ? (
-              <div className="mt-3">
-                <Callout tone="info">{costBehaviorNote}</Callout>
-              </div>
-            ) : null}
-            {opportunity.suggestedChecks.length > 0 ? (
-              <div className="mt-3">
-                <p className="text-xs font-semibold text-ink-700">
-                  Suggested checks
-                </p>
-                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-ink-600">
-                  {opportunity.suggestedChecks.map((check) => (
-                    <li key={check}>{check}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {opportunity.limitations.length > 0 ? (
-              <div className="mt-3">
-                <p className="text-xs font-semibold text-ink-700">
-                  Limitations
-                </p>
-                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-ink-600">
-                  {opportunity.limitations.map((limitation) => (
-                    <li key={limitation}>{limitation}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
+          <div className="grid grid-cols-3 gap-2">
+            <Link
+              to={`/records?type=expense&categoryId=${opportunity.categoryId}`}
+              aria-label={`View related records for ${opportunity.categoryName}`}
+              className={OPPORTUNITY_TILE}
+            >
+              <ListFilter aria-hidden className="size-4" />
+              View records
+              <span className="sr-only"> for {opportunity.categoryName}</span>
+            </Link>
+            <button
+              type="button"
+              aria-label={`Ask FinSight about this reduction opportunity for ${opportunity.categoryName}`}
+              onClick={() => askFinSight(OPPORTUNITY_ASK_QUESTION, opportunity)}
+              className={OPPORTUNITY_TILE}
+            >
+              <MessageCircleQuestion aria-hidden className="size-4" />
+              Ask FinSight
+              <span className="sr-only">
+                {" "}
+                reduction opportunity for {opportunity.categoryName}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDetailsOpen(true)}
+              className={OPPORTUNITY_TILE}
+            >
+              <Info aria-hidden className="size-4" />
+              Details
+              <span className="sr-only"> for {opportunity.categoryName}</span>
+            </button>
           </div>
-        </details>
+        </div>
 
         {/*
         Helpful / Not relevant — plan §15 Phase 5. Two toggle-style buttons
@@ -631,6 +693,55 @@ function OpportunityCard({
           ) : null}
         </div>
       </div>
+
+      <Modal
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        title={`${opportunity.categoryName} — details`}
+      >
+        <p className="text-sm text-ink-600">{opportunity.observation}</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Pill tone="neutral">
+            {OPPORTUNITY_CONFIDENCE_LABEL[opportunity.confidence]}
+          </Pill>
+          {costBehaviorLabel ? (
+            <Pill tone="info">{costBehaviorLabel}</Pill>
+          ) : null}
+        </div>
+        <p className="mt-3 text-sm text-ink-600">
+          <span className="font-semibold text-ink-700">Why: </span>
+          {opportunity.rationale}
+        </p>
+        {costBehaviorNote ? (
+          <div className="mt-3">
+            <Callout tone="info">{costBehaviorNote}</Callout>
+          </div>
+        ) : null}
+        {opportunity.suggestedChecks.length > 0 ? (
+          <div className="mt-3">
+            <p className="text-sm font-semibold text-ink-700">
+              Suggested checks
+            </p>
+            <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-ink-600">
+              {opportunity.suggestedChecks.map((check) => (
+                <li key={check}>{check}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {opportunity.limitations.length > 0 ? (
+          <div className="mt-3">
+            <p className="text-sm font-semibold text-ink-700">
+              Limitations
+            </p>
+            <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-ink-600">
+              {opportunity.limitations.map((limitation) => (
+                <li key={limitation}>{limitation}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </Modal>
 
       <ReductionSimulationModal
         open={simulateOpen}
@@ -759,17 +870,10 @@ function ExpenseInsightPage() {
   const [flaggedExpenseCount, setFlaggedExpenseCount] = useState<number | null>(null);
   const [flaggedCountState, setFlaggedCountState] = useState<SupplementState>("loading");
   const [findings, setFindings] = useState<AnomalyFinding[]>([]);
+  /** The schedule open in the edit popup; null with the popup open is "add". */
+  const [editingSchedule, setEditingSchedule] = useState<RecurringSchedule | null>(null);
+  const [scheduleFormOpen, setScheduleFormOpen] = useState(false);
   const [findingsState, setFindingsState] = useState<SupplementState>("loading");
-  // Three to a page: each finding is a tall card with its own actions, and a
-  // long run of them pushed the rest of the page out of reach.
-  const [findingsPage, setFindingsPage] = useState(1);
-  // Another period or business is a different list; start it from the top.
-  const findingsScopeKey = `${selected?.id ?? ""}:${periodKey}`;
-  const [findingsPageScope, setFindingsPageScope] = useState(findingsScopeKey);
-  if (findingsPageScope !== findingsScopeKey) {
-    setFindingsPageScope(findingsScopeKey);
-    setFindingsPage(1);
-  }
   const [recurringPatterns, setRecurringPatterns] = useState<
     RecurringPattern[]
   >([]);
@@ -947,13 +1051,8 @@ function ExpenseInsightPage() {
       filters: { flagged: true },
       tags: ["records", "financial"],
     };
-    const findingsParams = { businessProfileId, status: "OPEN", take: 20 };
-    const findingsScope = {
-      businessProfileId,
-      filters: { status: "OPEN" },
-      pagination: { cursor: null, limit: 20 },
-      tags: ["insights-findings", "financial"],
-    };
+    const { params: findingsParams, scope: findingsScope } =
+      openFindingsRequest(businessProfileId);
     const applyFlaggedPage = (page: FlaggedRecordPage) =>
       setFlaggedExpenses(
         page.items
@@ -1193,11 +1292,8 @@ function ExpenseInsightPage() {
     if (activeExpenseScopeRef.current !== requestScopeKey) return;
     if (!selected) return;
     const businessProfileId = selected.id;
-    const schedulesParams = { businessProfileId };
-    const schedulesScope = {
-      businessProfileId,
-      tags: ["recurring-schedules", "financial"],
-    };
+    const { params: schedulesParams, scope: schedulesScope } =
+      recurringSchedulesRequest(businessProfileId);
     const cachedSchedules = peekCachedApiData<RecurringSchedule[]>(
       "/insights/recurring-schedules",
       { params: schedulesParams },
@@ -1246,11 +1342,8 @@ function ExpenseInsightPage() {
     if (activeExpenseScopeRef.current !== requestScopeKey) return;
     if (!selected) return;
     const businessProfileId = selected.id;
-    const patternsParams = { businessProfileId };
-    const patternsScope = {
-      businessProfileId,
-      tags: ["recurring-patterns", "financial"],
-    };
+    const { params: patternsParams, scope: patternsScope } =
+      recurringPatternsRequest(businessProfileId);
     const cachedPatterns = peekCachedApiData<RecurringPattern[]>(
       "/insights/recurring-patterns",
       { params: patternsParams },
@@ -1401,24 +1494,9 @@ function ExpenseInsightPage() {
     total: data?.categoryTrends.length ?? 0,
     resetKey: expenseScopeKey,
   });
-  const unusualDisclosure = useListDisclosure({
-    total: data?.unusualExpenses.length ?? 0,
-    limit: 5,
-    resetKey: expenseScopeKey,
-  });
-  const opportunityDisclosure = useListDisclosure({
-    total: reductionOpportunities?.opportunities.length ?? 0,
-    limit: MAX_OPPORTUNITIES_SHOWN,
-    resetKey: expenseScopeKey,
-  });
   const flaggedDisclosure = useListDisclosure({
     total: flaggedExpenses.length,
     limit: MAX_FLAGGED_SHOWN,
-    resetKey: expenseScopeKey,
-  });
-  const recurringDisclosure = useListDisclosure({
-    total: candidatePatterns.length,
-    limit: 5,
     resetKey: expenseScopeKey,
   });
   // With no agenda and no candidates the whole block is an empty container.
@@ -1441,12 +1519,6 @@ function ExpenseInsightPage() {
   const flaggedState = combinedSupplementState([flaggedListState, flaggedCountState]);
   const showFlaggedPanel = flaggedState !== "ready" || flaggedTotal > 0;
   const showFindingsPanel = findingsState !== "ready" || findings.length > 0;
-  // Reviewing the last finding on the last page steps back a page rather than
-  // leaving an empty one.
-  const visibleFindingsPage = Math.min(
-    findingsPage,
-    Math.max(1, Math.ceil(findings.length / FINDINGS_PER_PAGE)),
-  );
   const reductionHasOpportunities =
     (reductionOpportunities?.opportunities.length ?? 0) > 0;
   const showReductionPanel =
@@ -1505,6 +1577,18 @@ function ExpenseInsightPage() {
    * and narrows `selected` for everything after it.
    */
 
+  // Findings belong to the period page, so they show only when that page
+  // does; they render in the row below it, beside the recurring panels.
+  const showPeriodFindings =
+    !!selected && !!summary && summary.total !== 0 && showFindingsPanel;
+  const lowerRowCount =
+    Number(showPeriodFindings) +
+    Number(showRecurringBlock && recurringSchedules !== null) +
+    Number(
+      showRecurringBlock &&
+        (hasCandidates || patternsState === "stale" || patternsState === "unavailable"),
+    );
+
   function categoryName(categoryId?: number) {
     return categories.find((c) => c.id === categoryId)?.name ?? "—";
   }
@@ -1522,6 +1606,7 @@ function ExpenseInsightPage() {
   return (
     <div>
       <PageHead
+        inBreadcrumb
         eyebrow="Insights"
         title="Expense insight"
         actions={<PeriodFilter showAllTime={false} />}
@@ -1898,7 +1983,7 @@ function ExpenseInsightPage() {
           {/* ================= 2 & 3. WHERE IT WENT / WHAT CHANGED ================= */}
           <div
             id="expense-categories"
-            className={`scroll-mt-6 grid items-start gap-5 ${allTime ? "" : "xl:grid-cols-[0.8fr_1.2fr]"}`}
+            className={`scroll-mt-6 grid gap-5 ${allTime ? "" : "xl:grid-cols-[0.8fr_1.2fr]"}`}
           >
             <Panel title="Category distribution" className="min-w-0 xl:order-2">
               <DonutChart
@@ -2211,27 +2296,19 @@ function ExpenseInsightPage() {
                         {reductionOpportunities.dataQuality.message}
                       </Callout>
                     ) : null}
-                    <ul
-                      id={opportunityDisclosure.contentId}
-                      className={`grid gap-3 xl:grid-cols-2 ${reductionOpportunities.dataQuality.status === "limited" ? "mt-3" : ""}`}
+                    <OpportunityRow
+                      count={reductionOpportunities.opportunities.length}
+                      className={reductionOpportunities.dataQuality.status === "limited" ? "mt-3" : ""}
                     >
-                      {reductionOpportunities.opportunities
-                        .slice(0, opportunityDisclosure.visibleCount)
-                        .map((o) => (
-                          <OpportunityCard
-                            key={o.id}
-                            opportunity={o}
-                            businessProfileId={selected.id}
-                            period={selection}
-                          />
-                        ))}
-                    </ul>
-                    <ListDisclosureControl
-                      disclosure={opportunityDisclosure}
-                      total={reductionOpportunities.opportunities.length}
-                      itemLabel="opportunities"
-                      className="mt-3"
-                    />
+                      {reductionOpportunities.opportunities.map((o) => (
+                        <OpportunityCard
+                          key={o.id}
+                          opportunity={o}
+                          businessProfileId={selected.id}
+                          period={selection}
+                        />
+                      ))}
+                    </OpportunityRow>
                   </>
                 )}
               </Panel>
@@ -2258,12 +2335,12 @@ function ExpenseInsightPage() {
             ) : null}
             {showFlaggedPanel || showUnusualPanel ? (
               <div
-                className={`grid items-start gap-5 ${showFlaggedPanel && showUnusualPanel ? "lg:grid-cols-2" : ""}`}
+                className={`grid gap-5 ${showFlaggedPanel && showUnusualPanel ? "lg:grid-cols-2" : ""}`}
               >
               {showFlaggedPanel ? (
                 <Panel
                   title="Large expense flags"
-                  className="min-w-0"
+                  className="h-full min-w-0"
                   action={
                     flaggedState === "stale" ? (
                       <Pill>Saved data</Pill>
@@ -2338,7 +2415,7 @@ function ExpenseInsightPage() {
             {showUnusualPanel ? (
               <Panel
                 title="Unusual expenses"
-                className="min-w-0"
+                className="h-full min-w-0"
                 action={
                   data.unusualExpenses.length > 0 ? (
                     <span className="text-xs text-ink-500">
@@ -2358,8 +2435,8 @@ function ExpenseInsightPage() {
                 </p>
               ) : (
                 <>
-                  <ul id={unusualDisclosure.contentId} className="space-y-2">
-                    {data.unusualExpenses.slice(0, unusualDisclosure.visibleCount).map((u) => {
+                  <ul className="space-y-2">
+                    {data.unusualExpenses.slice(0, UNUSUAL_PREVIEW_COUNT).map((u) => {
                       const times =
                         u.categoryMean > 0 ? u.amount / u.categoryMean : null;
                       return (
@@ -2402,12 +2479,16 @@ function ExpenseInsightPage() {
                       );
                     })}
                   </ul>
-                  <ListDisclosureControl
-                    disclosure={unusualDisclosure}
-                    total={data.unusualExpenses.length}
-                    itemLabel="unusual expenses"
-                    className="mt-3"
-                  />
+                  {/* The full list opens on its own page rather than growing
+                      this panel past the flags panel beside it. */}
+                  {data.unusualExpenses.length > UNUSUAL_PREVIEW_COUNT ? (
+                    <SeeAllFooter
+                      shown={UNUSUAL_PREVIEW_COUNT}
+                      total={data.unusualExpenses.length}
+                      noun="unusual expenses"
+                      to="/insights/expense-behavior/unusual"
+                    />
+                  ) : null}
                 </>
               )}
 
@@ -2424,9 +2505,60 @@ function ExpenseInsightPage() {
 
               </div>
             ) : null}
-            {showFindingsPanel ? (
+          </section>
+        </div>
+      )}
+
+      {/*
+        THE RECURRING BLOCK SITS OUTSIDE THE PERIOD-SCOPED PAGE ABOVE, on
+        purpose. Everything above is a reading of one window of expenses; a
+        schedule is not — an overdue salary run is overdue whether or not
+        anything was recorded in the last thirty days. Nested inside, it
+        disappeared for exactly the owner most likely to have forgotten a
+        payment: the one with an empty window.
+
+        Agenda first, candidates second. The agenda is what the owner asked
+        FinSight to watch; the candidates are FinSight asking a question back.
+      */}
+      {isInitialLoad || (!showPeriodFindings && !showRecurringBlock) ? null : (
+        <div className="mt-6 space-y-5">
+          {showRecurringBlock && schedulesState === "stale" ? (
+            <Callout tone="warn">
+              <div>
+                <p role="status">
+                  <b className="font-semibold">Recurring payments couldn’t refresh.</b>{" "}
+                  Showing recently loaded schedules.
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => void loadRecurringSchedules(undefined, true)}
+                >
+                  Retry schedules
+                </Button>
+              </div>
+            </Callout>
+          ) : null}
+
+          {/* One row, equal-height cards: findings, the agenda, then the
+              candidates. Columns follow how many of the three are showing so
+              a lone card never sits in a third of the width. */}
+          <div
+            id={showRecurringBlock ? "expense-recurring" : undefined}
+            className={`grid gap-5 scroll-mt-6 ${
+              lowerRowCount >= 3
+                ? "lg:grid-cols-2 xl:grid-cols-3"
+                : lowerRowCount === 2
+                  ? "lg:grid-cols-2"
+                  : ""
+            }`}
+          >
+            {showPeriodFindings ? (
               <Panel
                 title="Findings to review"
+                className="h-full min-w-0"
                 action={
                   findingsState === "stale" ? (
                     <Pill>Saved data</Pill>
@@ -2448,221 +2580,85 @@ function ExpenseInsightPage() {
               : findings.length === 0 ? null : (
                 <>
                 <ul className="space-y-3">
-                  {findings
-                    .slice((visibleFindingsPage - 1) * FINDINGS_PER_PAGE, visibleFindingsPage * FINDINGS_PER_PAGE)
-                    .map((finding) => (
-                    <li
+                  {findings.slice(0, FINDINGS_PREVIEW_COUNT).map((finding) => (
+                    <FindingCard
                       key={finding.id}
-                      className="rounded-xl border border-paper-200 bg-paper-50 p-3.5"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-3">
-                          <IconTile icon={AlertTriangle} />
-                          <p className="text-sm font-semibold text-ink-900">
-                            {finding.title}
-                          </p>
-                        </div>
-                        <Pill tone={(FINDING_SEVERITY_LOOK[finding.severity] ?? FINDING_SEVERITY_LOOK.LOW!).pill}>
-                          {finding.severity.toLowerCase()}
-                        </Pill>
-                      </div>
-                      <ul className="mt-2 list-disc space-y-1 pl-[3.75rem] text-xs text-ink-500">
-                        {finding.reasons.map((reason) => (
-                          <li key={reason}>{reason}</li>
-                        ))}
-                      </ul>
-                      {/*
-                        Button primitives, not hand-rolled ones. These two were
-                        the last raw <button>s carrying their own colour classes:
-                        they missed the 44px tap floor every other button in the
-                        app clears, and one of them named an `edge` step that
-                        generates no CSS at all, so it silently fell back to
-                        Tailwind's hard-coded #e5e7eb — a fixed grey that ignores
-                        the theme and is wrong in Dark.
-
-                        Only two of the five feedback values are reachable here,
-                        on purpose: this panel is a SUMMARY beside the expense
-                        figures, and the full set of answers (including "wrong
-                        match", the one the duplicate detector most needs) lives
-                        on the review queue, which the link below leads to.
-                      */}
-                      <div className="mt-3 flex flex-wrap items-center gap-2 pl-11">
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={() =>
-                            void reviewFinding(
-                              finding.id,
-                              "CONFIRMED",
-                              finding.type === "POSSIBLE_DUPLICATE"
-                                ? "DUPLICATE"
-                                : "CONFIRMED_UNUSUAL",
-                            )
-                          }
-                        >
-                          Confirm
-                          <span className="sr-only"> — {finding.title}</span>
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          onClick={() =>
-                            void reviewFinding(
-                              finding.id,
-                              "DISMISSED",
-                              "EXPECTED_TRANSACTION",
-                            )
-                          }
-                        >
-                          Expected / dismiss
-                          <span className="sr-only"> — {finding.title}</span>
-                        </Button>
-                        <Link
-                          to="/records/flagged"
-                          className="tap-inline text-xs link-action"
-                        >
-                          More options
-                          <span className="sr-only">
-                            {" "}
-                            for {finding.title}, on the review queue
-                          </span>
-                        </Link>
-                      </div>
-                    </li>
+                      finding={finding}
+                      onReview={(id, status, feedback) => void reviewFinding(id, status, feedback)}
+                    />
                   ))}
                 </ul>
-                {findings.length > FINDINGS_PER_PAGE ? (
-                  <Pagination
-                    page={visibleFindingsPage}
-                    pageSize={FINDINGS_PER_PAGE}
-                    totalItems={findings.length}
-                    onPageChange={setFindingsPage}
-                    itemNoun="findings"
-                    idPrefix="findings"
-                    className="mt-4 border-t border-paper-200 pt-3"
+                {findings.length > FINDINGS_PREVIEW_COUNT ? (
+                  <SeeAllFooter
+                    shown={FINDINGS_PREVIEW_COUNT}
+                    total={findings.length}
+                    noun="findings"
+                    to={EXPENSE_FINDINGS_PATH}
                   />
                 ) : null}
                 </>
               )}
               </Panel>
             ) : null}
-          </section>
-        </div>
-      )}
 
-      {/*
-        THE RECURRING BLOCK SITS OUTSIDE THE PERIOD-SCOPED PAGE ABOVE, on
-        purpose. Everything above is a reading of one window of expenses; a
-        schedule is not — an overdue salary run is overdue whether or not
-        anything was recorded in the last thirty days. Nested inside, it
-        disappeared for exactly the owner most likely to have forgotten a
-        payment: the one with an empty window.
-
-        Agenda first, candidates second. The agenda is what the owner asked
-        FinSight to watch; the candidates are FinSight asking a question back.
-      */}
-      {isInitialLoad || !showRecurringBlock ? null : (
-        <div id="expense-recurring" className="mt-6 scroll-mt-6 space-y-6">
-          {schedulesState === "stale" ? (
-            <Callout tone="warn">
-              <div>
-                <p role="status">
-                  <b className="font-semibold">Recurring payments couldn’t refresh.</b>{" "}
-                  Showing recently loaded schedules.
-                </p>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="mt-2"
-                  onClick={() => void loadRecurringSchedules(undefined, true)}
-                >
-                  Retry schedules
-                </Button>
-              </div>
-            </Callout>
-          ) : null}
-
-          {/* Hidden when there is no successful snapshot or the server
-              definitively reports that schedules are unavailable. */}
-          {recurringSchedules !== null ? (
-            <RecurringAgenda schedules={recurringSchedules} resetKey={expenseScopeKey} />
-          ) : null}
-
-          {hasCandidates ? (
-            <Panel title="Possible recurring expenses">
-              <SupplementNotice state={patternsState} label="recurring expense suggestions" />
-              <ul id={recurringDisclosure.contentId} className="space-y-2">
-                {candidatePatterns
-                  .slice(0, recurringDisclosure.visibleCount)
-                  .map((pattern) => (
-                    <li
-                      key={pattern.id}
-                      className="rounded-xl border border-paper-200 bg-paper-100/60 px-3.5 py-3"
-                    >
-                      <p className="text-sm font-semibold text-ink-900">
-                        {pattern.description}
-                      </p>
-                      <p className="mt-1 text-xs text-ink-500">
-                        {pattern.category.name} · about every{" "}
-                        {pattern.intervalDays} days ·{" "}
-                        <span className="figure">
-                          {formatMoney(pattern.expectedAmount)}
-                        </span>
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {/* HIDDEN, not disabled, when schedules are unavailable.
-                          POST /recurring-patterns/:id/confirm sits behind the
-                          same server gate as the schedules read, so the button
-                          would 404 — and a disabled control still advertises a
-                          capability, inviting the owner to hunt for what would
-                          re-enable it. "Not recurring" stays: PATCH
-                          /recurring-patterns/:id is ungated and still works, so
-                          dismissing a bad guess remains available. */}
-                        {canWatchPatterns ? (
-                          <Button
-                            type="button"
-                            size="sm"
-                            onClick={() => void confirmPattern(pattern.id)}
-                          >
-                            Watch this
-                            <span className="sr-only">
-                              {" "}
-                              — {pattern.description}
-                            </span>
-                          </Button>
-                        ) : null}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => void dismissPattern(pattern.id)}
-                        >
-                          Not recurring
-                          <span className="sr-only">
-                            {" "}
-                            — {pattern.description}
-                          </span>
-                        </Button>
-                      </div>
-                    </li>
-                  ))}
-              </ul>
-              <ListDisclosureControl
-                disclosure={recurringDisclosure}
-                total={candidatePatterns.length}
-                itemLabel="recurring suggestions"
-                className="mt-3"
+            {/* Hidden when there is no successful snapshot or the server
+                definitively reports that schedules are unavailable. */}
+            {showRecurringBlock && recurringSchedules !== null ? (
+              <RecurringAgenda
+                schedules={recurringSchedules}
+                resetKey={expenseScopeKey}
+                className="h-full min-w-0"
+                previewLimit={SCHEDULES_PREVIEW_COUNT}
+                seeAllTo={EXPENSE_RECURRING_PATH}
+                onEdit={(schedule) => {
+                  setEditingSchedule(schedule);
+                  setScheduleFormOpen(true);
+                }}
+                onAdd={() => {
+                  setEditingSchedule(null);
+                  setScheduleFormOpen(true);
+                }}
               />
-            </Panel>
-          ) : patternsState === "stale" || patternsState === "unavailable" ? (
-            <Panel title="Recurring expense suggestions">
-              <SupplementNotice state={patternsState} label="recurring expense suggestions" />
-            </Panel>
-          ) : null}
+            ) : null}
+
+            {showRecurringBlock && hasCandidates ? (
+              <Panel title="Possible recurring expenses" className="h-full min-w-0">
+                <SupplementNotice state={patternsState} label="recurring expense suggestions" />
+                <ul className="space-y-2">
+                  {candidatePatterns.slice(0, CANDIDATES_PREVIEW_COUNT).map((pattern) => (
+                    <CandidateRow
+                      key={pattern.id}
+                      pattern={pattern}
+                      canWatch={canWatchPatterns}
+                      onWatch={(id) => void confirmPattern(id)}
+                      onDismiss={(id) => void dismissPattern(id)}
+                    />
+                  ))}
+                </ul>
+                {candidatePatterns.length > CANDIDATES_PREVIEW_COUNT ? (
+                  <SeeAllFooter
+                    shown={CANDIDATES_PREVIEW_COUNT}
+                    total={candidatePatterns.length}
+                    noun="recurring suggestions"
+                    to={`${EXPENSE_RECURRING_PATH}#recurring-suggestions`}
+                  />
+                ) : null}
+              </Panel>
+            ) : patternsState === "stale" || patternsState === "unavailable" ? (
+              <Panel title="Recurring expense suggestions" className="h-full min-w-0">
+                <SupplementNotice state={patternsState} label="recurring expense suggestions" />
+              </Panel>
+            ) : null}
+          </div>
         </div>
       )}
+
+      <ScheduleFormModal
+        open={scheduleFormOpen}
+        schedule={editingSchedule}
+        onClose={() => setScheduleFormOpen(false)}
+        onSaved={() => void loadRecurring(undefined, true)}
+      />
 
       <AskFinSightButton originModule="Expense Insights" />
     </div>

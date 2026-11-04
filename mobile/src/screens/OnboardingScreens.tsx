@@ -19,7 +19,7 @@ import { ContentScrollView } from "../components/ContentScrollView";
  * rather than a dropdown, a bottom sheet rather than a dialog.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, BackHandler, KeyboardAvoidingView, Platform, TextInput, View } from "react-native";
+import { type TextInputInstance, AppState, BackHandler, KeyboardAvoidingView, Platform, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import {
   Button,
@@ -290,10 +290,10 @@ export function OnboardingScreen({
     return () => subscription.remove();
   }, [userId, created]);
 
-  const fundsRef = useRef<TextInput>(null);
-  const monthlyRef = useRef<TextInput>(null);
-  const daysRef = useRef<TextInput>(null);
-  const thresholdRef = useRef<TextInput>(null);
+  const fundsRef = useRef<TextInputInstance>(null);
+  const monthlyRef = useRef<TextInputInstance>(null);
+  const daysRef = useRef<TextInputInstance>(null);
+  const thresholdRef = useRef<TextInputInstance>(null);
 
   function update(key: BusinessTextField, value: string) {
     touched.current = true;

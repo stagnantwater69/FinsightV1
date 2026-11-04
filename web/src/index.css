@@ -797,6 +797,27 @@
     border-right: 1px solid rgb(var(--edge-brand));
   }
 
+  /* Headline-figure tiles: the KPI rows on the dashboard and the insight
+     pages. One calm surface for all of them, so a row of four reads as one
+     set of numbers rather than four differently coloured cards. Tone lives
+     in the IconTile and the text, never in a wash behind the figure.
+
+     The single exception is `data-alert`: a figure that is going the wrong
+     way (behind target, spending up, net negative) gets a short bar in the
+     danger tone across its top edge. Because it is the only colour a tile
+     surface can carry, it is noticed without the rest of the row shouting. */
+  .stat-tile {
+    @apply relative flex min-w-0 flex-col overflow-hidden rounded-xl border border-paper-200 bg-paper p-4 shadow-sm sm:p-5;
+  }
+
+  .stat-tile[data-alert="true"]::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 3px;
+    background-color: rgb(var(--tone-danger));
+  }
+
   /* AI / explanation cards, and the auth brand panel. Diagonal, lighter, so
      it reads as a distinct "this is FinSight speaking" surface rather than as
      more chrome. */
@@ -947,15 +968,77 @@
   /* Shared by every native <dialog> in the app — ConfirmDialog and the
      general-purpose Modal (components/Modal.tsx) both get this centering,
      entrance and backdrop treatment from one place. */
+  /* A transition rather than a keyframe so close() animates too: the
+     allow-discrete `display`/`overlay` entries keep the dialog in the top
+     layer until the fade finishes. Browsers without @starting-style or
+     allow-discrete simply open/close instantly. */
   .confirm-dialog,
   .modal-dialog {
     margin: auto;
-    animation: pop-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+    transition:
+      opacity 160ms ease,
+      transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+      overlay 220ms allow-discrete,
+      display 220ms allow-discrete;
+  }
+
+  .confirm-dialog[open],
+  .modal-dialog[open] {
+    opacity: 1;
+    transform: none;
+  }
+
+  @starting-style {
+    .confirm-dialog[open],
+    .modal-dialog[open] {
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+    }
   }
 
   .confirm-dialog::backdrop,
   .modal-dialog::backdrop {
+    background-color: rgb(var(--shadow) / 0);
+    transition:
+      background-color 200ms ease,
+      overlay 200ms allow-discrete,
+      display 200ms allow-discrete;
+  }
+
+  .confirm-dialog[open]::backdrop,
+  .modal-dialog[open]::backdrop {
     background-color: rgb(var(--shadow) / 0.55);
+  }
+
+  @starting-style {
+    .confirm-dialog[open]::backdrop,
+    .modal-dialog[open]::backdrop {
+      background-color: rgb(var(--shadow) / 0);
+    }
+  }
+
+  /* Disclosures open and close at the speed of the rest of the UI instead
+     of snapping. Scoped to the app's `.disclosure` summaries so the public
+     FAQ keeps its own look; unsupported browsers keep the instant toggle. */
+  @supports (interpolate-size: allow-keywords) {
+    details:has(> .disclosure) {
+      interpolate-size: allow-keywords;
+    }
+    details:has(> .disclosure)::details-content {
+      block-size: 0;
+      overflow: hidden;
+      opacity: 0;
+      transition:
+        block-size 220ms cubic-bezier(0.16, 1, 0.3, 1),
+        opacity 160ms ease,
+        content-visibility 220ms allow-discrete;
+    }
+    details[open]:has(> .disclosure)::details-content {
+      block-size: auto;
+      opacity: 1;
+    }
   }
 
   /* ---------------------------------------------------------------

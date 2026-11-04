@@ -1,5 +1,7 @@
 import { Pressable, useWindowDimensions, View } from "react-native";
-import { Swipeable } from "react-native-gesture-handler";
+// Gesture handler 3 removed the legacy `Swipeable`; this is its maintained
+// replacement (it runs on Reanimated). Same props for what this row uses.
+import ReanimatedSwipeable from "react-native-gesture-handler/ReanimatedSwipeable";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Card, Money, T } from "../../components/ui";
 import { TAP_FLOOR } from "../../components/touchTarget";
@@ -36,6 +38,7 @@ function SwipeAction({
   colour,
   onColour,
   onPress,
+  marginBottom,
 }: {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
@@ -43,6 +46,8 @@ function SwipeAction({
   /** The ink for the glyph and the word sitting on `colour`. */
   onColour: string;
   onPress: () => void;
+  /** Matches the row it sits behind, so the revealed block is the row's height. */
+  marginBottom: number;
 }) {
   return (
     <Pressable
@@ -52,7 +57,7 @@ function SwipeAction({
       style={{
         width: 84,
         minHeight: TAP_FLOOR,
-        marginBottom: space.sm,
+        marginBottom,
         backgroundColor: colour,
         alignItems: "center",
         justifyContent: "center",
@@ -65,18 +70,30 @@ function SwipeAction({
   );
 }
 
+/**
+ * Where a row sits in its day's group on the Records list.
+ *
+ * The list reads like a bank statement: one card per day, a hairline between
+ * its records, only the group's outer corners rounded. `solo` is a day with a
+ * single record. A row that is not in a list at all (`only`, the default) is
+ * a card of its own and shows its date, as it always did.
+ */
+export type RecordCardPosition = "only" | "solo" | "first" | "middle" | "last";
+
 export function RecordCard({
   r,
   categoryName,
   onPress,
   onDelete,
   onResolve,
+  position = "only",
 }: {
   r: RecordItem;
   categoryName: string;
   onPress?: () => void;
   onDelete?: () => void;
   onResolve?: () => void;
+  position?: RecordCardPosition;
 }) {
   const t = useTheme();
   const { width, fontScale } = useWindowDimensions();
@@ -117,6 +134,30 @@ export function RecordCard({
     .filter(Boolean)
     .join(", ");
 
+  const grouped = position !== "only";
+  const opensGroup = position === "only" || position === "solo" || position === "first";
+  const closesGroup = position === "only" || position === "solo" || position === "last";
+  const rowGap = closesGroup ? space.sm : 0;
+  /*
+   * A grouped row draws only its share of the group's outline: the sides, a
+   * top edge (the card's top on the first row, the divider on every other),
+   * and the bottom edge only on the last. No shadow inside a group: one per
+   * row would draw a seam at every divider.
+   */
+  const groupStyle = grouped
+    ? {
+        marginBottom: rowGap,
+        paddingVertical: space.md,
+        borderTopLeftRadius: opensGroup ? radius.lg : 0,
+        borderTopRightRadius: opensGroup ? radius.lg : 0,
+        borderBottomLeftRadius: closesGroup ? radius.lg : 0,
+        borderBottomRightRadius: closesGroup ? radius.lg : 0,
+        borderBottomWidth: closesGroup ? 1 : 0,
+        shadowOpacity: 0,
+        elevation: 0,
+      }
+    : { marginBottom: rowGap };
+
   const card = (
     <Pressable
       onPress={onPress}
@@ -127,7 +168,7 @@ export function RecordCard({
       accessibilityRole={onPress ? "button" : undefined}
       accessibilityLabel={onPress ? spoken : undefined}
     >
-      <Card style={{ marginBottom: space.sm }}>
+      <Card style={groupStyle}>
         <View style={{ flexDirection: "row", gap: space.md }}>
           {/*
             A medallion, coloured by what the row IS rather than by its
@@ -166,20 +207,26 @@ export function RecordCard({
                 style={{ maxWidth: "100%" }}
               />
             </View>
-            <T variant="caption" style={{ marginTop: 2 }}>
-              {r.date.slice(0, 10)} · {r.type === "expense" ? `Expense · ${categoryName}` : "Sales"}
-            </T>
-            {badges(r)}
             {/*
-              How the record got here, with the glyph that says it. Three
-              sources look alike as words in a caption and quite different as
-              icons, which is what makes "was this scanned or typed?"
-              answerable at a glance.
+              What it is, then how it got here, on one line. The source glyph
+              still carries "was this scanned or typed?" at a glance — three
+              sources look alike as words and quite different as icons — but it
+              no longer costs the card a row of its own. Inside a day group the
+              date is the group's header, so it is not repeated per row (it is
+              still in the spoken label above).
             */}
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: space.sm }}>
-              <Ionicons name={SOURCE_ICONS[r.source as RecordSource] ?? "ellipse-outline"} size={14} color={ink[400]} />
-              <T variant="caption">{RECORD_SOURCE_LABELS[r.source as RecordSource] ?? r.source}</T>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 5, rowGap: 2, marginTop: 2 }}>
+              <T variant="caption">
+                {grouped ? "" : `${r.date.slice(0, 10)} · `}
+                {r.type === "expense" ? `Expense · ${categoryName}` : "Sales"}
+                {" ·"}
+              </T>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <Ionicons name={SOURCE_ICONS[r.source as RecordSource] ?? "ellipse-outline"} size={13} color={ink[400]} />
+                <T variant="caption">{RECORD_SOURCE_LABELS[r.source as RecordSource] ?? r.source}</T>
+              </View>
             </View>
+            {badges(r)}
           </View>
 
           {onPress ? (
@@ -197,7 +244,7 @@ export function RecordCard({
   const needsResolving = r.reviewStatus === "Needs Review" || r.duplicateStatus === "Flagged";
 
   return (
-    <Swipeable
+    <ReanimatedSwipeable
       overshootRight={false}
       overshootLeft={false}
       onSwipeableWillOpen={() => haptics.tapped()}
@@ -217,6 +264,7 @@ export function RecordCard({
                 colour={statusSolid.critical}
                 onColour={textOnFill}
                 onPress={onDelete}
+                marginBottom={rowGap}
               />
             )
           : undefined
@@ -230,12 +278,13 @@ export function RecordCard({
                 colour={statusSolid.good}
                 onColour={textOnFill}
                 onPress={onResolve}
+                marginBottom={rowGap}
               />
             )
           : undefined
       }
     >
       {card}
-    </Swipeable>
+    </ReanimatedSwipeable>
   );
 }

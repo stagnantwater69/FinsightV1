@@ -5,7 +5,6 @@ import { T } from "./ui";
 import { TealPanel } from "./CoachKit";
 import { TAP_FLOOR } from "./touchTarget";
 import { ChartPlotPressArea, ChartValueReadout, useChartSelection, type ChartDatum, type ChartSelection } from "./ChartInteraction";
-import { KpiWatermark } from "./KpiWatermark";
 import { useTheme } from "../context/ThemeContext";
 import { formatMoney } from "../lib/money";
 import { deltaPillText, deltaTone, type SummaryDelta } from "../lib/dashboardFigures";
@@ -177,7 +176,6 @@ export function TodayGoalSummary({
   const goalSelection = useChartSelection(goalData, recovery.asOfDate);
   return (
     <View style={{ borderRadius: 24, borderWidth: 1, borderColor: t.accent[100], backgroundColor: t.ACCENT.surface, padding: space.lg }}>
-      <KpiWatermark name="calendar-outline" borderRadius={24} />
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
         <T accessibilityRole="header" style={{ fontSize: typeScale.caption, fontFamily: font.sansSemibold, color: t.ACCENT.text }}>
           Today's sales goal

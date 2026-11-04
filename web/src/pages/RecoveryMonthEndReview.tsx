@@ -10,7 +10,7 @@ import { EmptyState } from "../components/EmptyState";
 import { Field, SelectInput } from "../components/Field";
 import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
 import { monthLabel } from "../lib/reportingPeriod";
-import { Callout, Card, PageHead, Panel } from "../components/ui";
+import { Callout, PageHead, Panel } from "../components/ui";
 import { formatMoney } from "../components/Money";
 import { SkeletonPanel } from "../components/Skeleton";
 import type {
@@ -150,27 +150,29 @@ function MonthEndReview() {
         eyebrow="Insights"
         title="Month-end review"
         subtitle="Recap of an ended month. Nothing is changed automatically."
+        actions={
+          // In the header rather than in a card of its own: it is the page's
+          // one control, and a full-width card for a single select pushed
+          // the review itself down the screen.
+          <div className="w-56">
+            <Field label="Month to review" htmlFor="month-end-review-month">
+              <SelectInput
+                id="month-end-review-month"
+                value={month}
+                onChange={(e) => setChosen(e.target.value)}
+              >
+                {options.map((key) => (
+                  <option key={key} value={key}>
+                    {formatMonthLabel(key)}
+                  </option>
+                ))}
+              </SelectInput>
+            </Field>
+          </div>
+        }
       />
 
       <InsightsTabs />
-
-      <Card className="mb-5 p-4">
-        <div className="max-w-xs">
-          <Field label="Month to review" htmlFor="month-end-review-month">
-            <SelectInput
-              id="month-end-review-month"
-              value={month}
-              onChange={(e) => setChosen(e.target.value)}
-            >
-              {options.map((key) => (
-                <option key={key} value={key}>
-                  {formatMonthLabel(key)}
-                </option>
-              ))}
-            </SelectInput>
-          </Field>
-        </div>
-      </Card>
 
       {error ? (
         <Callout tone="warn">
@@ -205,15 +207,27 @@ function MonthEndReview() {
         </Callout>
       ) : data?.status === "reviewable" ? (
         <div className="space-y-5">
-          <Panel title={formatMonthLabel(data.month)} eyebrow="Month-end review">
-            <p className="text-sm text-ink-700">
-              Covered{" "}
-              <span className="figure font-semibold">{Math.round(data.coveragePercent)}%</span> of the monthly
-              expense basis:{" "}
-              <span className="figure font-semibold">{surplusOrShortfallText(data.surplusOrShortfall)}</span>.
-            </p>
+          <Panel
+            title={formatMonthLabel(data.month)}
+            eyebrow="Month-end review"
+            bodyClassName={data.monthlyExpenseBasis ? "grid gap-4 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] md:gap-8" : ""}
+          >
+            <div>
+              <p className="text-sm text-ink-700">
+                Covered{" "}
+                <span className="figure font-semibold">{Math.round(data.coveragePercent)}%</span> of the monthly
+                expense basis:{" "}
+                <span className="figure font-semibold">{surplusOrShortfallText(data.surplusOrShortfall)}</span>.
+              </p>
+              <div aria-hidden className="mt-3 h-2 w-full overflow-hidden rounded-full bg-paper-200">
+                <div
+                  className={`h-full rounded-full ${data.coveragePercent >= 100 ? "bg-tone-brand" : "bg-tone-danger"}`}
+                  style={{ width: `${Math.max(0, Math.min(100, data.coveragePercent))}%` }}
+                />
+              </div>
+            </div>
             {data.monthlyExpenseBasis ? (
-              <div className="mt-4 border-t border-paper-200 pt-4">
+              <div className="border-t border-paper-200 pt-4 md:border-l md:border-t-0 md:pl-8 md:pt-0">
                 <p className="text-xs font-semibold text-ink-500">Monthly expense basis</p>
                 <p className="figure mt-1 text-lg font-semibold text-ink-900">
                   {formatMoney(data.monthlyExpenseBasis.amount)}
@@ -225,67 +239,71 @@ function MonthEndReview() {
             ) : null}
           </Panel>
 
-          <Panel title="Strongest and weakest open days">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <div className="eyebrow mb-0.5">Strongest</div>
-                {data.strongestOpenDay ? (
-                  <p className="text-sm text-ink-900">
-                    <span className="font-semibold">{formatDayLabel(data.strongestOpenDay.date)}</span>{" "}
-                    · <span className="figure">{formatMoney(data.strongestOpenDay.sales)}</span>
-                  </p>
-                ) : (
-                  <p className="text-sm text-ink-500">No open days recorded that month.</p>
-                )}
+          {/* Three short facts about the month, side by side from lg up so
+              each one isn't a full-width card holding a single line. */}
+          <div className="grid gap-5 lg:grid-cols-3">
+            <Panel title="Strongest and weakest open days" className="min-w-0">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="eyebrow mb-0.5">Strongest</div>
+                  {data.strongestOpenDay ? (
+                    <p className="text-sm text-ink-900">
+                      <span className="font-semibold">{formatDayLabel(data.strongestOpenDay.date)}</span>{" "}
+                      · <span className="figure">{formatMoney(data.strongestOpenDay.sales)}</span>
+                    </p>
+                  ) : (
+                    <p className="text-sm text-ink-500">No open days recorded that month.</p>
+                  )}
+                </div>
+                <div>
+                  <div className="eyebrow mb-0.5">Weakest</div>
+                  {data.weakestOpenDay ? (
+                    <p className="text-sm text-ink-900">
+                      <span className="font-semibold">{formatDayLabel(data.weakestOpenDay.date)}</span>{" "}
+                      · <span className="figure">{formatMoney(data.weakestOpenDay.sales)}</span>
+                    </p>
+                  ) : (
+                    <p className="text-sm text-ink-500">No open days recorded that month.</p>
+                  )}
+                </div>
               </div>
-              <div>
-                <div className="eyebrow mb-0.5">Weakest</div>
-                {data.weakestOpenDay ? (
-                  <p className="text-sm text-ink-900">
-                    <span className="font-semibold">{formatDayLabel(data.weakestOpenDay.date)}</span>{" "}
-                    · <span className="figure">{formatMoney(data.weakestOpenDay.sales)}</span>
-                  </p>
-                ) : (
-                  <p className="text-sm text-ink-500">No open days recorded that month.</p>
-                )}
-              </div>
-            </div>
-          </Panel>
+            </Panel>
 
-          <Panel title="Missing or provisional days">
-            <p className="text-sm text-ink-700">
-              <span className="figure font-semibold">{data.missingOrProvisionalDayCount}</span> of{" "}
-              <span className="figure font-semibold">{data.openDayCount}</span> open days had missing or
-              unreviewed sales.
-            </p>
-          </Panel>
+            <Panel title="Missing or provisional days" className="min-w-0">
+              <p className="text-sm text-ink-700">
+                <span className="figure font-semibold">{data.missingOrProvisionalDayCount}</span> of{" "}
+                <span className="figure font-semibold">{data.openDayCount}</span> open days had missing or
+                unreviewed sales.
+              </p>
+            </Panel>
 
-          <Panel title="Original vs. final adjusted daily target">
-            <dl className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
-                  Original daily target
-                </dt>
-                <dd className="figure mt-0.5 text-lg font-semibold text-ink-900">
-                  {formatMoney(data.originalDailyTarget)}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
-                  Final adjusted daily target
-                </dt>
-                {data.finalAdjustedDailyTarget !== null ? (
+            <Panel title="Original vs. final adjusted daily target" className="min-w-0">
+              <dl className="grid grid-cols-2 gap-4">
+                <div>
+                  <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
+                    Original daily target
+                  </dt>
                   <dd className="figure mt-0.5 text-lg font-semibold text-ink-900">
-                    {formatMoney(data.finalAdjustedDailyTarget)}
+                    {formatMoney(data.originalDailyTarget)}
                   </dd>
-                ) : (
-                  <dd className="mt-0.5 text-sm text-ink-500">
-                    Not available: the last day of the month was closed.
-                  </dd>
-                )}
-              </div>
-            </dl>
-          </Panel>
+                </div>
+                <div>
+                  <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
+                    Final adjusted daily target
+                  </dt>
+                  {data.finalAdjustedDailyTarget !== null ? (
+                    <dd className="figure mt-0.5 text-lg font-semibold text-ink-900">
+                      {formatMoney(data.finalAdjustedDailyTarget)}
+                    </dd>
+                  ) : (
+                    <dd className="mt-0.5 text-sm text-ink-500">
+                      Not available: the last day of the month was closed.
+                    </dd>
+                  )}
+                </div>
+              </dl>
+            </Panel>
+          </div>
 
           {data.baselineAppearsOffFromPattern ? (
             <Callout tone="info">

@@ -11,7 +11,7 @@ import { useToast } from "../components/Toast";
  *
  * New writes cannot carry a future date (the server refuses them), but older
  * records can. While any exist, the transaction and insight pages show the
- * correction screen instead (FutureDateGate), and Quick add is hidden.
+ * correction screen instead (FutureDateGate).
  *
  * Checked when the business changes and, while blocked, on every navigation:
  * saving an edit sends the owner back through a gated page, which is the

@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useRef, useState } from "react";
-import { Platform, StyleSheet, TextInput, View, useWindowDimensions, type LayoutRectangle, type TextInputProps } from "react-native";
+import { type TextInputInstance, Platform, StyleSheet, TextInput, View, useWindowDimensions, type LayoutRectangle, type TextInputProps } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "../context/ThemeContext";
 import { MIN_RECOVERY_CODE_LENGTH, normaliseRecoveryCode } from "../lib/authValidation";
@@ -14,7 +14,7 @@ type CodeInputProps = Omit<TextInputProps, "value" | "onChangeText" | "style" | 
   error?: string | null;
 };
 
-export const CodeInput = forwardRef<TextInput, CodeInputProps>(function CodeInput(
+export const CodeInput = forwardRef<TextInputInstance, CodeInputProps>(function CodeInput(
   { label, value, onChangeText, error, onFocus, onBlur, onSelectionChange, onTouchStart, onTouchEnd, editable = true, testID, ...rest },
   ref,
 ) {
@@ -23,10 +23,10 @@ export const CodeInput = forwardRef<TextInput, CodeInputProps>(function CodeInpu
   const [focused, setFocused] = useState(false);
   const [availableWidth, setAvailableWidth] = useState(0);
   const [selection, setSelection] = useState({ start: value.length, end: value.length });
-  const inputRef = useRef<TextInput | null>(null);
+  const inputRef = useRef<TextInputInstance | null>(null);
   const cellLayouts = useRef<LayoutRectangle[]>([]);
   const touchStart = useRef<{ x: number; y: number; time: number } | null>(null);
-  const setInputRef = useCallback((node: TextInput | null) => {
+  const setInputRef = useCallback((node: TextInputInstance | null) => {
     inputRef.current = node;
     if (typeof ref === "function") ref(node);
     else if (ref) ref.current = node;
@@ -66,7 +66,7 @@ export const CodeInput = forwardRef<TextInput, CodeInputProps>(function CodeInpu
     }
     const nextStart = offsets[tappedIndex] ?? value.length;
     const nextEnd = nextStart + (characters[tappedIndex]?.length ?? 0);
-    const input = inputRef.current as (TextInput & { setSelectionRange?: (start: number, end: number) => void }) | null;
+    const input = inputRef.current as (TextInputInstance & { setSelectionRange?: (start: number, end: number) => void }) | null;
     if (typeof input?.setSelection === "function") input.setSelection(nextStart, nextEnd);
     else input?.setSelectionRange?.(nextStart, nextEnd);
     setSelection({ start: nextStart, end: nextEnd });

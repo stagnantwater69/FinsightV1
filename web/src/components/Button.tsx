@@ -44,8 +44,10 @@ const SIZES: Record<Size, string> = {
   lg: "min-h-tap px-5 py-3 text-base",
 };
 
+// The press scale confirms a click registered before the request returns.
+// `:not(:disabled)` rather than `enabled:` so ButtonLink's <a> gets it too.
 const BASE =
-  "inline-flex items-center justify-center gap-2 rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex items-center justify-center gap-2 rounded-lg transition duration-150 motion-safe:[&:active:not(:disabled)]:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60";
 
 /** Exported so a rare non-`<button>`/non-`<Link>` element (an in-page `<a href="#…">`
  *  scroll anchor, e.g. Recovery Target's state-specific primary action) can still

@@ -1140,7 +1140,7 @@ function Themed({ fontsReady }: { fontsReady: boolean }) {
   return (
     <>
       {/* Screen-specific bars (including the dark launch plate) override this default. */}
-      <StatusBar barStyle={t.statusBarStyle === "dark" ? "dark-content" : "light-content"} backgroundColor={t.surface} />
+      <StatusBar barStyle={t.statusBarStyle === "dark" ? "dark-content" : "light-content"} />
       <NavigationContainer ref={navigationRef} theme={navThemeFor(t)}>
         <AuthProvider>
           <Root fontsReady={fontsReady && themeReady} />

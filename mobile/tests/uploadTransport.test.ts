@@ -181,7 +181,14 @@ describe("the call sites", () => {
     expect(withFormData.length).toBeGreaterThan(0);
 
     for (const { path, text } of withFormData) {
-      expect(text, `${path} appends a file part without a uri`).toMatch(/\.append\(\s*["'][^"']+["']\s*,\s*\{[^}]*uri/s);
+      expect(text, `${path} appends a file part without a uri`)
+        .toMatch(/(?:\.append|appendLocalFile\(\s*\w+\s*,)\(?\s*["'][^"']+["']\s*,\s*\{[^}]*uri/s);
     }
+  });
+
+  /** The shared helper keeps the URI part off the web; only the web build reads bytes itself. */
+  it("keeps the URI part in appendLocalFile everywhere but the web build", () => {
+    const helper = readFileSync(join(SRC, "lib", "localFilePart.ts"), "utf8");
+    expect(helper).toMatch(/if \(Platform\.OS !== "web"\) \{\s*form\.append\(field, part as any\);\s*return;/);
   });
 });

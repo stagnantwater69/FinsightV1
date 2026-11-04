@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, Switch, TextInput, useWindowDimensions, View } from "react-native";
+import { type TextInputInstance, Pressable, Switch, useWindowDimensions, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Card, ErrorNote, Field, T } from "../components/ui";
 import { useTheme } from "../context/ThemeContext";
@@ -63,10 +63,10 @@ export function RecoveryNotificationPreferencesScreen() {
   const loadRequest = useRef(0);
   const savingRequest = useRef<object | null>(null);
   const [loadedGeneration, setLoadedGeneration] = useState<number | null>(null);
-  const thresholdRef = useRef<TextInput>(null);
-  const quietStartRef = useRef<TextInput>(null);
-  const quietEndRef = useRef<TextInput>(null);
-  const minHoursRef = useRef<TextInput>(null);
+  const thresholdRef = useRef<TextInputInstance>(null);
+  const quietStartRef = useRef<TextInputInstance>(null);
+  const quietEndRef = useRef<TextInputInstance>(null);
+  const minHoursRef = useRef<TextInputInstance>(null);
 
   useEffect(() => {
     savingRequest.current = null;

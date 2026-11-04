@@ -90,8 +90,11 @@ export function DailySpendChart({ daily, bucket = "day" }: { daily: DailyExpense
 
       {/* `text-ink-500` is inherited by the axes and grid, which are drawn with
           currentColor so they follow the theme — see CategoryBreakdownChart. */}
-      <div className="min-w-0 text-ink-500">
-        <ResponsiveContainer width="100%" height={200}>
+      {/* Taller from lg up, where the chart sits beside the Expense insight
+          summary card and would otherwise leave the bottom of its own card
+          empty. A phone keeps the compact height. */}
+      <div className="h-[200px] min-w-0 text-ink-500 lg:h-[300px]">
+        <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={daily} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="dailySpendFill" x1="0" y1="0" x2="0" y2="1">

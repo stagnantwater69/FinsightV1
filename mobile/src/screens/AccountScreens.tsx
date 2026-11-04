@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Platform, Pressable, TextInput, useWindowDimensions, View } from "react-native";
+import { type TextInputInstance, ActivityIndicator, Alert, Image, KeyboardAvoidingView, Platform, Pressable, useWindowDimensions, View } from "react-native";
 import { useFocusEffect, usePreventRemove } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -214,9 +214,9 @@ export function EditProfileScreen({ navigation }: MoreScreenProps<"EditProfile">
   const request = useRef(false);
   const uploading = useRef(false);
   const current = useCurrentAccount();
-  const firstRef = useRef<TextInput>(null);
-  const lastRef = useRef<TextInput>(null);
-  const phoneRef = useRef<TextInput>(null);
+  const firstRef = useRef<TextInputInstance>(null);
+  const lastRef = useRef<TextInputInstance>(null);
+  const phoneRef = useRef<TextInputInstance>(null);
   const saved = useAccountGuard(navigation, busy || photoBusy, JSON.stringify(form) !== JSON.stringify(initial.current));
 
   const set = (key: ProfileField) => (value: string) => {
@@ -297,9 +297,9 @@ export function ChangePasswordScreen({ navigation }: MoreScreenProps<"ChangePass
   const [busy, setBusy] = useState(false);
   const request = useRef(false);
   const current = useCurrentAccount();
-  const currentRef = useRef<TextInput>(null);
-  const nextRef = useRef<TextInput>(null);
-  const confirmRef = useRef<TextInput>(null);
+  const currentRef = useRef<TextInputInstance>(null);
+  const nextRef = useRef<TextInputInstance>(null);
+  const confirmRef = useRef<TextInputInstance>(null);
   const saved = useAccountGuard(navigation, busy, Object.values(form).some(Boolean));
   const set = (key: ChangePasswordField) => (value: string) => {
     setForm((previous) => ({ ...previous, [key]: value }));
@@ -365,7 +365,7 @@ export function DeleteAccountScreen({ navigation }: MoreScreenProps<"DeleteAccou
   const request = useRef(false);
   const confirmation = useRef(false);
   const current = useCurrentAccount();
-  const passwordRef = useRef<TextInput>(null);
+  const passwordRef = useRef<TextInputInstance>(null);
   useAccountGuard(navigation, busy, false);
 
   function confirmDeletion() {

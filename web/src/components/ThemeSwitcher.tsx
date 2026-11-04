@@ -37,8 +37,10 @@ export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label={`Theme — ${THEME_LABELS[theme].label}`}
-        className={`tap rounded-xl text-ink-600 transition hover:bg-paper-100 hover:text-ink-900 ${
-          compact ? "h-11 w-11" : "h-11 gap-2 px-2.5"
+        className={`tap rounded-xl text-ink-600 transition hover:text-ink-900 ${
+          compact
+            ? "h-11 w-11 border border-paper-200/70 bg-paper/70 shadow-sm backdrop-blur hover:bg-paper"
+            : "h-11 gap-2 px-2.5 hover:bg-paper-100"
         }`}
       >
         <Current className="h-[18px] w-[18px]" />

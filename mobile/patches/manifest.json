@@ -77,8 +77,8 @@
   },
   {
     "packageName": "react-native-screens",
-    "version": "4.26.2",
-    "patchFile": "react-native-screens+4.26.2.patch",
+    "version": "4.30.1",
+    "patchFile": "react-native-screens+4.30.1.patch",
     "patchSha256": "1942729afbc53c7c8442d5296df9763a1ca2d415b6496b73db1b76c063a08bbb",
     "files": [
       {
@@ -93,8 +93,8 @@
       },
       {
         "path": "node_modules/react-native-screens/src/components/Screen.web.tsx",
-        "beforeSha256": "76b63d6e1d22ef0289ede87ccc877a5372c887e8b1e76445f64d12638163a6a0",
-        "afterSha256": "a5e3c018e2bfa5173851cc346911e591bc04372f610c4c61eaedfaaeef2a2663"
+        "beforeSha256": "d2f20124ea5bbf41b28613b878457eb4f0b16869fb8b8713d993c4696fd44008",
+        "afterSha256": "b19d5faa300cd1e0f3777bec0496c01e47b1233acbf97145fa0a6530cc3672ce"
       }
     ]
   }

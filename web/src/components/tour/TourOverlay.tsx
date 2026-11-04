@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { useTourOptional } from "../../context/TourContext";
+import { useTourOptional } from "../../context/tourContextValue";
 import { useFocusTrap, useMediaQuery } from "../../lib/hooks";
 import { Button } from "../Button";
 import { IconArrowRight } from "../icons";

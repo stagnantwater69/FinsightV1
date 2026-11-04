@@ -37,6 +37,9 @@ export interface ImportBatchSummary {
 
 /** Status badges, shared by the list, Edit and the review queue. */
 export function badges(r: RecordItem) {
+  // Nothing flagged, nothing rendered: an empty row still carried its top
+  // margin and padded every unflagged card.
+  if (r.duplicateStatus !== "Flagged" && r.reviewStatus !== "Needs Review" && !r.largeExpenseFlag) return null;
   return (
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: space.sm }}>
       {r.duplicateStatus === "Flagged" ? <AlertBadge kind="duplicate" /> : null}

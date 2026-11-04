@@ -308,10 +308,74 @@ function financialFacts(context: string): FinancialFact[] {
   });
 }
 
+/** Fact tags a claim cites, including the combined "[fact:f6, f7]" form models write. */
+function citedFactTags(claim: string): string[] {
+  return [...claim.matchAll(/\[fact:([^\]]*)\]/g)]
+    .flatMap((match) => match[1]!.split(/[,\s]+/).filter((id) => /^f\d+$/.test(id)))
+    .map((id) => `[fact:${id}]`);
+}
+
+const TRAILING_TAGS = /^[\s*_)]*(?:\[[^\]]*\][\s*_)]*)*/;
+
+/**
+ * The words that describe one figure, in order of preference:
+ *
+ *   1. Its own clause, since the previous figure: "with **Rent** [fact:f7]
+ *      making up the largest share at PHP 9,500.00 [fact:f7]". A tag for a
+ *      different fact closes the claim before it, as does a comma or dash.
+ *   2. When the figure opens its clause ("…the monthly pace you need, with PHP
+ *      2,670.00 recorded in sales"), the words after it, up to the next
+ *      clause, tag or figure.
+ *   3. The whole sentence.
+ *
+ * A percentage that opens its clause and is followed by "of …" names only its
+ * base ("37.0% of your total recorded expenses"), not its subject, so it gets
+ * none: its value still has to be in the context and in any fact it cites.
+ */
+function figureSubjects(
+  claim: string,
+  figure: StatedFigure,
+  previousEnd: number,
+  position: number,
+  ownTags: readonly string[],
+  known: (text: string) => string[],
+): string[] {
+  const after = claim.slice(position + figure.raw.length);
+  const before = claim.slice(previousEnd, position)
+    .replace(TRAILING_TAGS, (tags) => " ".repeat(tags.length))
+    .replace(/\[(?:ref|page):[^\]]*\]/g, (tag) => " ".repeat(tag.length))
+    .replace(/\[fact:[^\]]*\]/g, (tag) => citedFactTags(tag).every((t) => ownTags.includes(t)) ? " ".repeat(tag.length) : "|");
+  const own = known(before.split(/\||(?<!\d),|,(?!\d)|[;:]|[—–]/).at(-1)!);
+  if (own.length > 0) return own;
+  // Its own tag already says which line it came from; words after it are commentary.
+  if (ownTags.length > 0) return [];
+
+  const rest = after.replace(TRAILING_TAGS, "");
+  if (figure.kind === "percent" && /^of\b/i.test(rest)) return [];
+  const next = statedFigures(rest)[0];
+  const stops = [rest.search(/\[/), next ? rest.indexOf(next.raw) : -1, rest.search(/[,;:—–]|[.!?](?:\s|$)/)]
+    .filter((i) => i >= 0);
+  const following = known(rest.slice(0, stops.length > 0 ? Math.min(...stops) : undefined));
+  return following.length > 0 ? following : known(claim);
+}
+
 function claimParts(text: string): string[] {
   return text.split("\n").flatMap((line) => /^\s*(?:[-*•]|\d+\.)\s/.test(line)
     ? [line]
     : line.split(/(?<=[.!?])\s+/));
+}
+
+/** Drops the given claims while keeping the remaining sentences in their own paragraphs. */
+function withoutClaims(text: string, claims: ReadonlySet<string>): string {
+  return text.split("\n")
+    .map((line) => {
+      const parts = claimParts(line);
+      if (!parts.some((part) => claims.has(part))) return line;
+      const kept = parts.filter((part) => !claims.has(part)).join(" ").trim();
+      return kept.length > 0 ? kept : null;
+    })
+    .filter((line): line is string => line !== null)
+    .join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function hypothesisClaim(text: string, figurePosition: number, figureLength: number): boolean {
@@ -354,24 +418,44 @@ function unsupportedClaims(
   return claimParts(text).filter((claim) => {
     const figures = statedFigures(claim);
     if (figures.length === 0) return false;
-    const citedTags: string[] = claim.match(/\[fact:f\d+\]/g) ?? [];
-    const citedFacts = facts.filter((fact) => citedTags.includes(fact.tag));
+    const citedTags = citedFactTags(claim);
+    const sentenceTags = [...claim.matchAll(/\[fact:[^\]]*,[^\]]*\]/g)].flatMap((tag) => citedFactTags(tag[0]));
     if (citedTags.some((tag) => !facts.some((fact) => fact.tag === tag))) return true;
     const namedRecords = [...references].filter(([tag, record]) => claim.includes(tag)
       || (record.label.length >= 3 && claim.toLowerCase().includes(record.label.toLowerCase())));
-    let cursor = 0;
-    return figures.some((figure) => {
-      const previousEnd = cursor;
-      const position = claim.indexOf(figure.raw, cursor);
-      cursor = position + figure.raw.length;
+    // statedFigures lists money before percentages; the checks below read the
+    // claim left to right, so put each figure back at its place in the text.
+    const taken = new Set<number>();
+    const located = figures.map((figure) => {
+      let position = claim.indexOf(figure.raw);
+      while (taken.has(position)) position = claim.indexOf(figure.raw, position + 1);
+      taken.add(position);
+      return { figure, position };
+    }).sort((left, right) => left.position - right.position);
+    return located.some(({ figure, position }, index) => {
+      const previous = located[index - 1];
+      const previousEnd = previous ? previous.position + previous.figure.raw.length : 0;
       if (isKnownFigure(figure, questionKnown) && hypothesisClaim(claim, position, figure.raw.length)) return false;
       if (!isKnownFigure(figure, contextKnown)) {
         return true;
       }
-      if (citedTags.length > 0 && !citedFacts.some((fact) => isKnownFigure(figure, fact.figures))) return true;
+      // A figure is bound to the fact tag in its own clause ("PHP 2,670.00
+      // recorded in sales [fact:f13]"), not to a tag a later figure carries
+      // ("Rent at PHP 19,000.00, followed by Wages at PHP 14,400.00 [fact:f9]").
+      const next = located[index + 1];
+      const tail = claim.slice(position + figure.raw.length, next ? next.position : undefined);
+      const clauseEnd = tail.search(/(?<!\d),|,(?!\d)|[;—–]|[.!?](?:\s|$)/);
+      const boundTags = citedFactTags(tail.slice(0, clauseEnd >= 0 ? clauseEnd : undefined).match(/\[fact:[^\]]*\]/)?.[0] ?? "");
+      if (boundTags.length > 0
+        && !facts.some((fact) => boundTags.includes(fact.tag) && isKnownFigure(figure, fact.figures))) return true;
+      // A combined tag ("… 24 operating days [fact:f14, f15].") cites the whole
+      // sentence, so every untagged figure in it must come from those lines.
+      if (boundTags.length === 0 && sentenceTags.length > 0
+        && !facts.some((fact) => sentenceTags.includes(fact.tag) && isKnownFigure(figure, fact.figures))) return true;
       const nearby = claim.slice(Math.max(0, position - 35), position).toLowerCase();
       const comparison = /\b(?:usual|average|mean|normally|share|target|gap|basis|karaniwan|average)\b/.test(nearby);
-      if (figure.kind === "money" && namedRecords.length > 0 && !comparison) {
+      // A figure bound to its own fact is not about a record that happens to share the sentence.
+      if (figure.kind === "money" && namedRecords.length > 0 && !comparison && boundTags.length === 0) {
         const nearest = namedRecords.map(([tag, record]) => ({
           record,
           distance: Math.min(...[claim.indexOf(tag), claim.toLowerCase().indexOf(record.label.toLowerCase())]
@@ -381,17 +465,25 @@ function unsupportedClaims(
         if (!isKnownFigure(figure, [{ kind: "money", value: nearest.record.amount }])) return true;
       }
       const candidates = facts.filter((fact) => isKnownFigure(figure, fact.figures));
-      const localSubjects = subjectWords(claim.slice(previousEnd, position))
-        .filter((word) => allSubjects.has(word));
-      const claimSubjects = localSubjects.length > 0 ? localSubjects
-        : subjectWords(claim).filter((word) => allSubjects.has(word));
+      const known = (text: string) => subjectWords(text).filter((word) => allSubjects.has(word));
+      const claimSubjects = figureSubjects(claim, figure, previousEnd, position, boundTags, known);
       const distinguishingSubjects = claimSubjects.filter((subject) =>
         facts.some((fact) => !fact.subjects.includes(subject)),
       );
       const requiredSubjects = distinguishingSubjects.length > 0 ? distinguishingSubjects : claimSubjects;
-      // Named subjects must agree with the source line; a value alone is insufficient.
-      return requiredSubjects.length > 0 && !candidates.some((fact) =>
-        requiredSubjects.every((subject) => fact.subjects.includes(subject)));
+      if (requiredSubjects.length === 0) return false;
+      // Named subjects must agree with the source line; a value alone is
+      // insufficient. Among the lines that state a figure of the same kind,
+      // the figure's own line has to be the best match for the words around
+      // it: "Rent … expense at PHP 19,000" fits the Rent line even though
+      // "expense" also names another line, while "current funds are PHP 500"
+      // does not fit a line about starting funds.
+      const overlap = (fact: FinancialFact) => requiredSubjects.filter((subject) => fact.subjects.includes(subject)).length;
+      const best = Math.max(...facts.filter((fact) => fact.figures.some((known) => known.kind === figure.kind)).map(overlap));
+      // A figure cited by its own tag may instead share a subject with that
+      // line: a wordier line elsewhere ("unusual for this category") must not
+      // outscore the exact line the figure came from.
+      return !candidates.some((fact) => overlap(fact) === best || (boundTags.includes(fact.tag) && overlap(fact) > 0));
     });
   });
 }
@@ -518,7 +610,7 @@ export async function groundAnswer(
     }
     const stillInvalid = new Set(unsupportedClaims(draft.body, askInput.context, askInput.question, references));
     if (stillInvalid.size > 0) {
-      draft = { body: claimParts(draft.body).filter((claim) => !stillInvalid.has(claim)).join("\n").trim(), followUps: draft.followUps };
+      draft = { body: withoutClaims(draft.body, stillInvalid), followUps: draft.followUps };
       amountCheck = "trimmed";
     }
   }

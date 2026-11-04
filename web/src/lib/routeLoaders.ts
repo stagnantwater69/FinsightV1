@@ -26,6 +26,10 @@ export const loadImportCsvRoute = () => import("../pages/ImportCsv");
 export const loadFlaggedRecordsRoute = () => import("../pages/FlaggedRecords");
 export const loadDashboardRoute = () => import("../pages/Dashboard");
 export const loadExpenseInsightRoute = () => import("../pages/ExpenseInsight");
+export const loadUnusualExpensesRoute = () => import("../pages/UnusualExpenses");
+export const loadExpenseFindingsRoute = () => import("../pages/ExpenseFindings");
+export const loadRecurringExpensesRoute = () => import("../pages/RecurringExpenses");
+export const loadPaymentCalendarRoute = () => import("../pages/PaymentCalendar");
 export const loadRecoveryInsightRoute = () => import("../pages/RecoveryInsightPage");
 export const loadRecoveryMonthEndReviewRoute = () => import("../pages/RecoveryMonthEndReview");
 export const loadSpendingImpactRoute = () => import("../pages/SpendingImpact");
@@ -58,6 +62,10 @@ const protectedRouteLoaders: Array<{
   { matches: (path) => path === "/records/csv-imports/new", load: loadImportCsvRoute },
   { matches: (path) => path === "/records/flagged", load: loadFlaggedRecordsRoute },
   { matches: (path) => path === "/insights/expense-behavior", load: loadExpenseInsightRoute },
+  { matches: (path) => path === "/insights/expense-behavior/unusual", load: loadUnusualExpensesRoute },
+  { matches: (path) => path === "/insights/expense-behavior/findings", load: loadExpenseFindingsRoute },
+  { matches: (path) => path === "/insights/expense-behavior/recurring", load: loadRecurringExpensesRoute },
+  { matches: (path) => path === "/calendar", load: loadPaymentCalendarRoute },
   { matches: (path) => path === "/insights/spending-impact", load: loadSpendingImpactRoute },
   { matches: (path) => path === "/insights/recovery/month-end-review", load: loadRecoveryMonthEndReviewRoute },
   { matches: (path) => path === "/insights/recovery", load: loadRecoveryInsightRoute },

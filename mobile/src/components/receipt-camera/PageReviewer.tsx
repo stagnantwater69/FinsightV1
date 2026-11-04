@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { type ScrollViewInstance, Image, Pressable, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../../context/ThemeContext';
 import { font, typeScale } from '../../theme/tokens';
@@ -33,7 +33,7 @@ export interface PageReviewerProps {
  */
 export function PageReviewer({ noun = 'page', pages, index, onAddSlot, showAddPage, locked, busy, hint, onSelectPage, onAddSlotChange, onAddPage, onDeletePage }: PageReviewerProps) {
   const t = useTheme();
-  const scroller = useRef<ScrollView>(null);
+  const scroller = useRef<ScrollViewInstance>(null);
   const [box, setBox] = useState({ width: 0, height: 0 });
   const [comparing, setComparing] = useState(false);
   const slotCount = pages.length + (showAddPage ? 1 : 0);

@@ -19,8 +19,15 @@ vi.mock('@react-navigation/native', () => ({
   },
 }));
 
-vi.mock('react-native-gesture-handler', () => ({
-  Swipeable: ({
+// The gesture-aware list needs the native gesture module; off-device the
+// plain React Native list renders the same rows.
+vi.mock('react-native-gesture-handler', async () => {
+  const RN = await import('react-native');
+  return { FlatList: RN.FlatList, RefreshControl: RN.RefreshControl };
+});
+
+vi.mock('react-native-gesture-handler/ReanimatedSwipeable', () => ({
+  default: ({
     children,
     renderLeftActions,
     renderRightActions,

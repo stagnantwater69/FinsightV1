@@ -56,13 +56,13 @@ export function NotificationBell() {
                 ? `Notifications — ${unreadCount} unread`
                 : "Notifications — none unread"
         }
-        className="tap relative h-11 w-11 rounded-xl text-ink-600 transition hover:bg-paper-100 hover:text-ink-900"
+        className="tap relative h-11 w-11 rounded-xl border border-paper-200/70 bg-paper/70 text-ink-600 shadow-sm backdrop-blur transition hover:bg-paper hover:text-ink-900"
       >
         <IconBell className="h-[18px] w-[18px]" />
         {unreadCount > 0 ? (
           <span
             aria-hidden
-            className="absolute right-1 top-1 flex h-[17px] min-w-[17px] animate-badge-in items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none text-white ring-2 ring-paper"
+            className="absolute -right-1 -top-1 flex h-[17px] min-w-[17px] animate-badge-in items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none text-white ring-2 ring-paper"
             style={{ backgroundColor: STATUS_TEXT_COLORS.critical }}
           >
             {unreadCount > 9 ? "9+" : unreadCount}

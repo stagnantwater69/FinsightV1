@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Platform, Pressable, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent, type PointerEvent, type StyleProp, type ViewStyle } from "react-native";
+import { type ViewInstance, Platform, Pressable, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent, type PointerEvent, type StyleProp, type ViewStyle } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useReportingPeriod } from "../context/ReportingPeriodContext";
@@ -160,7 +160,7 @@ export function ChartPlotPressArea({ selection, count, chartLabel, children, ind
 
 export function ChartValueReadout({ data, selection, chartLabel }: { data: readonly ChartDatum[]; selection: ChartSelection; chartLabel: string }) {
   const t = useTheme();
-  const root = useRef<View | null>(null);
+  const root = useRef<ViewInstance | null>(null);
   const [exploreFocused, setExploreFocused] = useState(false);
   const current = useRef(selection);
   current.current = selection;

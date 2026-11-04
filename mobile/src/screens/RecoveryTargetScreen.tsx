@@ -1,6 +1,6 @@
 import { CONTENT_WIDTH, ContentScrollView } from "../components/ContentScrollView";
 import { useEffect, useRef, useState } from "react";
-import { Alert as RNAlert, Modal, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { type ScrollViewInstance, Alert as RNAlert, Modal, Pressable, StyleSheet, View } from "react-native";
 import { useReducedMotion } from "../lib/useReducedMotion";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -91,7 +91,7 @@ function RecoveryTargetContent({ navigation }: InsightsScreenProps<"RecoveryTarg
   /** The full what-if sheet, for a typed amount. */
   const [scenarioOpen, setScenarioOpen] = useState(false);
   // In-page jumps for the primary action: "View today's plan" and "Review month summary".
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const planY = useRef<number | null>(null);
   const daysY = useRef<number | null>(null);
   // 31 days so a month view carries every day it has had; the server bounds

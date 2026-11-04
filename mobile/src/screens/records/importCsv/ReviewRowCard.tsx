@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef } from "react";
-import { Pressable, TextInput, useWindowDimensions, View } from "react-native";
+import { Pressable, useWindowDimensions, View, type TextInputInstance } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Callout, Field, T } from "../../../components/ui";
 import { ResultDetails } from "../../../components/ResultDetails";
@@ -46,7 +46,7 @@ export const ReviewRowCard = memo(function ReviewRowCard({
   const { width, fontScale } = useWindowDimensions();
   const stackedSummary = fontScale > 1.2;
   const stackedFields = width < 360 || fontScale > 1.2;
-  const inputs = useRef<Partial<Record<CorrectableField, TextInput | null>>>({});
+  const inputs = useRef<Partial<Record<CorrectableField, TextInputInstance | null>>>({});
   useEffect(() => {
     if (draftError) inputs.current[draftError.field as CorrectableField]?.focus();
   }, [draftError]);

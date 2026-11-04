@@ -182,7 +182,7 @@ export function Field({
           colour alone — the same rule Alert.tsx and ui.tsx follow.
         */}
         {error ? (
-          <p id={errorId} role="alert" className="mt-1.5 flex items-start gap-1.5 text-xs text-tone-danger">
+          <p id={errorId} role="alert" className="mt-1.5 flex animate-fade-up items-start gap-1.5 text-xs text-tone-danger">
             <span aria-hidden className="mt-px shrink-0">
               ⚠
             </span>
@@ -632,7 +632,7 @@ export function FormError({ children }: { children: ReactNode }) {
       ref={ref}
       role="alert"
       tabIndex={-1}
-      className="flex items-start gap-2.5 rounded-lg bg-tint-danger p-3 text-sm text-tone-danger outline-none ring-1 ring-edge-danger"
+      className="flex animate-fade-up items-start gap-2.5 rounded-lg bg-tint-danger p-3 text-sm text-tone-danger outline-none ring-1 ring-edge-danger"
     >
       <span aria-hidden className="mt-px shrink-0">
         ⚠

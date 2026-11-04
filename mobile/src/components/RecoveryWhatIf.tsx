@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Pressable, useWindowDimensions, View } from "react-native";
+import { type ViewInstance, Pressable, useWindowDimensions, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { ErrorNote, Money, T } from "./ui";
 import { TAP_FLOOR } from "./touchTarget";
@@ -66,7 +66,7 @@ export function RecoveryWhatIfCard({
   const seq = useRef(0);
   const request = useRef<AbortController | null>(null);
   const operation = useImportOperation(businessProfileId);
-  const track = useRef<View>(null);
+  const track = useRef<ViewInstance>(null);
   const trackLeft = useRef(0);
   const [trackWidth, setTrackWidth] = useState(0);
   const amount = Math.round((basis * pct) / 100);

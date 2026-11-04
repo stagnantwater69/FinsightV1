@@ -18,10 +18,10 @@ export default defineConfig({
      * address (see backend/.env), so the same link works from both.
      */
     host: true,
-    // Approve this shared preview explicitly; a wildcard would trust other
-    // users' tunnels too. Vite also accepts extra exact hostnames through the
-    // __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS shell environment variable.
-    allowedHosts: ['l5v15rgq-5173.asse.devtunnels.ms'],
+    // A shared preview's tunnel hostname changes per session, so it is not
+    // kept here; a wildcard would trust other users' tunnels too. Pass the
+    // exact hostname through the __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS shell
+    // environment variable instead.
     /*
      * The frontend calls a relative `/api/v1` base (see web/.env) rather
      * than an absolute `http://localhost:4000`, and this proxy is what makes
@@ -64,5 +64,8 @@ export default defineConfig({
       tsconfig: './tsconfig.app.json',
     },
     setupFiles: ['./src/test/setup.ts'],
+    // One worker per core starved jsdom renders past their wait timeouts on a
+    // busy 12-core workstation; different tests failed each run.
+    maxWorkers: '50%',
   },
 })

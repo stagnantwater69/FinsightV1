@@ -371,7 +371,7 @@ export function FlaggedRecordsScreen() {
   }), [load, selectedBusinessProfileId]);
 
   useEffect(() => {
-    let previousState = AppState.currentState;
+    let previousState = AppState.currentState ?? "";
     const subscription = AppState.addEventListener("change", (nextState) => {
       const returningToForeground =
         /inactive|background/.test(previousState) && nextState === "active";
@@ -523,7 +523,9 @@ export function FlaggedRecordsScreen() {
         <View style={{ alignSelf: "flex-start" }}><AlertBadge kind="duplicate" /></View>
         <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: space.sm }}>
           <View style={{ flexGrow: 1, flexShrink: 1, minWidth: 120, gap: space.xs }}>
-            <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>{group.batch?.title ?? (homogeneous ? first.description : "Records with a possible match")}</T>
+            {/* One line, like every card title on this screen: the full text of
+                each record is in "Records in this group" below. */}
+            <T numberOfLines={1} style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>{group.batch?.title ?? (homogeneous ? first.description : "Records with a possible match")}</T>
             <T variant="caption">{group.batch ? `Imported ${group.batch.uploadDate.slice(0, 10)} · ${count} records shown` : homogeneous ? recordMeta(first) : `${count} records shown`}</T>
           </View>
           <View style={{ gap: space.xs }}>
@@ -607,14 +609,14 @@ export function FlaggedRecordsScreen() {
             Same reason as Notifications: "Nothing needs your attention" over a
             failed fetch is an all-clear this screen has no grounds to give.
           */
-          null
+          undefined
         ) : visibleRecords.length === 0 ? (
           <EmptyState
             title="Nothing needs your attention"
             icon="✓"
             body="FinSight flags possible duplicates and unusually large expenses here as you record them."
           />
-        ) : null}
+        ) : undefined}
         renderItem={({ item }) => {
           if (item.kind === "heading") {
             return (
@@ -630,7 +632,10 @@ export function FlaggedRecordsScreen() {
               {badges(r)}
               <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: space.sm }}>
                 <View style={{ flexGrow: 1, flexShrink: 1, minWidth: 120, gap: space.xs }}>
-                  <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>{r.description}</T>
+                  {/* Capped at one line so a long description does not make
+                      its card taller than the rest. A screen reader still
+                      reads the whole description. */}
+                  <T numberOfLines={1} style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>{r.description}</T>
                   <T variant="caption">{recordMeta(r)} · {sourceLabel(r)}</T>
                 </View>
                 <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, fontVariant: ["tabular-nums"] }}>{formatMoney(r.amount, { decimals: true })}</T>
@@ -665,7 +670,7 @@ export function FlaggedRecordsScreen() {
                 That's everything waiting for review.
               </T>
             )
-        ) : null}
+        ) : undefined}
       />
       <ConfirmSheet
         visible={pendingDiscard !== null}
