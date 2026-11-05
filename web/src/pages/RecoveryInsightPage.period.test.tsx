@@ -164,7 +164,7 @@ describe("Recovery Target reporting period", () => {
     expect(screen.getAllByText("≈ 5.9").length).toBeGreaterThan(0);
     expect(screen.getByText("Open-day target")).toBeInTheDocument();
     expect(
-      screen.getByText("Open-day target = period target ÷ estimated operating days."),
+      screen.getByText("Open-day target = the period's target ÷ its estimated open days."),
     ).toBeInTheDocument();
     expect(screen.queryByText(/5\.8666666667/)).not.toBeInTheDocument();
     expect(screen.queryByText("Today's target")).not.toBeInTheDocument();

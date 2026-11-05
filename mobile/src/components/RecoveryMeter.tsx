@@ -85,7 +85,7 @@ export function RecoveryMeter({
         </T>
       ) : null}
 
-      <Bar ratio={monthRatio} color={monthFill} height={12} label="Month-to-date coverage" detail={{ key: data.asOfDate ?? "month", label: "Month-to-date coverage", values: [{ label: "Sales recorded", value: data.salesThisMonth }, { label: "Monthly costs", value: needsSetupNow ? null : data.expectedMonthlyExpenses, unavailableLabel: "Needs setup" }, { label: "Coverage", value: needsSetupNow ? null : data.monthCoveragePercent, display: needsSetupNow ? undefined : `${data.monthCoveragePercent.toFixed(1)}%`, unavailableLabel: "Needs setup" }], note: monthStatus.copy }} />
+      <Bar ratio={monthRatio} color={monthFill} height={12} label="Costs paid by sales so far" detail={{ key: data.asOfDate ?? "month", label: "Costs paid by sales so far", values: [{ label: "Sales recorded", value: data.salesThisMonth }, { label: "Monthly costs", value: needsSetupNow ? null : data.expectedMonthlyExpenses, unavailableLabel: "Needs setup" }, { label: "Share paid by sales", value: needsSetupNow ? null : data.monthCoveragePercent, display: needsSetupNow ? undefined : `${data.monthCoveragePercent.toFixed(1)}%`, unavailableLabel: "Needs setup" }], note: monthStatus.copy }} />
       <T variant="caption" style={{ marginTop: 6 }}>
         <Money value={data.salesThisMonth} size={12} weight="regular" color={ink[500]} /> of{" "}
         <Money value={data.expectedMonthlyExpenses} size={12} weight="regular" color={ink[500]} /> needed this month (
@@ -94,13 +94,13 @@ export function RecoveryMeter({
 
       <View style={{ flexDirection: "row", gap: space.md, marginTop: space.lg }}>
         <View style={{ flex: 1 }}>
-          <T variant="caption">Daily needed target</T>
+          <T variant="caption">Sell this much each day</T>
           <Money value={data.dailyNeededTarget} size={15} style={{ marginTop: 2 }} />
         </View>
         {/* The accent moment. */}
         <View style={{ flex: 1, backgroundColor: ACCENT.surface, borderRadius: radius.sm, padding: space.sm }}>
           <T variant="caption" style={{ color: ACCENT.text }}>
-            Adjusted daily target
+            New daily goal
           </T>
           <Money value={data.adjustedDailyTarget} size={15} weight="semibold" color={ACCENT.text} style={{ marginTop: 2 }} />
         </View>

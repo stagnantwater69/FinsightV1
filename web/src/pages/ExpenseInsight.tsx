@@ -295,9 +295,9 @@ const OPPORTUNITY_CONFIDENCE_LABEL: Record<
   ReductionOpportunity["confidence"],
   string
 > = {
-  strong: "Strong confidence",
-  moderate: "Moderate confidence",
-  limited: "Limited confidence",
+  strong: "Very sure",
+  moderate: "Fairly sure",
+  limited: "Not very sure",
 };
 
 /**

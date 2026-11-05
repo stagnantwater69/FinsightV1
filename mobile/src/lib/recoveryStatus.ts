@@ -26,15 +26,15 @@ export function resolveMonthStatus(
       case "covered":
         return { tone: "good", glyph: "✓", copy: "Sales coverage target reached" };
       case "ahead":
-        return { tone: "good", glyph: "✓", copy: "Ahead of pace" };
+        return { tone: "good", glyph: "✓", copy: "Ahead" };
       case "on_pace":
         return { tone: "good", glyph: "✓", copy: "On pace for the month" };
       case "behind":
-        return { tone: "critical", glyph: "!", copy: "Behind pace for the month" };
+        return { tone: "critical", glyph: "!", copy: "Behind this month" };
     }
   }
   // Back-compat: older/cached responses with no `status` field at all.
   if (data.needsSetup) return { tone: "warning", glyph: "?", copy: "Recovery Target isn't ready yet" };
   if (data.onTrack) return { tone: "good", glyph: "✓", copy: "On pace for the month" };
-  return { tone: "critical", glyph: "!", copy: "Behind pace for the month" };
+  return { tone: "critical", glyph: "!", copy: "Behind this month" };
 }

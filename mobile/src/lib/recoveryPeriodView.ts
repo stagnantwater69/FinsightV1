@@ -25,11 +25,11 @@ export function recoveryPeriodStatusLabel(period: RecoveryReportingPeriod): stri
     case "covered":
       return "Sales coverage target reached";
     case "ahead":
-      return period.isComplete ? "Finished above target" : "Ahead of pace";
+      return period.isComplete ? "Finished above target" : "Ahead";
     case "on_pace":
       return period.isComplete ? "Finished on target" : "On pace";
     case "behind":
-      return period.isComplete ? "Finished below target" : "Behind pace";
+      return period.isComplete ? "Finished below target" : "Behind";
   }
 }
 
@@ -210,7 +210,7 @@ export function recoverySummaryText(period: RecoveryReportingPeriod): string {
   ];
   if (!period.isComplete && period.adjustedDailyTarget !== null) {
     parts.push(
-      `The remaining target is ${formatMoney(period.remainingTarget)}, or about ${formatMoney(period.adjustedDailyTarget)} per remaining operating day.`,
+      `The remaining target is ${formatMoney(period.remainingTarget)}, or about ${formatMoney(period.adjustedDailyTarget)} per open day left.`,
     );
   }
   return parts.join(" ");

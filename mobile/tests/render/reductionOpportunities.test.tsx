@@ -887,7 +887,7 @@ describe('Reduction opportunities — populated', () => {
     expect(apiGet).not.toHaveBeenCalledWith('/insights/expense-behavior', expect.anything());
     expect(apiGet).not.toHaveBeenCalledWith('/insights/reduction-opportunities', expect.anything());
     expect(await queries.findByText('High priority')).toBeTruthy();
-    expect(queries.getByText('Strong confidence')).toBeTruthy();
+    expect(queries.getByText('Very sure')).toBeTruthy();
     expect(queries.getByText('Stock')).toBeTruthy();
     expect(
       queries.getByText('Stock rose sharply against the period before.'),
@@ -1256,7 +1256,7 @@ describe('Reduction opportunities — independently unavailable panels', () => {
     await fireEvent.press(queries.getByRole('button', { name: 'Try again' }));
 
     expect(await queries.findByText('High priority')).toBeTruthy();
-    expect(queries.getByText('Strong confidence')).toBeTruthy();
+    expect(queries.getByText('Very sure')).toBeTruthy();
   });
 
   it('keeps available opportunities usable when expense behavior is unavailable', async () => {
@@ -1279,7 +1279,7 @@ describe('Reduction opportunities — independently unavailable panels', () => {
 
     expect(await queries.findByText('Expense analysis is unavailable right now.')).toBeTruthy();
     expect(await queries.findByText('High priority')).toBeTruthy();
-    expect(queries.getByText('Strong confidence')).toBeTruthy();
+    expect(queries.getByText('Very sure')).toBeTruthy();
     expect(
       queries.getByRole('button', { name: 'View related records for Stock' }),
     ).toBeTruthy();
@@ -1344,7 +1344,7 @@ describe('Reduction opportunities — historical window', () => {
     );
 
     await queries.findByText('High priority');
-    expect(queries.getByText('Strong confidence')).toBeTruthy();
+    expect(queries.getByText('Very sure')).toBeTruthy();
     expect(queries.queryByText(/Historical period:/)).toBeNull();
   });
 });

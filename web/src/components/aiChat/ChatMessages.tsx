@@ -78,7 +78,7 @@ export const MODULE_COPY: Record<InteractionModule, ModuleCopy> = {
   },
   "Recovery Target": {
     title: "Ask FinSight about recovery",
-    scope: "Scoped to Recovery Target — I can explain today's gap and how the remaining target spreads across your remaining operating days.",
+    scope: "Scoped to Recovery Target — I can explain today's gap and how the remaining target spreads across the open days you have left.",
     starters: ["How much more sales do I need?", "Did I reach today's target?", "What is my adjusted daily target?"],
     greeting:
       "I can compare your recorded sales against your needed target and show how much is still needed. What would you like to check?",

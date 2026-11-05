@@ -159,12 +159,12 @@ describe("Dashboard recovery-status KPI — status-driven rendering", () => {
     expect(screen.queryByText(/Add a starting monthly expense estimate/)).not.toBeInTheDocument();
   });
 
-  it("shows 'Ahead of pace' for ahead", async () => {
+  it("shows 'Ahead' for ahead", async () => {
     currentSummary = summaryWithStatus("ahead");
     renderDashboard();
     // Appears twice — the KPI tile and the embedded Recovery Meter both read
     // the same server status, which is the point: they can't disagree.
-    await waitFor(() => expect(screen.getAllByText("Ahead of pace").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText("Ahead").length).toBeGreaterThan(0));
   });
 
   it("still falls back to the boolean-derived label when status is absent", async () => {

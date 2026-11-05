@@ -77,7 +77,7 @@ function periodCoverageDatum(period: RecoveryReportingPeriod): ChartDatum {
     values: [
       { label: "Sales recorded", value: period.sales },
       { label: "Sales coverage target", value: period.status === "needs_setup" ? null : period.target, unavailableLabel: "Needs setup" },
-      { label: "Coverage", value: period.status === "needs_setup" ? null : period.coveragePercent, display: `${period.coveragePercent.toFixed(1)}%`, unavailableLabel: "Needs setup" },
+      { label: "Share paid by sales", value: period.status === "needs_setup" ? null : period.coveragePercent, display: `${period.coveragePercent.toFixed(1)}%`, unavailableLabel: "Needs setup" },
       { label: "Expected sales to date", value: period.expectedSalesToDate },
       { label: "Remaining target", value: period.remainingTarget },
     ],
@@ -87,7 +87,7 @@ function periodCoverageDatum(period: RecoveryReportingPeriod): ChartDatum {
 
 function todayGoalDatum(data: RecoveryInsight): ChartDatum {
   const percent = data.todaysTarget > 0 ? data.todaysSales / data.todaysTarget * 100 : data.todaysSales > 0 ? 100 : 0;
-  return { key: data.reportingPeriod?.asOfDate ?? data.asOfDate ?? data.today, label: "Today's goal", values: [{ label: "Sales recorded", value: data.todaysSales }, { label: "Today's target", value: data.todaysTarget }, { label: "Coverage", value: percent, display: `${percent.toFixed(1)}%` }, { label: "Gap", value: data.todaysGap, display: formatMoney(data.todaysGap, { decimals: true, signed: true }) }], note: data.todaysStatus === "at" ? "Reached target" : `${data.todaysStatus === "below" ? "Below" : "Above"} target` };
+  return { key: data.reportingPeriod?.asOfDate ?? data.asOfDate ?? data.today, label: "Today's goal", values: [{ label: "Sales recorded", value: data.todaysSales }, { label: "Today's target", value: data.todaysTarget }, { label: "Share paid by sales", value: percent, display: `${percent.toFixed(1)}%` }, { label: "Gap", value: data.todaysGap, display: formatMoney(data.todaysGap, { decimals: true, signed: true }) }], note: data.todaysStatus === "at" ? "Reached target" : `${data.todaysStatus === "below" ? "Below" : "Above"} target` };
 }
 
 /** Recorded sales and their coverage of the server's selected-period target. */
@@ -127,8 +127,8 @@ export function RecoveryCoachCard({ data, period, isCurrentMonth, header }: {
               <T style={{ color: HERO_INK, fontFamily: font.sansSemibold, fontSize: typeScale.bodySm }}>{`${Math.round(period.coveragePercent)}% reached`}</T>
               <T style={{ color: HERO_MUTED, fontSize: typeScale.bodySm }}>{formatMoney(period.target)}</T>
             </View>
-            <ChartPlotPressArea selection={coverageSelection} count={1} chartLabel="Sales coverage">
-            <View accessible accessibilityRole="progressbar" accessibilityLabel={`Sales coverage: ${formatMoney(period.sales)} recorded against ${formatMoney(period.target)} target${expectedPercent === null ? "" : `. Today's pace: ${formatMoney(period.expectedSalesToDate)}`}`} accessibilityValue={{ min: 0, max: 100, now: Math.round(filled) }} style={{ gap: space.sm }}>
+            <ChartPlotPressArea selection={coverageSelection} count={1} chartLabel="Costs paid by sales">
+            <View accessible accessibilityRole="progressbar" accessibilityLabel={`Costs paid by sales: ${formatMoney(period.sales)} recorded against ${formatMoney(period.target)} target${expectedPercent === null ? "" : `. Today's pace: ${formatMoney(period.expectedSalesToDate)}`}`} accessibilityValue={{ min: 0, max: 100, now: Math.round(filled) }} style={{ gap: space.sm }}>
               <View style={{ height: 12, borderRadius: radius.sm, backgroundColor: HERO.washStrong }}>
                 <View style={{ height: 12, width: `${filled}%`, borderRadius: radius.sm, backgroundColor: HERO.goodInk }} />
                 {expectedPercent !== null ? <View style={{ position: "absolute", left: `${expectedPercent}%`, top: -5, bottom: -5, width: 3, marginLeft: -1.5, borderRadius: 2, backgroundColor: HERO_AMBER }} /> : null}
@@ -137,7 +137,7 @@ export function RecoveryCoachCard({ data, period, isCurrentMonth, header }: {
             </View>
             </ChartPlotPressArea>
           </View>
-          <ChartValueReadout data={coverageData} selection={coverageSelection} chartLabel="Sales coverage" />
+          <ChartValueReadout data={coverageData} selection={coverageSelection} chartLabel="Costs paid by sales" />
           <View style={{ borderTopWidth: 1, borderTopColor: HERO.hairline, paddingTop: space.md, flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
             <View style={{ flex: 1, minWidth: 120, gap: space.xs }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}><Ionicons name="arrow-up" size={18} color={HERO_AMBER} /><T style={{ color: HERO_MUTED, fontSize: typeScale.caption }}>{period.isComplete ? "Period result" : "Still to sell"}</T></View>
@@ -171,7 +171,7 @@ export function RecoveryNextGoal({ period }: { period: RecoveryReportingPeriod }
           <Ionicons name={reached ? "checkmark-circle-outline" : "locate-outline"} size={30} color={t.brandText} />
           <T style={{ flex: 1, color: t.brandHeading, fontFamily: font.sansSemibold, fontSize: typeScale.title, fontVariant: ["tabular-nums"] }}>{reached ? "Sales coverage target reached" : dailyTarget !== null ? `${formatMoney(dailyTarget)} / day` : period.remainingOperatingDays <= 0 ? "No operating days remaining" : "Daily target unavailable"}</T>
         </View>
-        <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>{reached ? "Recorded sales cover this period's costs." : dailyTarget !== null ? `Sales needed per remaining operating day to reach the ${period.kind === "week" ? "weekly" : "monthly"} target.` : "Review your operating schedule and the remaining target below."}</T>
+        <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>{reached ? "Recorded sales cover this period's costs." : dailyTarget !== null ? `Sales needed per open day left to reach the ${period.kind === "week" ? "weekly" : "monthly"} target.` : "Review your operating schedule and the remaining target below."}</T>
       </View>
       {behind ? <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, borderWidth: 1, borderColor: t.statusBorder.warning, backgroundColor: t.statusSurface.warning, borderRadius: radius.md, padding: space.md }}>
         <Ionicons name="alert-circle" size={22} color={t.statusText.warning} />
@@ -401,7 +401,7 @@ export function DayCalendar({
         <LegendSwatch color={t.surfaceMuted} label="Closed day" />
         {!period.isComplete ? <LegendSwatch color={t.brandSurface} border={t.brandFill} label="Today" /> : null}
       </View>
-      <ChartValueReadout data={calendarData} selection={calendarSelection} chartLabel="Daily coverage" />
+      <ChartValueReadout data={calendarData} selection={calendarSelection} chartLabel="Each day's sales" />
       <DaySheet row={selectedRow} date={selected} onClose={sheetSelection.clear} />
     </View>
   );
@@ -570,7 +570,7 @@ function DayBar({ label, value, max, color }: { label: string; value: number; ma
 export function CheckpointFlags({ checkpoints, today }: { checkpoints: readonly RecoveryCheckpoint[]; today: string }) {
   const t = useTheme();
   const nextIndex = checkpoints.findIndex((c) => c.endDate > today);
-  const checkpointData: ChartDatum[] = checkpoints.map((checkpoint) => ({ key: checkpoint.endDate, label: `${shortDate(checkpoint.endDate)} checkpoint`, values: [{ label: "Cumulative target", value: checkpoint.cumulativeTarget }, { label: "Sales recorded", value: checkpoint.recordedAmount, unavailableLabel: checkpoint.status === "pending" ? "Checkpoint ahead" : "Unavailable" }, { label: "Variance", value: checkpoint.variance, display: checkpoint.variance === null ? undefined : formatMoney(checkpoint.variance, { decimals: true, signed: true }), unavailableLabel: checkpoint.status === "pending" ? "Checkpoint ahead" : "Unavailable" }], note: checkpoint.status === "pending" ? "Pending checkpoint" : checkpoint.status === "behind" ? "Behind target" : checkpoint.status === "on_pace" ? "On pace" : "Ahead of target" }));
+  const checkpointData: ChartDatum[] = checkpoints.map((checkpoint) => ({ key: checkpoint.endDate, label: `${shortDate(checkpoint.endDate)} check`, values: [{ label: "Goal so far", value: checkpoint.cumulativeTarget }, { label: "Sales recorded", value: checkpoint.recordedAmount, unavailableLabel: checkpoint.status === "pending" ? "Next check" : "Unavailable" }, { label: "Difference", value: checkpoint.variance, display: checkpoint.variance === null ? undefined : formatMoney(checkpoint.variance, { decimals: true, signed: true }), unavailableLabel: checkpoint.status === "pending" ? "Next check" : "Unavailable" }], note: checkpoint.status === "pending" ? "Pending checkpoint" : checkpoint.status === "behind" ? "Behind target" : checkpoint.status === "on_pace" ? "On pace" : "Ahead of target" }));
   const checkpointSelection = useChartSelection(checkpointData, today);
   return (
     <View style={{ marginTop: space.lg }}>
@@ -664,7 +664,7 @@ export function DailyTargetBreakdown({ period }: { period: RecoveryReportingPeri
   const daysText = formatOperatingDays(period.remainingOperatingDays, period.operatingDaysIsApproximated);
   const breakdownData: ChartDatum[] = [
     { ...periodCoverageDatum(period), key: "coverage", label: "Remaining target breakdown" },
-    { key: "days", label: "Remaining operating days", values: [{ label: "Remaining target", value: period.remainingTarget }, { label: "Operating days", value: period.remainingOperatingDays, display: `${daysText} days` }, { label: "Adjusted daily target", value: period.adjustedDailyTarget, unavailableLabel: "Unavailable" }], note: period.operatingDaysIsApproximated ? "Operating days are estimated. Tiles show an approximate day count." : "Each tile represents one remaining operating day." },
+    { key: "days", label: "Open days left", values: [{ label: "Remaining target", value: period.remainingTarget }, { label: "Operating days", value: period.remainingOperatingDays, display: `${daysText} days` }, { label: "New daily goal", value: period.adjustedDailyTarget, unavailableLabel: "Unavailable" }], note: period.operatingDaysIsApproximated ? "Operating days are estimated. Tiles show an approximate day count." : "Each tile is one open day left." },
   ];
   const breakdownSelection = useChartSelection(breakdownData);
   return (
@@ -698,7 +698,7 @@ export function DailyTargetBreakdown({ period }: { period: RecoveryReportingPeri
           <View style={{ alignItems: "flex-end", paddingRight: space.xl, marginVertical: 2 }}>
             <Ionicons name="arrow-down" size={18} color={t.ACCENT.fillStrong} />
           </View>
-          <ChartPlotPressArea selection={breakdownSelection} count={breakdownData.length} chartLabel="Remaining operating days" indexAtPoint={() => 1}>
+          <ChartPlotPressArea selection={breakdownSelection} count={breakdownData.length} chartLabel="Open days left" indexAtPoint={() => 1}>
           <View
             accessible
             accessibilityRole="image"

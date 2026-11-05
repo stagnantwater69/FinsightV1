@@ -204,7 +204,7 @@ export function RecoveryNotificationPreferences() {
                 </div>
 
                 <SettingSwitch
-                  label="Behind pace for three days"
+                  label="Behind for three days"
                   description="Recorded sales have been below target for three completed open days in a row."
                   checked={pref.behindThreeDaysAlertEnabled}
                   onChange={(checked) => setPref((p) => ({ ...p, behindThreeDaysAlertEnabled: checked }))}

@@ -100,16 +100,16 @@ export function RecoveryPaceCard({ period }: { period: RecoveryReportingPeriod }
           percent={period.coveragePercent}
           color={tone === "critical" ? t.status.critical : t.status.good}
           label={`${Math.round(period.coveragePercent)}% of this period's target covered`}
-          detail={{ key: `${period.start}:${period.end}`, label: "Period sales coverage", values: [{ label: "Sales recorded", value: period.sales }, { label: "Target", value: period.status === "needs_setup" ? null : period.target, unavailableLabel: "Needs setup" }, { label: "Coverage", value: period.status === "needs_setup" ? null : period.coveragePercent, display: `${period.coveragePercent.toFixed(1)}%`, unavailableLabel: "Needs setup" }], note: recoveryPeriodStatusLabel(period) }}
+          detail={{ key: `${period.start}:${period.end}`, label: "Costs paid by sales this period", values: [{ label: "Sales recorded", value: period.sales }, { label: "Target", value: period.status === "needs_setup" ? null : period.target, unavailableLabel: "Needs setup" }, { label: "Coverage", value: period.status === "needs_setup" ? null : period.coveragePercent, display: `${period.coveragePercent.toFixed(1)}%`, unavailableLabel: "Needs setup" }], note: recoveryPeriodStatusLabel(period) }}
         />
       </View>
       <T variant="caption" style={{ marginTop: space.xs }}>{`${Math.round(period.coveragePercent)}% covered`}</T>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md, marginTop: space.md }}>
         <Figure label="Remaining target" value={period.remainingTarget} />
         <Figure
-          label={period.operatingDaysIsApproximated ? "Open-day target" : "Daily needed target"}
+          label={period.operatingDaysIsApproximated ? "Open-day target" : "Sell this much each day"}
           value={period.adjustedDailyTarget ?? period.dailyTarget}
-          caption={period.adjustedDailyTarget !== null && !period.isComplete ? "Across remaining operating days" : undefined}
+          caption={period.adjustedDailyTarget !== null && !period.isComplete ? "Across the open days left" : undefined}
         />
         <Figure
           label="Operating days"
@@ -196,13 +196,13 @@ export function RecoveryRemainingPeriodCard({ period }: { period: RecoveryReport
       <T variant="heading" accessibilityRole="header">
         {period.kind === "month" ? "Remaining recovery target" : "Remaining weekly target"}
       </T>
-      <T variant="caption" style={{ marginBottom: space.md }}>Recalculated across your remaining operating days</T>
+      <T variant="caption" style={{ marginBottom: space.md }}>Worked out again across the open days you have left</T>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
         <Figure label={period.kind === "month" ? "Monthly costs" : "This week's target"} value={period.target} />
         <Figure label={period.kind === "month" ? "Sales recorded so far" : "Sales recorded this week"} value={period.sales} />
         <Figure label="Remaining target" value={period.remainingTarget} />
         <Figure
-          label="Remaining operating days"
+          label="Open days left"
           value={formatOperatingDays(period.remainingOperatingDays, period.operatingDaysIsApproximated)}
         />
       </View>

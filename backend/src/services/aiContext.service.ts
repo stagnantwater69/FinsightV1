@@ -308,12 +308,12 @@ export async function buildFinancialSnapshot(
     recovery.monthlyExpenseBasis.source === "previous_complete_month"
       ? `- Monthly costs: ${peso(recovery.monthlyExpenseBasis.amount)} from ${recovery.monthlyExpenseBasis.sourceMonth} confirmed expense records (${recovery.monthlyExpenseBasis.eligibleRecordCount} eligible record(s))`
       : `- Monthly costs: ${peso(recovery.monthlyExpenseBasis.amount)} starting estimate; the preceding month's expense records are not confirmed complete`,
-    `- Daily needed target: ${peso(recovery.dailyNeededTarget)} per operating day`,
+    `- Sell this much each day: ${peso(recovery.dailyNeededTarget)} per open day`,
     `- Sales recorded this month: ${peso(recovery.salesThisMonth)} of ${peso(
       recovery.expectedMonthlyExpenses
     )} needed (${recovery.monthCoveragePercent.toFixed(1)}% covered)`,
     `- Remaining target: ${peso(recovery.remainingTarget)} across ${recovery.remainingOperatingDays} remaining operating day(s)`,
-    `- Adjusted daily target from here: ${peso(recovery.adjustedDailyTarget)}`,
+    `- New daily goal from here: ${peso(recovery.adjustedDailyTarget)}`,
     `- Overall: ${recoveryStatusPhrase(recovery.status)}`
   );
 

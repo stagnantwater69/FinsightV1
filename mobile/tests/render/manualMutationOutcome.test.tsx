@@ -211,3 +211,25 @@ describe.each(cases)("durable %s creation", (kind, Component, saveLabel) => {
     expect(goBack).not.toHaveBeenCalled(); expect(q.getByLabelText("Amount (PHP)").props.value).toBe("250.50");
   });
 });
+
+describe("recording a payment from the payment calendar", () => {
+  it("starts filled in from the schedule and returns to the calendar once saved", async () => {
+    const setParams = vi.fn();
+    const prefill = { description: "Shop rent", vendor: "Landlord", categoryId: 10, amount: 12000 };
+    const q = await render(
+      <ThemeProvider initialMode="light">
+        <AddExpenseScreen navigation={{ navigate, push, goBack, setParams }} route={{ params: { prefill, from: "PaymentCalendar" } }} />
+      </ThemeProvider>,
+    );
+    await waitFor(() => expect(q.getByLabelText("Description").props.value).toBe("Shop rent"));
+    expect(q.getByLabelText("Vendor (optional)").props.value).toBe("Landlord");
+    expect(q.getByLabelText("Amount (PHP)").props.value).toBe("12000");
+    expect(q.getByText("Record payment")).toBeTruthy();
+    expect(setParams).toHaveBeenCalledWith({ prefill: undefined });
+    post.mockImplementation(async (_path: string, payload: { idempotencyKey: string }) => ({ ...result("expense"), payload }));
+    await fireEvent.press(q.getByRole("button", { name: "Save expense" }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("Insights", { screen: "PaymentCalendar", params: { recorded: true } }));
+    expect(post).toHaveBeenCalledWith("/records/expenses", expect.objectContaining({ description: "Shop rent", vendor: "Landlord", categoryId: 10, amount: 12000 }), expect.anything());
+    expect(goBack).toHaveBeenCalledTimes(1);
+  });
+});

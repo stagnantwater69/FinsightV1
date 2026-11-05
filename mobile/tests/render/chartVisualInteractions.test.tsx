@@ -109,23 +109,23 @@ describe('Home chart exploration', () => {
 describe('Recovery chart exploration', () => {
   it('explores coverage and current day, retaining progressbar summaries', async () => {
     const q = await mount(<><RecoveryCoachCard data={chartRecovery} period={chartPeriod} isCurrentMonth /><TodayGoalCard data={chartRecovery} /></>);
-    await tapChart(q, 'Sales coverage');
-    expect(chartReadout(q, 'Sales coverage').props.accessibilityLabel).toContain('Sales recorded: PHP 400.25');
-    expect(chartReadout(q, 'Sales coverage').props.accessibilityLabel).toContain('Sales coverage target: PHP 1,000.50');
+    await tapChart(q, 'Costs paid by sales');
+    expect(chartReadout(q, 'Costs paid by sales').props.accessibilityLabel).toContain('Sales recorded: PHP 400.25');
+    expect(chartReadout(q, 'Costs paid by sales').props.accessibilityLabel).toContain('Sales coverage target: PHP 1,000.50');
     await tapChart(q, "Today's goal");
     expect(chartReadout(q, "Today's goal").props.accessibilityLabel).toContain('Sales recorded: PHP 0.00');
     expect(q.getAllByRole('progressbar')).toHaveLength(2);
   });
   it('keeps calendar closed/future days distinct and preserves the existing day modal', async () => {
     const q = await mount(<DayCalendar period={chartPeriod} rows={chartCoverage} />);
-    await fireEvent.press(q.getByRole('button', { name: 'Explore Daily coverage values' }));
-    expect(chartReadout(q, 'Daily coverage').props.accessibilityLabel).toContain('Sales recorded: PHP 0.00');
-    await fireEvent.press(q.getByRole('button', { name: 'Next value in Daily coverage' }));
-    expect(chartReadout(q, 'Daily coverage').props.accessibilityLabel).toContain('Closed day');
-    await fireEvent.press(q.getByRole('button', { name: 'Next value in Daily coverage' }));
-    await fireEvent.press(q.getByRole('button', { name: 'Next value in Daily coverage' }));
-    expect(chartReadout(q, 'Daily coverage').props.accessibilityLabel).toContain('Future day');
-    expect(chartReadout(q, 'Daily coverage').props.accessibilityLabel).not.toContain('Sales recorded: PHP 0.00');
+    await fireEvent.press(q.getByRole('button', { name: "Explore Each day's sales values" }));
+    expect(chartReadout(q, "Each day's sales").props.accessibilityLabel).toContain('Sales recorded: PHP 0.00');
+    await fireEvent.press(q.getByRole('button', { name: "Next value in Each day's sales" }));
+    expect(chartReadout(q, "Each day's sales").props.accessibilityLabel).toContain('Closed day');
+    await fireEvent.press(q.getByRole('button', { name: "Next value in Each day's sales" }));
+    await fireEvent.press(q.getByRole('button', { name: "Next value in Each day's sales" }));
+    expect(chartReadout(q, "Each day's sales").props.accessibilityLabel).toContain('Future day');
+    expect(chartReadout(q, "Each day's sales").props.accessibilityLabel).not.toContain('Sales recorded: PHP 0.00');
     await fireEvent.press(q.getByRole('button', { name: /^Thu, Oct 1,/ }));
     expect(q.getByRole('button', { name: 'Done' })).toBeTruthy();
     await fireEvent.press(q.getByRole('button', { name: 'Explore Sold values' }));
@@ -138,7 +138,7 @@ describe('Recovery chart exploration', () => {
   it.each(['mouse', 'pen'])('previews a disabled future calendar cell through its parent for %s and restores the pinned day', async (pointerType) => {
     const rows = [...chartCoverage, { date: '2026-10-04', sales: 0, neededTarget: 200.05, gap: -200.05, status: 'below' as const, isOperatingDay: true }];
     const q = await mount(<DayCalendar period={chartPeriod} rows={rows} />);
-    await fireEvent.press(q.getByRole('button', { name: 'Explore Daily coverage values' }));
+    await fireEvent.press(q.getByRole('button', { name: "Explore Each day's sales values" }));
     const future = q.getByRole('button', { name: 'Sun, Oct 4, not yet recorded' });
     expect(future.props.accessibilityState.disabled).toBe(true);
     expect(future.props.accessibilityLabel).not.toContain('sold');
@@ -146,7 +146,7 @@ describe('Recovery chart exploration', () => {
     while (cell && !cell.props.onPointerEnter) cell = cell.parent;
     if (!cell) throw new Error('Future calendar cell has no parent pointer handler');
     await fireEvent(cell, 'pointerEnter', { nativeEvent: { pointerType, buttons: 0 } });
-    const name = chartReadout(q, 'Daily coverage').props.accessibilityLabel;
+    const name = chartReadout(q, "Each day's sales").props.accessibilityLabel;
     expect(name).toContain('Sun, Oct 4');
     expect(name).toContain('Sales recorded: Not yet recorded');
     expect(name).toContain('Daily target: PHP 200.05');
@@ -154,8 +154,8 @@ describe('Recovery chart exploration', () => {
     await fireEvent.press(future);
     expect(q.queryByRole('button', { name: 'Done' })).toBeNull();
     await fireEvent(cell, 'pointerLeave', { nativeEvent: { pointerType } });
-    expect(chartReadout(q, 'Daily coverage').props.accessibilityLabel).toContain('Thu, Oct 1');
-    expect(chartReadout(q, 'Daily coverage').props.accessibilityLabel).toContain('Sales recorded: PHP 0.00');
+    expect(chartReadout(q, "Each day's sales").props.accessibilityLabel).toContain('Thu, Oct 1');
+    expect(chartReadout(q, "Each day's sales").props.accessibilityLabel).toContain('Sales recorded: PHP 0.00');
   });
   it('ignores touch and pressed mouse movement over a future calendar cell', async () => {
     const q = await mount(<DayCalendar period={chartPeriod} rows={chartCoverage} />);
@@ -164,9 +164,9 @@ describe('Recovery chart exploration', () => {
     while (cell && !cell.props.onPointerEnter) cell = cell.parent;
     if (!cell) throw new Error('Future calendar cell has no parent pointer handler');
     await fireEvent(cell, 'pointerEnter', { nativeEvent: { pointerType: 'touch', buttons: 0 } });
-    expect(queryChartReadout(q, 'Daily coverage')).toBeNull();
+    expect(queryChartReadout(q, "Each day's sales")).toBeNull();
     await fireEvent(cell, 'pointerEnter', { nativeEvent: { pointerType: 'mouse', buttons: 1 } });
-    expect(queryChartReadout(q, 'Daily coverage')).toBeNull();
+    expect(queryChartReadout(q, "Each day's sales")).toBeNull();
     await fireEvent.press(future);
     expect(q.queryByRole('button', { name: 'Done' })).toBeNull();
   });
@@ -174,9 +174,9 @@ describe('Recovery chart exploration', () => {
     const q = await mount(<CheckpointFlags checkpoints={chartCheckpoints} today="2026-10-03" />);
     const marks = q.getAllByRole('button', { name: /^Checkpoint / });
     await fireEvent.press(marks[0]!);
-    expect(chartReadout(q, 'Weekly checkpoints').props.accessibilityLabel).toContain('Cumulative target: PHP 200.25. Sales recorded: PHP 100.00');
+    expect(chartReadout(q, 'Weekly checkpoints').props.accessibilityLabel).toContain('Goal so far: PHP 200.25. Sales recorded: PHP 100.00');
     await fireEvent(marks[1]!, 'hoverIn');
-    expect(chartReadout(q, 'Weekly checkpoints').props.accessibilityLabel).toContain('Checkpoint ahead');
+    expect(chartReadout(q, 'Weekly checkpoints').props.accessibilityLabel).toContain('Next check');
     await fireEvent(marks[1]!, 'hoverOut');
     expect(chartReadout(q, 'Weekly checkpoints').props.accessibilityLabel).toContain('Behind target');
   });
@@ -184,21 +184,21 @@ describe('Recovery chart exploration', () => {
     const q = await mount(<DailyTargetBreakdown period={{ ...chartPeriod, operatingDaysIsApproximated: true }} />);
     await tapChart(q, 'Remaining target breakdown');
     expect(chartReadout(q, 'Daily target breakdown').props.accessibilityLabel).toContain('Remaining target: PHP 600.25');
-    await tapChart(q, 'Remaining operating days');
+    await tapChart(q, 'Open days left');
     expect(chartReadout(q, 'Daily target breakdown').props.accessibilityLabel).toMatch(/Operating days: .*3 days/);
     expect(chartReadout(q, 'Daily target breakdown').props.accessibilityLabel).toContain('Operating days are estimated');
   });
   it('explores legacy meter, pace, today and target breakdown charts', async () => {
     const q = await mount(<><RecoveryMeter data={chartRecovery} /><RecoveryPaceCard period={chartPeriod} /><RecoveryTodayCard data={chartRecovery} /><RecoveryTargetBreakdown sales={400.25} target={1000.50} /></>);
-    for (const [label, amount] of [['Month-to-date coverage', '400.25'], ["Today's progress", '150.75'], ['Period sales coverage', '1,000.50'], ["Today's sales coverage", '150.75'], ['Target breakdown', '600.25']]) {
+    for (const [label, amount] of [['Costs paid by sales so far', '400.25'], ["Today's progress", '150.75'], ['Costs paid by sales this period', '1,000.50'], ["Today's sales coverage", '150.75'], ['Target breakdown', '600.25']]) {
       await fireEvent.press(q.getByRole('button', { name: `Explore ${label} values` }));
       expect(chartReadout(q, label!).props.accessibilityLabel).toContain(amount);
     }
   });
   it('resets a recovery value when period boundaries change with equal totals', async () => {
     const q = await mount(<RecoveryCoachCard data={chartRecovery} period={chartPeriod} isCurrentMonth />);
-    await tapChart(q, 'Sales coverage');
+    await tapChart(q, 'Costs paid by sales');
     await q.rerender(<ThemeProvider initialMode="light"><RecoveryCoachCard data={chartRecovery} period={{ ...chartPeriod, start: '2026-09-01', end: '2026-09-05' }} isCurrentMonth={false} /></ThemeProvider>);
-    expect(queryChartReadout(q, 'Sales coverage')).toBeNull();
+    expect(queryChartReadout(q, 'Costs paid by sales')).toBeNull();
   });
 });

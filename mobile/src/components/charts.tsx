@@ -811,7 +811,7 @@ export function CategoryChange({
 export function CoverageColumns({
   data,
   target,
-  title = "Daily coverage",
+  title = "Each day's sales",
   subtitle = "In PHP",
   height = 110,
 }: {

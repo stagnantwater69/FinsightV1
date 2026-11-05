@@ -45,7 +45,7 @@ describe('RecoveryMeter — status-driven rendering', () => {
     );
     expect(queries.getByText('No sales recorded yet this month')).toBeTruthy();
     // Must not fall back to the boolean-derived "behind" copy.
-    expect(queries.queryByText('Behind pace for the month')).toBeNull();
+    expect(queries.queryByText('Behind this month')).toBeNull();
   });
 
   it('shows the "target reached" copy for covered, distinct from plain on-pace', async () => {
@@ -56,17 +56,17 @@ describe('RecoveryMeter — status-driven rendering', () => {
     expect(queries.queryByText('On pace for the month')).toBeNull();
   });
 
-  it('shows "Ahead of pace" for ahead, distinct from plain on-pace', async () => {
+  it('shows "Ahead" for ahead, distinct from plain on-pace', async () => {
     const queries = await render(
       withTheme(<RecoveryMeter data={{ ...baseTargets, status: 'ahead', onTrack: true, needsSetup: false }} />),
     );
-    expect(queries.getByText('Ahead of pace')).toBeTruthy();
+    expect(queries.getByText('Ahead')).toBeTruthy();
     expect(queries.queryByText('On pace for the month')).toBeNull();
   });
 
   it('falls back to the old onTrack/needsSetup booleans when status is undefined (older/cached response)', async () => {
     const queries = await render(withTheme(<RecoveryMeter data={{ ...baseTargets, onTrack: false }} />));
-    expect(queries.getByText('Behind pace for the month')).toBeTruthy();
+    expect(queries.getByText('Behind this month')).toBeTruthy();
 
     const onTrackQueries = await render(withTheme(<RecoveryMeter data={{ ...baseTargets, onTrack: true }} />));
     expect(onTrackQueries.getByText('On pace for the month')).toBeTruthy();
@@ -172,7 +172,7 @@ beforeEach(() => {
 describe('RecoveryTargetScreen — terminology and freshness', () => {
   it('keeps the required Sales Coverage Target definition one tap away, before the first status', async () => {
     const queries = await renderScreen({ ...baseInsight, status: 'behind' });
-    await queries.findByText('Behind pace for the month');
+    await queries.findByText('Behind this month');
     await fireEvent.press(queries.getByRole('button', { name: 'About the recovery target' }));
     expect(await queries.findByText('About this target')).toBeTruthy();
     expect(
@@ -197,7 +197,7 @@ describe('RecoveryTargetScreen — terminology and freshness', () => {
 
   it('renders nothing extra for freshness when asOfDate is missing (older cached response)', async () => {
     const queries = await renderScreen({ ...baseInsight, status: 'behind' });
-    await queries.findByText('Behind pace for the month');
+    await queries.findByText('Behind this month');
     expect(queries.queryByText(/As of /)).toBeNull();
   });
 
@@ -331,7 +331,7 @@ describe('RecoveryTargetScreen — primary action (Phase 3, §10.2)', () => {
 
   it('renders nothing extra when status is undefined (older/cached response)', async () => {
     const queries = await renderScreen({ ...baseInsight });
-    await queries.findByText('Behind pace for the month');
+    await queries.findByText('Behind this month');
     expect(queries.queryByText('Complete setup')).toBeNull();
     expect(queries.queryByText('Maintain current pace')).toBeNull();
   });
@@ -384,7 +384,7 @@ describe('RecoveryTargetScreen — "Why your target changed" (Phase 3, §10.3)',
 
   it('is absent when changeSincePreviousDay is null', async () => {
     const queries = await renderScreen({ ...baseInsight, status: 'behind', changeSincePreviousDay: null });
-    await queries.findByText('Behind pace for the month');
+    await queries.findByText('Behind this month');
     expect(queries.queryByText('Why your target changed')).toBeNull();
   });
 
@@ -394,7 +394,7 @@ describe('RecoveryTargetScreen — "Why your target changed" (Phase 3, §10.3)',
       status: 'behind',
       changeSincePreviousDay: { ...baseChange, adjustedDailyTargetDelta: 5, primaryReason: 'no_material_change' },
     });
-    await queries.findByText('Behind pace for the month');
+    await queries.findByText('Behind this month');
     expect(queries.queryByText('Why your target changed')).toBeNull();
   });
 });
@@ -421,7 +421,7 @@ describe('RecoveryTargetScreen — data-quality caption (Phase 3, §8.2/§10.5)'
       provisionalSalesThisMonth: 0,
       dataWarnings: [],
     });
-    await queries.findByText('Behind pace for the month');
+    await queries.findByText('Behind this month');
     expect(queries.queryByText(/pending review or flagged/)).toBeNull();
   });
 
@@ -432,7 +432,7 @@ describe('RecoveryTargetScreen — data-quality caption (Phase 3, §8.2/§10.5)'
       remainingOperatingDaysIsApproximated: true,
       operatingScheduleConfigured: true,
     });
-    await queries.findByText('Behind pace for the month');
+    await queries.findByText('Behind this month');
     expect(queries.queryByText('Edit operating schedule')).toBeNull();
   });
 
@@ -442,7 +442,7 @@ describe('RecoveryTargetScreen — data-quality caption (Phase 3, §8.2/§10.5)'
       status: 'behind',
       remainingOperatingDaysIsApproximated: false,
     });
-    await queries.findByText('Behind pace for the month');
+    await queries.findByText('Behind this month');
     expect(queries.queryByText('Edit operating schedule')).toBeNull();
   });
 });
@@ -460,7 +460,7 @@ describe('RecoveryTargetScreen — weekly checkpoints (Phase 4, §10.4)', () => 
 
   it('renders nothing extra when weeklyCheckpoints is absent (older/cached response)', async () => {
     const queries = await renderScreen({ ...baseInsight, status: 'behind' });
-    await queries.findByText('Behind pace for the month');
+    await queries.findByText('Behind this month');
     expect(queries.queryByText('Weekly checkpoints')).toBeNull();
   });
 
@@ -541,13 +541,13 @@ describe('RecoveryTargetScreen — reporting period', () => {
 
   it('shows a week on its own terms and hides what only describes the current month', async () => {
     const queries = await renderScreen({ ...baseInsight, status: 'behind', reportingPeriod: weekPeriod });
-    expect(await queries.findByText('Behind pace')).toBeTruthy();
+    expect(await queries.findByText('Behind')).toBeTruthy();
     expect(queries.getByText('Remaining weekly target')).toBeTruthy();
     expect(queries.getByText('Why PHP 350 a day?')).toBeTruthy();
     expect(queries.getAllByText('of PHP 1,000').length).toBeGreaterThan(0);
     expect(
       queries.getByText(
-        'Recorded sales this week are PHP 300 against a PHP 1,000 target. Behind pace. The remaining target is PHP 700, or about PHP 350 per remaining operating day.',
+        'Recorded sales this week are PHP 300 against a PHP 1,000 target. Behind. The remaining target is PHP 700, or about PHP 350 per open day left.',
       ),
     ).toBeTruthy();
     // Month-to-date only: these would show monthly figures under a weekly heading.

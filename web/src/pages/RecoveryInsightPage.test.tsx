@@ -234,7 +234,7 @@ describe("Recovery Target — terminology and freshness (plan §6/§8.1)", () =>
   it("renders the ahead treatment with its own copy", async () => {
     currentRecovery = { ...recovery, status: "ahead" };
     renderPage();
-    expect(await screen.findByText("Ahead of pace")).toBeInTheDocument();
+    expect(await screen.findByText("Ahead")).toBeInTheDocument();
   });
 
   it("provides direct navigation through the long recovery workflow", async () => {
@@ -273,7 +273,7 @@ describe("Recovery Target — terminology and freshness (plan §6/§8.1)", () =>
     renderPage();
 
     const progress = await screen.findByRole("progressbar", {
-      name: "Month-to-date coverage of monthly costs",
+      name: "Monthly costs paid by sales so far",
     });
     expect(progress).toHaveAttribute("aria-valuenow", "100");
   });
@@ -316,7 +316,7 @@ describe("Recovery Target — hypothetical scenario", () => {
     expect(screen.getByText("PHP 577")).toBeInTheDocument(); // hypothetical daily needed target, rounded
     // The real, unchanged target is still readable for comparison.
     expect(
-      screen.getByText(/your current \(real, saved\) daily needed target is/),
+      screen.getByText(/your current \(real, saved\) amount to sell each day is/),
     ).toBeInTheDocument();
   });
 
@@ -540,14 +540,14 @@ describe("Recovery Target — state-specific primary action (plan §10.1/§10.2)
     expect(link).toHaveAttribute("href", "#daily-coverage");
   });
 
-  it('moves keyboard focus to the "Daily coverage" heading when "Review month summary" is activated (WCAG 2.4.3)', async () => {
+  it(`moves keyboard focus to the "Each day's sales" heading when "Review month summary" is activated (WCAG 2.4.3)`, async () => {
     currentRecovery = { ...recovery, status: "covered" };
     renderPage();
     const link = await screen.findByRole("link", {
       name: "Review month summary",
     });
     const heading = await screen.findByRole("heading", {
-      name: "Daily coverage",
+      name: "Each day's sales",
     });
     expect(heading.id).toBe("daily-coverage");
     expect(document.activeElement).not.toBe(heading);
@@ -784,7 +784,7 @@ describe("Recovery Target — operating calendar (plan §7.2-§7.4/§8.3/§11 Ph
       screen.queryByRole("link", { name: /Edit operating schedule/ }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByText(/Remaining operating days is an estimate/),
+      screen.queryByText(/Open days left is an estimate/),
     ).not.toBeInTheDocument();
   });
 });

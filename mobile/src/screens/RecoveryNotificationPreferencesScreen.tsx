@@ -247,7 +247,7 @@ export function RecoveryNotificationPreferencesScreen() {
                 ) : null}
                 <View style={{ borderTopWidth: 1, borderTopColor: theme.border, marginVertical: space.lg }} />
                 <NotificationToggle
-                  label="Behind pace for three days"
+                  label="Behind for three days"
                   detail="After three completed open days below target."
                   value={pref.behindThreeDaysAlertEnabled}
                   disabled={saving}

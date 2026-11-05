@@ -1,5 +1,5 @@
 /**
- * Barrel for the three insight screens.
+ * Barrel for the insight screens.
  *
  * They used to live in one 1971-line file. Each is now its own module
  * (ExpenseBehaviorScreen.tsx, SpendingImpactScreen.tsx,
@@ -13,3 +13,4 @@
 export { ExpenseBehaviorScreen } from "./ExpenseBehaviorScreen";
 export { SpendingImpactScreen } from "./SpendingImpactScreen";
 export { RecoveryTargetScreen } from "./RecoveryTargetScreen";
+export { PaymentCalendarScreen } from "./PaymentCalendarScreen";

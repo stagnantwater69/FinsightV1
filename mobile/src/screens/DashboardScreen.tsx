@@ -195,16 +195,16 @@ function DashboardContent({ navigation }: DashboardScreenProps<"DashboardHome">)
       : recoveryStatus.status === "covered"
         ? "Target reached"
         : recoveryStatus.status === "ahead"
-          ? "Ahead of pace"
+          ? "Ahead"
           : recoveryStatus.status === "on_pace" || recoveryStatus.onTrack
             ? "On track"
             : recoveryStatus.status === "no_current_month_data"
               ? "No sales yet"
               : recoveryStatus.status === "data_incomplete"
                 ? "Data incomplete"
-                : "Behind pace";
-  const recoveryIsPositive = ["Target reached", "Ahead of pace", "On track"].includes(recoveryLabel);
-  const recoveryIsCritical = recoveryLabel === "Behind pace";
+                : "Behind";
+  const recoveryIsPositive = ["Target reached", "Ahead", "On track"].includes(recoveryLabel);
+  const recoveryIsCritical = recoveryLabel === "Behind";
   const largestCategory = summary
     ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0] ?? null
     : null;

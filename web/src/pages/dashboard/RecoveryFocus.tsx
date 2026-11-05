@@ -25,8 +25,8 @@ export function RecoveryFocus({ summary, needsSetup, action, onAddSale }: {
     : incomplete ? "Data incomplete"
       : covered ? "Target reached"
         : recovery.status === "no_current_month_data" ? "No sales yet"
-          : recovery.status === "ahead" ? "Ahead of pace"
-            : onPace ? "On track" : "Behind pace";
+          : recovery.status === "ahead" ? "Ahead"
+            : onPace ? "On track" : "Behind";
   const actions = (
     <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
       {needsSetup ? (
@@ -44,7 +44,7 @@ export function RecoveryFocus({ summary, needsSetup, action, onAddSale }: {
       ) : null}
     </div>
   );
-  // The month's pace, so "Behind pace" carries its own figure. Target = what is recorded plus what remains.
+  // The month's pace, so "Behind" carries its own figure. Target = what is recorded plus what remains.
   const monthTarget = recovery.salesThisMonth + Math.max(0, recovery.remainingTarget);
   const showMonthPace =
     !needsSetup && !incomplete && !covered && recovery.expectedSalesToDate !== undefined && monthTarget > 0;

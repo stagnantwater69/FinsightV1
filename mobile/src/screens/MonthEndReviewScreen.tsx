@@ -151,17 +151,17 @@ function ReviewContent({
   const circumference = 2 * Math.PI * 50;
   const missing = data.missingOrProvisionalDayCount > 0;
   const sourceLabel = data.monthlyExpenseBasis?.source === "previous_complete_month" ? "Confirmed expense records" : "Starting estimate";
-  const coverageData: ChartDatum[] = [{ key: data.month, label: `${formatMonthLabel(data.month)} sales coverage`, values: [{ label: "Monthly costs", value: data.monthlyExpenseBasis?.amount ?? null, unavailableLabel: "Unavailable" }, { label: "Coverage", value: Number.isFinite(data.coveragePercent) ? data.coveragePercent : null, display: coverage === null ? undefined : `${coverage}%`, unavailableLabel: "Unavailable" }, { label: shortfall ? "Shortfall" : "Above monthly costs", value: Math.abs(data.surplusOrShortfall) }], note: `${sourceLabel}. Sales above monthly costs are not a measure of profit.${missing ? " Some open days need complete sales records." : ""}` }];
+  const coverageData: ChartDatum[] = [{ key: data.month, label: `${formatMonthLabel(data.month)} costs paid by sales`, values: [{ label: "Monthly costs", value: data.monthlyExpenseBasis?.amount ?? null, unavailableLabel: "Unavailable" }, { label: "Coverage", value: Number.isFinite(data.coveragePercent) ? data.coveragePercent : null, display: coverage === null ? undefined : `${coverage}%`, unavailableLabel: "Unavailable" }, { label: shortfall ? "Shortfall" : "Above monthly costs", value: Math.abs(data.surplusOrShortfall) }], note: `${sourceLabel}. Sales above monthly costs are not a measure of profit.${missing ? " Some open days need complete sales records." : ""}` }];
   const coverageSelection = useChartSelection(coverageData, data.month);
 
   return (
     <View style={{ gap: space.lg }}>
       <View style={{ backgroundColor: t.brandSolidPressed, borderRadius: radius.xl, padding: space.lg, gap: space.md }}>
         <KpiWatermark name="stats-chart-outline" color={t.onBrandSolid} opacity={0.065} borderRadius={radius.xl} />
-        <T accessibilityRole="header" style={{ color: t.onBrandSolid, fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>Sales coverage</T>
+        <T accessibilityRole="header" style={{ color: t.onBrandSolid, fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>Costs paid by sales</T>
         <View style={{ flexDirection: stacked ? "column" : "row", alignItems: "center", gap: space.lg }}>
-          <ChartPlotPressArea selection={coverageSelection} count={1} chartLabel="Month-end sales coverage" style={{ width: 116, height: 116 }}>
-          <View accessible accessibilityRole="progressbar" accessibilityLabel={`Sales coverage for ${formatMonthLabel(data.month)}: ${coverage === null ? "unavailable" : `${coverage}% covered`}`} accessibilityValue={{ min: 0, max: 100, now: progress, text: coverage === null ? "Unavailable" : `${coverage}% covered` }} style={{ width: 116, height: 116, alignItems: "center", justifyContent: "center" }}>
+          <ChartPlotPressArea selection={coverageSelection} count={1} chartLabel="Costs paid by sales this month" style={{ width: 116, height: 116 }}>
+          <View accessible accessibilityRole="progressbar" accessibilityLabel={`Costs paid by sales for ${formatMonthLabel(data.month)}: ${coverage === null ? "unavailable" : `${coverage}% covered`}`} accessibilityValue={{ min: 0, max: 100, now: progress, text: coverage === null ? "Unavailable" : `${coverage}% covered` }} style={{ width: 116, height: 116, alignItems: "center", justifyContent: "center" }}>
             <Svg width={116} height={116} viewBox="0 0 116 116" {...(Platform.OS === "web" ? { "aria-hidden": true } : { accessible: false })} style={{ position: "absolute" }}>
               <Circle cx={58} cy={58} r={50} fill="none" stroke={t.onBrandSolidMuted + "35"} strokeWidth={9} />
               {progress > 0 ? <Circle cx={58} cy={58} r={50} fill="none" stroke={t.onBrandSolidMuted} strokeWidth={9} strokeDasharray={`${circumference} ${circumference}`} strokeDashoffset={circumference * (1 - progress / 100)} strokeLinecap="round" transform="rotate(-90 58 58)" /> : null}
@@ -180,7 +180,7 @@ function ReviewContent({
           </View>
         </View>
         <T style={{ color: t.onBrandSolid, fontSize: typeScale.bodySm, lineHeight: 22, textAlign: "center" }}>Sales compared with monthly costs</T>
-        <ChartValueReadout data={coverageData} selection={coverageSelection} chartLabel="Month-end sales coverage" />
+        <ChartValueReadout data={coverageData} selection={coverageSelection} chartLabel="Costs paid by sales this month" />
       </View>
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, backgroundColor: missing ? t.statusSurface.warning : t.surface, borderRadius: radius.md, padding: space.md }}>
@@ -201,7 +201,7 @@ function ReviewContent({
           <Disclosure title="How this is calculated">
             <View style={{ gap: space.sm, paddingTop: space.sm }}>
               <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 22 }}>{monthlyExpenseBasisProvenance(data.monthlyExpenseBasis)}</T>
-              <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 22 }}>Sales coverage compares recorded sales with these monthly costs. Amounts above them are not a measure of profit.</T>
+              <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 22 }}>This compares the sales you recorded with these monthly costs. Sales above them are not the same as profit.</T>
             </View>
           </Disclosure>
         </Card>

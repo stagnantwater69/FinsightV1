@@ -22,7 +22,7 @@ import { isDefiniteManualRecordRejection, verifiedManualRecordResult, type Manua
 import { ManualRecordRecoveryNotice } from "../../components/ManualRecordRecoveryNotice";
 import type { RecordsScreenProps } from "../../navigation/types";
 
-export function AddExpenseScreen({ navigation }: RecordsScreenProps<"AddExpense">) {
+export function AddExpenseScreen({ navigation, route }: RecordsScreenProps<"AddExpense">) {
   const { selected, categories, refreshCategories } = useBusinessProfiles();
   const { profile: owner } = useAuth();
   const [categoryId, setCategoryId] = useState<number | null>(null);
@@ -60,6 +60,29 @@ export function AddExpenseScreen({ navigation }: RecordsScreenProps<"AddExpense"
     return () => { retryPrompt.current = null; };
   }, [owner?.id, selected?.id, clearBaselineDecision]);
   useFocusEffect(useCallback(() => () => { if (flight.current) flight.current.unknown = true; operation.cancel(); setBusy(false); }, [operation]));
+  // Filled in from the payment calendar once the saved-request check has finished, then cleared so it applies once.
+  const prefill = route?.params?.prefill;
+  const from = route?.params?.from;
+  const formLocked = busy || recovery.frozen;
+  useEffect(() => {
+    if (!prefill || formLocked) return;
+    setCategoryId(prefill.categoryId);
+    setDescription(prefill.description);
+    setVendor(prefill.vendor);
+    setAmount(String(prefill.amount));
+    navigation.setParams({ prefill: undefined });
+  }, [prefill, formLocked, navigation]);
+  function finish() {
+    if (from === "PaymentCalendar") {
+      // The calendar shows its own "Payment recorded" status, so no flash here.
+      navigation.setParams({ from: undefined });
+      navigation.goBack();
+      navigation.navigate("Insights", { screen: "PaymentCalendar", params: { recorded: true } });
+      return;
+    }
+    setFlash("Expense saved.");
+    navigation.goBack();
+  }
   /*
    * The category picker and the date field are pressables, not text inputs —
    * they cannot carry a return key at all. So the keyboard chain starts at the
@@ -80,7 +103,7 @@ export function AddExpenseScreen({ navigation }: RecordsScreenProps<"AddExpense"
       if (!task) return;
       setBusy(true);
       try {
-        if (await recovery.confirm(pending, recovery.confirmedRecordId) && operation.current(task)) { setFlash("Expense saved."); navigation.goBack(); }
+        if (await recovery.confirm(pending, recovery.confirmedRecordId) && operation.current(task)) finish();
       } finally { if (operation.current(task)) setBusy(false); operation.finish(task); }
       return;
     }
@@ -128,8 +151,7 @@ export function AddExpenseScreen({ navigation }: RecordsScreenProps<"AddExpense"
       haptics.succeeded();
       // The haptic is silent for anyone who has haptics off; the flash is what
       // the owner actually sees once the list comes back.
-      setFlash("Expense saved.");
-      navigation.goBack();
+      finish();
     } catch (err) {
       if (intent && !retryApproval && !attempt?.unknown && isDefiniteManualRecordRejection(err)) {
         try { await recovery.clear(intent); }
@@ -168,7 +190,7 @@ export function AddExpenseScreen({ navigation }: RecordsScreenProps<"AddExpense"
     <FormScreen>
       <ScreenHeader
         eyebrow="Money out"
-        title="Add expense"
+        title={from === "PaymentCalendar" ? "Record payment" : "Add expense"}
         subtitle="Record what the business paid and where it belongs."
       />
       <Card>

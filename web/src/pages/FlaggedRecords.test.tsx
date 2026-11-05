@@ -218,7 +218,7 @@ describe("the unified review queue", () => {
     ).toBeInTheDocument();
     // The band is words. The raw score exists only inside the collapsed audit
     // panel — present for support, never part of what the owner reads first.
-    expect(screen.getByText("High confidence")).toBeInTheDocument();
+    expect(screen.getByText("Very sure")).toBeInTheDocument();
     expect(screen.getByText("0.91")).not.toBeVisible();
   });
 

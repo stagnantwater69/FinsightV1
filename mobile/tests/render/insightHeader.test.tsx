@@ -15,7 +15,7 @@ function mount(active: InsightScreenId, title: string) {
 }
 
 describe('InsightHeader title switcher', () => {
-  it('lists the three insight screens with a plain description of each', async () => {
+  it('lists the insight screens with a plain description of each', async () => {
     const { queries } = mount('ExpenseBehavior', 'Expenses');
     const q = await queries;
     await fireEvent.press(q.getByRole('button', { name: 'Expenses. Switch insight' }));
@@ -24,6 +24,7 @@ describe('InsightHeader title switcher', () => {
       'Spending impact', 'How spending affects your business',
       'Recovery target', 'How much to sell to cover costs',
       'Where your money goes',
+      'Payment calendar', 'Bills and regular payments by date',
     ]) {
       expect(q.getAllByText(text).length).toBeGreaterThan(0);
     }

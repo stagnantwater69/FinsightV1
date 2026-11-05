@@ -161,11 +161,11 @@ function recoveryPeriodStatusLabel(period: RecoveryReportingPeriod): string {
     case "covered":
       return "Sales coverage target reached";
     case "ahead":
-      return period.isComplete ? "Finished above target" : "Ahead of pace";
+      return period.isComplete ? "Finished above target" : "Ahead";
     case "on_pace":
       return period.isComplete ? "Finished on target" : "On pace";
     case "behind":
-      return period.isComplete ? "Finished below target" : "Behind pace";
+      return period.isComplete ? "Finished below target" : "Behind";
   }
 }
 
@@ -320,11 +320,11 @@ function checkpointStatusColor(status: RecoveryCheckpointStatus): string {
 function checkpointStatusLabel(status: RecoveryCheckpointStatus, finished = false): string {
   switch (status) {
     case "behind":
-      return finished ? "Missed target" : "Behind pace";
+      return finished ? "Missed target" : "Behind";
     case "on_pace":
       return finished ? "Met target" : "On pace";
     case "ahead":
-      return finished ? "Beat target" : "Ahead of pace";
+      return finished ? "Beat target" : "Ahead";
     case "pending":
       return "Pending";
   }
@@ -406,7 +406,7 @@ function CheckpointCard({
       </div>
       <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div>
-          <dt className="text-xs text-ink-600">Cumulative target</dt>
+          <dt className="text-xs text-ink-600">Goal so far</dt>
           <dd className="figure font-semibold text-ink-900">
             {formatMoney(checkpoint.cumulativeTarget)}
           </dd>
@@ -473,7 +473,7 @@ const checkpointColumns = (isFinished: (c: RecoveryCheckpoint) => boolean): Colu
   },
   {
     key: "cumulativeTarget",
-    header: "Cumulative target",
+    header: "Goal so far",
     width: "content",
     align: "right",
     sortValue: (c) => c.cumulativeTarget,
@@ -1595,7 +1595,7 @@ function RecoveryScenarioPanel({
                     hypothetical={scenario.hypothetical.remainingTarget}
                   />
                   <ScenarioCompareCard
-                    label="Adjusted daily target"
+                    label="New daily goal"
                     current={scenario.current.adjustedDailyTarget}
                     hypothetical={scenario.hypothetical.adjustedDailyTarget}
                     emphasis
@@ -1605,12 +1605,12 @@ function RecoveryScenarioPanel({
 
               <div className="mt-4 space-y-2 border-t border-edge-accent/50 pt-3 text-xs leading-relaxed text-ink-600">
                 <p>
-                  Daily needed target in this scenario:{" "}
+                  Sell this much each day in this scenario:{" "}
                   <span className="figure font-semibold text-ink-900">
                     {formatMoney(scenario.hypothetical.dailyNeededTarget)}
                   </span>
-                  . For comparison, your current (real, saved) daily needed
-                  target is{" "}
+                  . For comparison, your current (real, saved) amount
+                  to sell each day is{" "}
                   <span className="figure font-semibold text-ink-900">
                     {formatMoney(scenario.current.dailyNeededTarget)}
                   </span>{" "}
@@ -1845,7 +1845,7 @@ function RecoveryHero({
           ) : showDailyAsk ? (
             <>
               <p className="mt-4 text-xs font-medium text-brand-200">
-                Adjusted daily target
+                New daily goal
               </p>
               <p className="figure mt-0.5 text-3xl font-semibold text-accent-200 sm:text-4xl">
                 {formatMoney(period.adjustedDailyTarget!)}
@@ -1909,7 +1909,7 @@ function RecoveryHero({
           aria-valuemax={100}
           aria-label={
             isCurrentMonth
-              ? "Month-to-date coverage of monthly costs"
+              ? "Monthly costs paid by sales so far"
               : `${recoveryPeriodLabel(period)} sales coverage of the recovery target`
           }
         >
@@ -2688,7 +2688,7 @@ function RecoveryInsightContent() {
 
       <PageTip id="recovery-target" title="What the recovery target is">
         It is the sales you need this month to cover your expected monthly expenses. FinSight spreads what is left
-        over your remaining operating days, so the daily target changes as you record sales.
+        over the open days you have left, so the daily target changes as you record sales.
       </PageTip>
 
       {error && !data ? (
@@ -2861,7 +2861,7 @@ function RecoveryInsightContent() {
                     {formatMoney(reportingPeriod.adjustedDailyTarget)}
                   </span>
                 </Kw>{" "}
-                per remaining operating day.
+                per open day left.
               </>
             ) : null}
           </AiCard>
@@ -2938,7 +2938,7 @@ function RecoveryInsightContent() {
                 label={
                   reportingPeriod.operatingDaysIsApproximated
                     ? "Open-day target"
-                    : "Daily needed target"
+                    : "Sell this much each day"
                 }
                 value={formatMoney(reportingPeriod.dailyTarget)}
                 sublabel="Computed from the two figures beside it"
@@ -2978,8 +2978,8 @@ function RecoveryInsightContent() {
             </div>
             <p className="mt-3 text-xs text-ink-500">
               {reportingPeriod.operatingDaysIsApproximated
-                ? "Open-day target = period target ÷ estimated operating days."
-                : "Daily needed target = period target ÷ operating days in the selected period."}
+                ? "Open-day target = the period's target ÷ its estimated open days."
+                : "Sell this much each day = the period's target ÷ its open days."}
             </p>
             {reportingPeriod.kind === "month" && reportingPeriod.isComplete ? (
               <p className="mt-1 text-xs text-ink-500">
@@ -3027,7 +3027,7 @@ function RecoveryInsightContent() {
                     ? "Remaining recovery target"
                     : "Remaining weekly target"
                 }
-                eyebrow="Recalculated across your remaining operating days"
+                eyebrow="Worked out again across the open days you have left"
               >
                 <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-5">
                   <PlanFigure
@@ -3054,7 +3054,7 @@ function RecoveryInsightContent() {
                     sublabel="Computed from your records"
                   />
                   <PlanFigure
-                    label="Remaining operating days"
+                    label="Open days left"
                     value={formatOperatingDays(
                       reportingPeriod.remainingOperatingDays,
                       reportingPeriod.operatingDaysIsApproximated,
@@ -3078,13 +3078,13 @@ function RecoveryInsightContent() {
                     }
                   />
                   <PlanFigure
-                    label="Adjusted daily target"
+                    label="New daily goal"
                     value={
                       reportingPeriod.adjustedDailyTarget === null
                         ? "Not applicable"
                         : formatMoney(reportingPeriod.adjustedDailyTarget)
                     }
-                    sublabel="Remaining target ÷ remaining operating days"
+                    sublabel="Remaining target ÷ open days left"
                     emphasis
                   />
                 </div>
@@ -3094,7 +3094,7 @@ function RecoveryInsightContent() {
                 </p>
                 {reportingPeriod.operatingDaysIsApproximated ? (
                   <p className="mt-1 text-xs text-ink-500">
-                    Remaining operating days is an estimate: your profile
+                    Open days left is an estimate: your profile
                     records how many days a month you operate, not which days of
                     the week, so this scales the count across the selected
                     period.{" "}
@@ -3243,7 +3243,7 @@ function RecoveryInsightContent() {
                 tabIndex={-1}
                 className="scroll-mt-6 text-base font-semibold text-ink-900 focus:outline-none"
               >
-                Daily coverage
+                Each day's sales
               </h2>
               <span className="text-xs text-ink-500">
                 {recoveryPeriodLabel(reportingPeriod)}
