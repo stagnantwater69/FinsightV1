@@ -252,6 +252,15 @@ export type RecordOrigin =
       imageUrl: string | null;
       items: RecordOriginItem[];
       itemsSubtotal: number;
+      /** The receipt's other lines: another record's (recordId) or none's (null). */
+      otherLines: {
+        lineNumber: number;
+        name: string;
+        quantity: number | null;
+        unitPrice: number | null;
+        amount: number;
+        recordId: number | null;
+      }[];
       siblings: {
         id: number;
         description: string;
@@ -324,6 +333,12 @@ export interface CsvBatchPreview {
   headers: string[];
   previewRows: Record<string, string>[];
   totalRows: number;
+  /** Asked with `expenseId`: the 1-based row number of previewRows[0], moved so the record's row is in view. */
+  firstRowNumber?: number;
+  /** Asked with `expenseId`: the rows that read as that record. Empty when none could be found. */
+  matchedRowNumbers?: number[];
+  /** Asked with `otherExpenseId`: the rows of the record it may duplicate, inside the same window. */
+  otherRowNumbers?: number[];
 }
 
 // ============================================================

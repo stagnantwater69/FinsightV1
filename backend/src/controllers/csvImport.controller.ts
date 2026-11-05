@@ -236,9 +236,15 @@ const batchParamsSchema = z.object({
   batchId: z.coerce.number().int().positive().max(2147483647),
 });
 
+const previewBatchQuerySchema = z.object({
+  expenseId: z.coerce.number().int().positive().max(2147483647).optional(),
+  otherExpenseId: z.coerce.number().int().positive().max(2147483647).optional(),
+});
+
 export async function previewBatch(req: Request, res: Response) {
   const params = batchParamsSchema.parse(req.params);
-  const result = await csvImportService.previewImportBatch(req.user!.id, params.batchId);
+  const { expenseId, otherExpenseId } = previewBatchQuerySchema.parse(req.query);
+  const result = await csvImportService.previewImportBatch(req.user!.id, params.batchId, expenseId, otherExpenseId);
   // Null covers "not this owner's batch" too (previewImportBatch never
   // distinguishes the two, matching requireOwnedBusinessProfile's rule), so
   // this 404 carries the same non-disclosure guarantee as everywhere else.

@@ -307,6 +307,21 @@ describe("previewImportBatch", () => {
   it("returns null for a batch that does not exist", async () => {
     expect(await previewImportBatch(ctx.user.id, 999999)).toBeNull();
   });
+
+  it("finds the row an expense came from, and only for an expense in that batch", async () => {
+    const batch = await makeBatch();
+    const { original } = await makeDuplicateCluster({ importBatchId: batch.id, copies: 0 });
+    const preview = await previewImportBatch(ctx.user.id, batch.id, original.id);
+    expect(preview).toMatchObject({ firstRowNumber: 1, matchedRowNumbers: [1] });
+
+    const loose = await makeDuplicateCluster({ copies: 0 });
+    const unrelated = await previewImportBatch(ctx.user.id, batch.id, loose.original.id);
+    expect(unrelated).not.toHaveProperty("matchedRowNumbers");
+
+    // A duplicate from outside the file has no row to mark.
+    const withOther = await previewImportBatch(ctx.user.id, batch.id, original.id, loose.original.id);
+    expect(withOther).not.toHaveProperty("otherRowNumbers");
+  });
 });
 
 describe("searchExpenseRecords — importBatchId filter", () => {
