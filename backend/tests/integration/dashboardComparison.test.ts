@@ -126,6 +126,17 @@ describe("dashboard period comparisons", () => {
     expect(summary.periodComparison?.net).toEqual({ previous: -500, changeAmount: 300, changePercent: null });
   });
 
+  it("keeps a net that turned negative as an amount comparison instead of a percentage", async () => {
+    await addSale("2026-08-17", 1_000);
+    await addExpense("2026-08-17", 400);
+    await addSale("2026-09-17", 100);
+    await addExpense("2026-09-17", 900);
+
+    const summary = await getDashboardSummary(owner.user.id, owner.profile.id, { kind: "month", month: "2026-09" });
+
+    expect(summary.periodComparison?.net).toEqual({ previous: 600, changeAmount: -1_400, changePercent: null });
+  });
+
   it("scopes comparisons to the selected owned business and refuses another owner's business", async () => {
     const sibling = await makeProfile(owner.user.id, { name: "Other branch" });
     const otherOwner = await makeOwnerWithProfile();

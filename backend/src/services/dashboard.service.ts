@@ -73,7 +73,9 @@ function periodChange(current: number, previous: number) {
   return {
     previous,
     changeAmount,
-    changePercent: previous > 0 ? (changeAmount / previous) * 100 : null,
+    // Only Net can go negative; a percentage across a sign change ("134.6%
+    // decrease" of a loss) means nothing, so clients show the peso change.
+    changePercent: previous > 0 && current >= 0 ? (changeAmount / previous) * 100 : null,
   };
 }
 
