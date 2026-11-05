@@ -38,6 +38,32 @@ describe("dashboard today's target", () => {
     expect(onAddSale).toHaveBeenCalledTimes(1);
   });
 
+  it("explains why the catch-up pace is higher than today's target, and only then", () => {
+    const note = "Higher than today’s target because earlier days this month fell short.";
+    const { unmount } = renderRecovery({ adjustedDailyTarget: 1_600 });
+    expect(screen.getByText("Needed per day from now")).toBeVisible();
+    expect(screen.getByText(note)).toBeVisible();
+    unmount();
+
+    renderRecovery({ adjustedDailyTarget: 1_250 });
+    expect(screen.queryByText(note)).not.toBeInTheDocument();
+  });
+
+  it("gives Behind pace its month figure: how far behind, what was expected, and the month target", () => {
+    renderRecovery({ expectedSalesToDate: 12_000, paceVarianceAmount: -2_000, remainingTarget: 30_000 });
+
+    const target = screen.getByRole("region", { name: "Today’s recovery target" });
+    expect(within(target).getByText("Behind by PHP 2,000")).toBeVisible();
+    expect(within(target).getByText("PHP 12,000")).toBeVisible();
+    // 10,000 recorded plus 30,000 remaining.
+    expect(within(target).getByText("PHP 40,000")).toBeVisible();
+  });
+
+  it("leaves the month block out when the server sends no pace", () => {
+    renderRecovery();
+    expect(screen.queryByText("Month so far")).not.toBeInTheDocument();
+  });
+
   it("shows a reached daily target when sales exceed the target", () => {
     renderRecovery({ todaysSales: 1_500, todaysGap: 250 });
 

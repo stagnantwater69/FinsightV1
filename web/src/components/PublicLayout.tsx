@@ -219,6 +219,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setMobileMenuOpen(false);
+    document.title = "FinSight";
   }, [pathname]);
 
   // No background scrolling while the mobile navigation is open, and Escape

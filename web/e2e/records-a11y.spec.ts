@@ -30,7 +30,7 @@ test("Add sales on Records opens a dialog named for sales with named fields", as
 
   await page.getByRole("button", { name: /add sales/i }).click();
 
-  const dialog = page.getByRole("dialog", { name: "Add sales reference" });
+  const dialog = page.getByRole("dialog", { name: "Add sale" });
   await expect(dialog).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Add expense" })).toHaveCount(0);
 

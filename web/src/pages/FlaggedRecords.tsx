@@ -9,6 +9,7 @@ import type {
   ChatFocus,
   AnomalyFindingPage,
   BusinessProfile,
+  FlaggedRecordCounts,
   FlaggedRecordPage,
   ImportBatchSummary,
   RecordItem,
@@ -25,6 +26,7 @@ import {
   type ReviewItem,
 } from "../lib/findingPresentation";
 import { SIGNAL_COPY } from "../lib/confidenceBands";
+import { flaggedCountRequest } from "./records/filters";
 import { Callout, Card, PageHead, Pill } from "../components/ui";
 import { Alert } from "../components/Alert";
 import { useAskFinSight } from "../components/AskFinSightButton";
@@ -32,7 +34,9 @@ import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { FormError } from "../components/Field";
 import { Money } from "../components/Money";
+import { LargeExpenseReason } from "../components/LargeExpenseReason";
 import { SkeletonRows } from "../components/Skeleton";
+import { formatCalendarDate } from "../lib/dates";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
 
@@ -67,46 +71,6 @@ function chunk<T>(list: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
   return out;
-}
-
-/**
- * Why a record was flagged, stated in the owner's own numbers.
- *
- * THIS IS THE QUALITY BAR for every reason in the queue, which is why it
- * survived the rebuild unchanged. It names the threshold, says where that
- * number came from (a percentage the owner chose themselves, of a figure they
- * entered themselves), and links to the screen that changes it — so it reads
- * as a setting rather than an accusation. UAT items 30 and 33 are both about
- * this: "Possible duplicate of record #412" told the owner nothing they could
- * act on.
- *
- * Both operands are on the BusinessProfile already in context, so this needs
- * no API call: amount >= expectedMonthlyExpenses × (threshold% / 100), the
- * same arithmetic largeExpenseThresholdFor() does on the server.
- */
-function LargeExpenseReason({ record, profile }: { record: RecordItem; profile: BusinessProfile }) {
-  const threshold =
-    Number(profile.expectedMonthlyExpenses) * (Number(profile.largeExpenseThresholdPercent) / 100);
-
-  if (!Number.isFinite(threshold) || threshold <= 0) {
-    return (
-      <>
-        Large compared with your usual spending. Set a starting monthly estimate to see the exact threshold.
-      </>
-    );
-  }
-
-  return (
-    <>
-      <Money value={record.amount} /> is at or above your large-expense threshold of{" "}
-      <Money value={threshold} />. That is {profile.largeExpenseThresholdPercent}% of your{" "}
-      <Money value={profile.expectedMonthlyExpenses} /> starting monthly estimate.{" "}
-      <Link to="/business-profiles" className="tap-inline link-action">
-        Change the threshold
-      </Link>{" "}
-      if this is normal for your business.
-    </>
-  );
 }
 
 /** How sure FinSight is, as words. Never a raw score — see ADR-4. */
@@ -168,7 +132,7 @@ function AuditSection({ item }: { item: ReviewItem }) {
             </div>
           ))}
         </dl>
-        <p className="mt-2 text-[11px] leading-relaxed text-ink-500">
+        <p className="mt-2 text-xs leading-relaxed text-ink-500">
           A comparison with this business's own history, not a claim that anything is wrong.
         </p>
       </div>
@@ -178,6 +142,22 @@ function AuditSection({ item }: { item: ReviewItem }) {
 
 export function FlaggedRecords() {
   const { selected } = useBusinessProfiles();
+  /*
+   * The record count the dashboard and the Records button show. The chips below
+   * count cards instead (a duplicate group is one card; a missing payment has
+   * no record), so the page names the shared number before the chips.
+   */
+  const [flaggedRecordCount, setFlaggedRecordCount] = useState<number | null>(null);
+  useEffect(() => {
+    setFlaggedRecordCount(null);
+    if (!selected) return;
+    const controller = new AbortController();
+    const { url, params, scope } = flaggedCountRequest(selected.id);
+    cachedApiGet<FlaggedRecordCounts>(url, { signal: controller.signal, params }, scope)
+      .then(({ data }) => setFlaggedRecordCount(data.total))
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [selected]);
   const confirm = useConfirm();
   const toast = useToast();
   const [records, setRecords] = useState<RecordItem[]>([]);
@@ -559,7 +539,11 @@ export function FlaggedRecords() {
       <PageHead
         eyebrow="Records management"
         title="Needs review"
-        subtitle="Duplicates, unusual spending and unclear scans."
+        subtitle={
+          flaggedRecordCount === null
+            ? "Duplicates, unusual spending and unclear scans."
+            : `${flaggedRecordCount} flagged record${flaggedRecordCount === 1 ? "" : "s"}, plus spending patterns and missing payments FinSight noticed. Duplicates from one import share a card.`
+        }
       />
 
       {error ? (
@@ -622,6 +606,13 @@ export function FlaggedRecords() {
         ) : <EmptyState title="Nothing needs review" icon="✓" />
       ) : (
         <div id={queueId} className="space-y-3">
+          {/* Said once for every group below rather than repeated on each card. */}
+          {visible.groups.length > 0 ? (
+            <Alert kind="duplicate">
+              Each duplicate has the same date, amount and description as a record you already had, often from
+              importing a file twice. Discarding a duplicate leaves the original untouched.
+            </Alert>
+          ) : null}
           {visible.groups.map((group) => (
             <GroupCard
               key={group.key}
@@ -877,22 +868,6 @@ function GroupCard({
         </div>
       </div>
 
-      <div className="mt-3">
-        <Alert kind="duplicate">
-          {group.batch ? (
-            <>
-              Each repeats a record you already had, usually from importing the file twice. Discarding
-              these leaves the originals untouched.
-            </>
-          ) : (
-            <>
-              {count === 1 ? "This record has" : `These ${count} records have`} the same date, amount and
-              description as a record you already had. Discarding{" "}
-              {count === 1 ? "it leaves" : "them leaves"} the original untouched.
-            </>
-          )}
-        </Alert>
-      </div>
 
       {/*
         Detector findings about records already in this group, folded in as a
@@ -928,7 +903,7 @@ function GroupCard({
                 className="min-w-0 truncate py-3 link-action"
               >
                 {r.description}
-                <span className="ml-1.5 text-xs text-ink-500">{r.date.slice(0, 10)}</span>
+                <span className="ml-1.5 whitespace-nowrap text-xs text-ink-500">{formatCalendarDate(r.date)}</span>
               </Link>
               <span className="shrink-0 text-ink-800">
                 <Money value={r.amount} decimals />

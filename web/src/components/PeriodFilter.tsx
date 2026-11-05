@@ -180,7 +180,7 @@ export function PeriodFilter({
           {years.map((year, yearIndex) => (
             <div key={year} role="group" aria-label={year} className="pb-1">
               <div className="sticky top-0 z-10 flex items-center gap-2 bg-paper px-2 pb-1.5 pt-2">
-                <span className="text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
+                <span className="text-xs font-bold uppercase tracking-[0.12em] text-ink-500">
                   {year}
                 </span>
                 <span aria-hidden className="h-px flex-1 bg-paper-200" />

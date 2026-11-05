@@ -28,13 +28,14 @@ import type { DashboardSummary } from "../lib/types";
  */
 const MESSAGE_TONE = {
   plain: "bg-tint-brand text-tone-brand ring-edge-brand",
-  warn: "bg-tint-accent text-tone-accent ring-edge-accent",
+  // Neutral, not amber: amber is kept for the primary action and the recovery target.
+  warn: "bg-tint-neutral text-ink-800 ring-edge-neutral",
 } as const;
 
 /** The bubble's tail: the same wash, with the two edges that face outward. */
 const TAIL_TONE = {
   plain: "bg-tint-brand border-edge-brand",
-  warn: "bg-tint-accent border-edge-accent",
+  warn: "bg-tint-neutral border-edge-neutral",
 } as const;
 
 const MASCOT_BOX = 112;
@@ -250,15 +251,16 @@ export function GreetingHero({
       aria-label="Greeting"
       className="mb-6 overflow-hidden rounded-2xl border border-paper-200 bg-paper shadow-sm"
     >
-      <div className="flex flex-col items-center gap-4 p-5 sm:flex-row sm:gap-6 sm:px-6">
-        <div className="relative shrink-0">
+      <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:gap-6 sm:p-5 sm:px-6">
+        {/* Fin is left out on phones so the first screen reaches the figures. */}
+        <div className="relative hidden shrink-0 sm:block">
           <span aria-hidden className="absolute inset-1.5 rounded-full bg-tint-brand" />
           <div className="relative">
             <FinFlipbook label="Fin, FinSight's mascot" />
           </div>
         </div>
 
-        <div className="min-w-0 flex-1 text-center sm:text-left">
+        <div className="min-w-0 flex-1 text-left">
           <p className="text-xs font-medium text-ink-500">{dateLine(now)}</p>
           {/*
             The NAME is the bold word, not the whole line. "Good evening" is the

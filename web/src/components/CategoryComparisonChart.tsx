@@ -54,7 +54,7 @@ export function CategoryComparisonChart({
           alone. The previous period is a tick on the same track as the bar,
           so "did it go up or down" is read as the bar passing or falling
           short of its tick. */}
-      <div className="mb-4 flex flex-wrap items-center justify-end gap-4 text-[11.5px] text-ink-500">
+      <div className="mb-4 flex flex-wrap items-center justify-end gap-4 text-xs text-ink-500">
         <span className="flex items-center gap-1.5">
           <span aria-hidden className="h-2.5 w-4 rounded-full" style={{ background: "linear-gradient(90deg, rgb(var(--chart-emphasis) / 0.55), rgb(var(--chart-emphasis)))" }} />
           {currentLabel}
@@ -106,7 +106,7 @@ export function CategoryComparisonChart({
               <span className="flex min-w-0 flex-wrap items-center justify-between gap-2 sm:justify-end">
                 <span className="figure whitespace-nowrap text-[12.5px] font-semibold text-ink-900">{formatMoney(t.current)}</span>
                 <span
-                  className={`figure inline-flex min-w-[3.25rem] justify-center rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${
+                  className={`figure inline-flex min-w-[3.25rem] justify-center rounded-md px-1.5 py-0.5 text-xs font-semibold ${
                     isUp ? "bg-tint-danger text-tone-danger" : isDown ? "bg-tint-brand text-tone-brand" : "bg-tint-neutral text-tone-neutral"
                   }`}
                   aria-hidden

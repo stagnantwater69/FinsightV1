@@ -205,14 +205,14 @@ export function RecoveryNotificationPreferences() {
 
                 <SettingSwitch
                   label="Behind pace for three days"
-                  description="Recorded sales references have been below target for three completed open days in a row."
+                  description="Recorded sales have been below target for three completed open days in a row."
                   checked={pref.behindThreeDaysAlertEnabled}
                   onChange={(checked) => setPref((p) => ({ ...p, behindThreeDaysAlertEnabled: checked }))}
                 />
 
                 <SettingSwitch
                   label="Monthly target reached"
-                  description="Recorded sales references reach your full monthly coverage goal."
+                  description="Recorded sales reach your full monthly coverage goal."
                   checked={pref.coverageReachedAlertEnabled}
                   onChange={(checked) => setPref((p) => ({ ...p, coverageReachedAlertEnabled: checked }))}
                 />

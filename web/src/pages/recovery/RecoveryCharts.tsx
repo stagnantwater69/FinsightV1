@@ -60,7 +60,7 @@ function ChartLegend({ targetLabel }: { targetLabel: string }) {
     <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-600">
       <li className="flex items-center gap-1.5">
         <LegendSwatch color={SALES_COLOR} />
-        Sales reference
+        Sales recorded
       </li>
       <li className="flex items-center gap-1.5">
         <LegendSwatch color={TARGET_COLOR} dashed />
@@ -241,91 +241,9 @@ function DayTooltip({
     <ChartTooltip
       title={shortDay(row.date)}
       rows={[
-        { label: "Sales reference", value: formatMoney(row.sales), color: SALES_COLOR },
+        { label: "Sales recorded", value: formatMoney(row.sales), color: SALES_COLOR },
         { label: "Allocated target", value: row.neededTarget === null ? "Closed day" : formatMoney(row.neededTarget), color: TARGET_COLOR },
       ]}
     />
-  );
-}
-
-/** Sales against the remaining amount, as a share of the period target. */
-export function TargetBreakdown({
-  sales,
-  target,
-}: {
-  sales: number;
-  target: number;
-}) {
-  const remaining = Math.max(target - sales, 0);
-  const salesShare = target > 0 ? Math.min((sales / target) * 100, 100) : 0;
-  const remainingShare = target > 0 ? 100 - salesShare : 0;
-  const size = 164;
-  const stroke = 22;
-  const radius = (size - stroke) / 2;
-  const circumference = 2 * Math.PI * radius;
-
-  return (
-    <div className="flex flex-col items-center gap-5 sm:flex-row lg:flex-col xl:flex-row">
-      <div
-        className="relative shrink-0"
-        style={{ width: size, height: size }}
-        role="img"
-        aria-label={`${salesShare.toFixed(0)}% of the ${formatMoney(target)} target recorded`}
-      >
-        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
-          <circle
-            cx={size / 2}
-            cy={size / 2}
-            r={radius}
-            fill="none"
-            stroke="rgb(var(--chart-muted))"
-            strokeWidth={stroke}
-          />
-          {salesShare > 0 ? (
-            <circle
-              cx={size / 2}
-              cy={size / 2}
-              r={radius}
-              fill="none"
-              stroke={SALES_COLOR}
-              strokeWidth={stroke}
-              strokeDasharray={`${(circumference * salesShare) / 100} ${circumference}`}
-            />
-          ) : null}
-        </svg>
-        <span aria-hidden className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center">
-          <span className="figure text-[15px] font-semibold leading-tight text-ink-900">
-            {formatMoney(target)}
-          </span>
-          <span className="mt-0.5 text-[11px] text-ink-500">Period target</span>
-        </span>
-      </div>
-      <dl className="w-full min-w-0 space-y-3 text-sm">
-        <div className="flex items-start gap-2.5">
-          <span aria-hidden className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: SALES_COLOR }} />
-          <div className="min-w-0">
-            <dt className="text-xs text-ink-500">Sales reference</dt>
-            <dd className="figure font-semibold text-ink-900">
-              {formatMoney(sales)}{" "}
-              <span className="text-xs font-medium text-ink-500">({salesShare.toFixed(0)}%)</span>
-            </dd>
-          </div>
-        </div>
-        <div className="flex items-start gap-2.5">
-          <span
-            aria-hidden
-            className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
-            style={{ backgroundColor: "rgb(var(--chart-muted))" }}
-          />
-          <div className="min-w-0">
-            <dt className="text-xs text-ink-500">Still to record</dt>
-            <dd className="figure font-semibold text-ink-900">
-              {formatMoney(remaining)}{" "}
-              <span className="text-xs font-medium text-ink-500">({remainingShare.toFixed(0)}%)</span>
-            </dd>
-          </div>
-        </div>
-      </dl>
-    </div>
   );
 }

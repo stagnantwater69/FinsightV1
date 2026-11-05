@@ -70,6 +70,12 @@ export function DailySpendChart({ daily, bucket = "day" }: { daily: DailyExpense
   const average = total / daily.length;
   const busiest = daily.reduce((a, b) => (b.total > a.total ? b : a), daily[0]!);
   const spendingDays = daily.filter((d) => d.total > 0).length;
+  // The line stops at the last recorded expense. Drawn on to the end of the
+  // month, the empty tail read as "spending stopped" rather than "nothing yet".
+  let lastRecorded = -1;
+  daily.forEach((d, i) => { if (d.count > 0) lastRecorded = i; });
+  const plotted = daily.map((d, i) => ({ ...d, plotted: i <= lastRecorded ? d.total : null }));
+  const trailingEmpty = lastRecorded >= 0 && lastRecorded < daily.length - 1;
 
   return (
     <div>
@@ -95,7 +101,7 @@ export function DailySpendChart({ daily, bucket = "day" }: { daily: DailyExpense
           empty. A phone keeps the compact height. */}
       <div className="h-[200px] min-w-0 text-ink-500 lg:h-[300px]">
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={daily} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <AreaChart data={plotted} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="dailySpendFill" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="rgb(var(--chart-emphasis))" stopOpacity={0.45} />
@@ -152,7 +158,7 @@ export function DailySpendChart({ daily, bucket = "day" }: { daily: DailyExpense
 
             <Area
               type="monotone"
-              dataKey="total"
+              dataKey="plotted"
               stroke="rgb(var(--chart-emphasis))"
               strokeWidth={2.5}
               fill="url(#dailySpendFill)"
@@ -179,6 +185,12 @@ export function DailySpendChart({ daily, bucket = "day" }: { daily: DailyExpense
           </AreaChart>
         </ResponsiveContainer>
       </div>
+
+      {trailingEmpty ? (
+        <p className="mt-2 text-xs text-ink-500">
+          No expenses recorded after {shortDate(daily[lastRecorded]!.date)}.
+        </p>
+      ) : null}
 
       {/* The table twin.
           Without it, every daily figure would be reachable only by hovering

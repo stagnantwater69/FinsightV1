@@ -41,6 +41,21 @@ export function SkeletonPanel({ lines = 4, title = true }: { lines?: number; tit
   );
 }
 
+/** The inside of FormPage's card while a record loads: label and field rows, then the save button. */
+export function SkeletonFormFields({ fields = 5 }: { fields?: number }) {
+  return (
+    <div role="status" aria-label="Loading" className="space-y-5">
+      {Array.from({ length: fields }).map((_, i) => (
+        <div key={i}>
+          <SkeletonLine className="w-24" />
+          <div className="skeleton mt-2.5 h-10 w-full rounded-xl" aria-hidden />
+        </div>
+      ))}
+      <div className="skeleton h-11 w-full rounded-xl" aria-hidden />
+    </div>
+  );
+}
+
 /** Matches a Records table row / card. */
 export function SkeletonRows({ rows = 5 }: { rows?: number }) {
   return (

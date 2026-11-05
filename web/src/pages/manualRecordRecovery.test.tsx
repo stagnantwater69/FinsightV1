@@ -249,7 +249,7 @@ async function enter(kind: string, surface: string) {
   if (kind === "expense") await user.selectOptions(screen.getByLabelText(/^Category/), "10");
   fireEvent.change(screen.getByLabelText(/^Description/), { target: { value: "Synthetic purchase" } });
   fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: "1234.56" } });
-  const label = kind === "expense" ? "Save expense" : "Save sales reference";
+  const label = kind === "expense" ? "Save expense" : "Save sale";
   return { user, q, label };
 }
 

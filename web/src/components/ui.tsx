@@ -55,12 +55,12 @@ export function Pill({ tone = "neutral", children }: { tone?: PillTone; children
 
 export function Tag({ kind }: { kind: "expense" | "sales" }) {
   return kind === "expense" ? (
-    <span className="inline-flex shrink-0 rounded-lg bg-tint-accent px-2 py-0.5 text-[11.5px] font-semibold text-tone-accent ring-1 ring-edge-accent">
+    <span className="inline-flex shrink-0 rounded-lg bg-tint-neutral px-2 py-0.5 text-xs font-semibold text-tone-neutral ring-1 ring-edge-neutral">
       Expense
     </span>
   ) : (
-    <span className="inline-flex shrink-0 rounded-lg bg-tint-brand px-2 py-0.5 text-[11.5px] font-semibold text-tone-brand ring-1 ring-edge-brand">
-      Sales ref.
+    <span className="inline-flex shrink-0 rounded-lg bg-tint-brand px-2 py-0.5 text-xs font-semibold text-tone-brand ring-1 ring-edge-brand">
+      Sale
     </span>
   );
 }
@@ -240,7 +240,7 @@ export function AiCard({
 
 /** Highlights a figure inside AiCard prose. Warm, so it reads off the dark ground. */
 export function Kw({ children }: { children: ReactNode }) {
-  return <span className="font-bold text-accent-200">{children}</span>;
+  return <span className="font-bold text-white">{children}</span>;
 }
 
 // ============================================================
@@ -293,36 +293,23 @@ export function PageHead({
   title,
   subtitle,
   actions,
-  inBreadcrumb = false,
 }: {
   eyebrow?: string;
   title: ReactNode;
   subtitle?: ReactNode;
   actions?: ReactNode;
-  /**
-   * For the sidebar tab pages: from lg up the topbar breadcrumb already names
-   * the page, so the visible title block steps aside (the h1 stays for screen
-   * readers). Below lg the breadcrumb is hidden and the title shows as usual.
-   */
-  inBreadcrumb?: boolean;
 }) {
   return (
-    <div
-      className={`mb-5 flex flex-wrap items-start justify-between gap-3 ${
-        inBreadcrumb && !actions ? "lg:mb-0" : ""
-      }`}
-    >
-      <div className={`min-w-0 ${inBreadcrumb ? "lg:sr-only" : ""}`}>
+    <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
         {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
         <h1 className="text-xl font-bold text-ink-900 sm:text-2xl">{title}</h1>
         {subtitle ? <p className="mt-1 max-w-2xl text-sm text-ink-500">{subtitle}</p> : null}
       </div>
-      {/* `ml-auto` keeps the actions on the right when the title block is
-          visually hidden (inBreadcrumb, lg up) and they are the only item in the row.
-          `min-w-0` lets the group shrink to the column, so an action row that
-          scrolls sideways (Records) scrolls inside itself, not the page. */}
+      {/* `min-w-0` lets the group shrink to the column, so an action row that
+          scrolls sideways scrolls inside itself, not the page. */}
       {actions ? (
-        <div className={`flex min-w-0 flex-wrap items-center gap-2 ${inBreadcrumb ? "lg:ml-auto" : ""}`}>{actions}</div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div>
       ) : null}
     </div>
   );
@@ -366,6 +353,8 @@ export function FormPage({
    * against. The receipt confirm screen already works this way.
    */
   aside,
+  /** A second card under the form, in the same column (the record a duplicate matches). */
+  below,
   children,
 }: {
   eyebrow?: string;
@@ -374,6 +363,7 @@ export function FormPage({
   actions?: ReactNode;
   wide?: boolean;
   aside?: ReactNode;
+  below?: ReactNode;
   children: ReactNode;
 }) {
   /*
@@ -387,7 +377,8 @@ export function FormPage({
    * A form with one field per row keeps the narrower default, which is the
    * measure that reasoning was written for.
    */
-  const card = <Card className={`${wide ? "max-w-4xl" : "max-w-xl"} p-6 sm:p-7`}>{children}</Card>;
+  const form = <Card className={`${wide ? "max-w-4xl" : "max-w-xl"} p-6 sm:p-7`}>{children}</Card>;
+  const card = below ? <div className="min-w-0 space-y-4">{form}{below}</div> : form;
 
   return (
     <div>
@@ -400,13 +391,15 @@ export function FormPage({
          * would put the tab order out of step with what is on screen, which is
          * exactly the kind of thing the keyboard-navigation pass fixed.
          *
-         * `items-start` so the sticky panel has room to stick against; without
-         * it the grid stretches both columns to equal height and there is
-         * nothing to scroll past.
+         * Side by side, the panel ends where the form column ends. It is taken
+         * out of flow so a 50-row file cannot make the row taller than the
+         * form; the panel scrolls inside instead.
          */
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,36rem)_minmax(0,1fr)] xl:items-start">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,32rem)_minmax(0,1fr)]">
           {card}
-          <div className="xl:sticky xl:top-6">{aside}</div>
+          <div className="relative min-w-0">
+            <div className="xl:absolute xl:inset-0">{aside}</div>
+          </div>
         </div>
       ) : (
         card

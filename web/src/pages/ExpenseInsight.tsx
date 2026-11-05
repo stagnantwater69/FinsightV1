@@ -33,8 +33,6 @@ import {
   AskFinSightButton,
   useAskFinSight,
 } from "../components/AskFinSightButton";
-import { DonutChart } from "../components/DonutChart";
-import { CategoryComparisonChart } from "../components/CategoryComparisonChart";
 import { DailySpendChart } from "../components/DailySpendChart";
 import {
   SkeletonLine,
@@ -59,12 +57,10 @@ import { ReductionSimulationModal } from "../components/ReductionSimulationModal
 import { Modal } from "../components/Modal";
 import { PeriodFilter } from "../components/PeriodFilter";
 import { SeeAllFooter } from "../components/SeeAllFooter";
-import { CandidateRow, FindingCard } from "./expenseInsight/reviewItems";
+import { CandidateRow } from "./expenseInsight/reviewItems";
 import {
   CANDIDATES_PREVIEW_COUNT,
-  EXPENSE_FINDINGS_PATH,
   EXPENSE_RECURRING_PATH,
-  FINDINGS_PREVIEW_COUNT,
   SCHEDULES_PREVIEW_COUNT,
   openFindingsRequest,
   recurringPatternsRequest,
@@ -81,9 +77,7 @@ import {
 } from "../lib/reportingPeriod";
 import type {
   AnomalyFinding,
-  AnomalyFindingFeedback,
   AnomalyFindingPage,
-  AnomalyFindingStatus,
   ExpenseBehavior as ExpenseInsightData,
   FinancialPosition,
   FlaggedRecordCounts,
@@ -113,9 +107,7 @@ import { ListDisclosureControl, useListDisclosure } from "../components/ListDisc
  * here answers a plain question in the order someone actually asks it:
  *
  *   1. How much did I spend, and is that a lot?      — the KPI row
- *   2. Where did it go?                              — Category distribution
- *   3. What changed since last time?                 — Category comparison
- *   4. The numbers, exactly                          — Category summary table
+ *   2-4. Where did it go, what changed, exactly      — Category summary table
  *   5. Anything I should act on?                     — Large expense flags + FinSight's own read of the panel
  *   6. When did it leave?                            — Daily spending
  *   7. Anything odd, statistically?                  — Unusual expenses (Z-score)
@@ -159,11 +151,8 @@ function flagReasons(
     );
   }
   if (record.duplicateStatus === "Flagged") {
-    reasons.push(
-      record.duplicateOfRecordId
-        ? `a possible duplicate of record #${record.duplicateOfRecordId}`
-        : "a possible duplicate of another record",
-    );
+    // The other record's database id means nothing to an owner; Needs review shows the pair side by side.
+    reasons.push("a possible duplicate of another record");
   }
   return reasons.length > 0 ? reasons : ["flagged for a second look"];
 }
@@ -220,7 +209,7 @@ function ChangeFigure({
       {up ? "+" : "−"}
       {formatMoney(Math.abs(change))}
       {percent !== null && percent !== 0 ? (
-        <span className="ml-1 text-[11px] font-medium opacity-80">
+        <span className="ml-1 text-xs font-medium opacity-80">
           {Math.abs(percent).toFixed(0)}%
         </span>
       ) : null}
@@ -497,7 +486,7 @@ function OpportunityRow({
 const OPPORTUNITY_ACTION =
   "tap flex min-h-tap items-center justify-center rounded-lg border font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500";
 // Icon over label keeps three tiles side by side even in the narrowest card.
-const OPPORTUNITY_TILE = `${OPPORTUNITY_ACTION} flex-col gap-1 border-paper-200 bg-paper px-1.5 py-2 text-[11px] leading-tight text-ink-700 hover:border-edge-brand hover:bg-tint-brand hover:text-tone-brand`;
+const OPPORTUNITY_TILE = `${OPPORTUNITY_ACTION} flex-col gap-1 border-paper-200 bg-paper px-1.5 py-2 text-xs leading-tight text-ink-700 hover:border-edge-brand hover:bg-tint-brand hover:text-tone-brand`;
 
 function OpportunityCard({
   opportunity,
@@ -583,7 +572,7 @@ function OpportunityCard({
         <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-paper-200 py-3 sm:grid-cols-3">
           {evidenceFigures(opportunity).map((fig) => (
             <div key={fig.label} className="min-w-0">
-              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
+              <dt className="text-xs font-semibold uppercase tracking-[0.04em] text-ink-500">
                 {fig.label}
               </dt>
               <dd className="mt-0.5 text-sm font-semibold text-ink-900">
@@ -1220,22 +1209,6 @@ function ExpenseInsightPage() {
     ]);
   }
 
-  async function reviewFinding(
-    id: number,
-    status: AnomalyFindingStatus,
-    feedback: AnomalyFindingFeedback,
-  ) {
-    if (!selected) return;
-    const requestScopeKey = expenseScopeKey;
-    await api.patch(
-      `/insights/findings/${id}/review`,
-      { status, feedback },
-      { serverStateScope: { businessProfileId: selected.id } },
-    );
-    if (activeExpenseScopeRef.current !== requestScopeKey) return;
-    setFindings((current) => current.filter((finding) => finding.id !== id));
-  }
-
   /**
    * Promotes a detector candidate into an owner-owned schedule.
    *
@@ -1580,12 +1553,10 @@ function ExpenseInsightPage() {
    * and narrows `selected` for everything after it.
    */
 
-  // Findings belong to the period page, so they show only when that page
-  // does; they render in the row below it, beside the recurring panels.
+  // Findings belong to the period page, so the pointer shows only when that page does.
   const showPeriodFindings =
     !!selected && !!summary && summary.total !== 0 && showFindingsPanel;
   const lowerRowCount =
-    Number(showPeriodFindings) +
     Number(showRecurringBlock && recurringSchedules !== null) +
     Number(
       showRecurringBlock &&
@@ -1609,7 +1580,6 @@ function ExpenseInsightPage() {
   return (
     <div>
       <PageHead
-        inBreadcrumb
         eyebrow="Insights"
         title="Expense insight"
         actions={<PeriodFilter showAllTime={false} />}
@@ -1800,7 +1770,9 @@ function ExpenseInsightPage() {
               <p className="figure mt-2 text-2xl font-bold text-ink-900">
                 {summary.fundsShare === null
                   ? "—"
-                  : `${summary.fundsShare.toFixed(0)}%`}
+                  : summary.fundsShare > 100
+                    ? "Over 100%"
+                    : `${summary.fundsShare.toFixed(0)}%`}
               </p>
               <p className="mt-1 text-xs text-ink-600">
                 {summary.fundsShare === null
@@ -1810,8 +1782,8 @@ function ExpenseInsightPage() {
                       ? "Loading recorded available funds…"
                       : usingStartingFundsFallback
                         ? (startingFundsFallback ?? 0) > 0
-                          ? `${formatMoney(summary.total)} of ${formatMoney(startingFundsFallback)} starting funds`
-                          : `Starting funds fallback: ${formatMoney(startingFundsFallback ?? 0)}`
+                          ? `${formatMoney(summary.total)} of ${formatMoney(startingFundsFallback)} opening balance`
+                          : `Opening balance fallback: ${formatMoney(startingFundsFallback ?? 0)}`
                         : `Recorded available funds: ${formatMoney(availableFundsDenominator ?? 0)}`
                   : `${formatMoney(summary.total)} of ${formatMoney(availableFundsDenominator ?? 0)} recorded available funds`}
               </p>
@@ -1821,7 +1793,7 @@ function ExpenseInsightPage() {
                   className="mt-2 text-xs leading-relaxed text-tone-accent"
                 >
                   <span title={currentFinancialPositionError ?? undefined}>
-                    Recorded balance couldn’t load. Using starting funds.
+                    Recorded balance couldn’t load. Using the opening balance.
                   </span>{" "}
                   <button
                     type="button"
@@ -1949,9 +1921,19 @@ function ExpenseInsightPage() {
               KPI above states the number; this says what to do about it. */}
           {summary.fundsShare !== null && summary.fundsShare > 75 ? (
             <Callout tone="warn">
-              Spending {periodText} is{" "}
-              <b className="font-semibold">{summary.fundsShare.toFixed(0)}%</b>{" "}
-              of your recorded available funds.
+              {summary.fundsShare > 100 && availableFundsDenominator ? (
+                // Past 100%, a percentage of a balance is hard to read; the two amounts are not.
+                <>
+                  Spending {periodText} (<b className="figure font-semibold">{formatMoney(summary.total)}</b>) is more than your
+                  recorded available funds (<b className="figure font-semibold">{formatMoney(availableFundsDenominator)}</b>).
+                </>
+              ) : (
+                <>
+                  Spending {periodText} is{" "}
+                  <b className="font-semibold">{summary.fundsShare.toFixed(0)}%</b>{" "}
+                  of your recorded available funds.
+                </>
+              )}
             </Callout>
           ) : null}
 
@@ -1983,260 +1965,233 @@ function ExpenseInsightPage() {
             </Panel>
           </div>
 
-          {/* ================= 2 & 3. WHERE IT WENT / WHAT CHANGED ================= */}
-          <div
-            id="expense-categories"
-            className={`scroll-mt-6 grid gap-5 ${allTime ? "" : "xl:grid-cols-[0.8fr_1.2fr]"}`}
-          >
-            <Panel title="Category distribution" className="min-w-0 xl:order-2">
-              <DonutChart
-                breakdown={data.categoryTrends
-                  .filter((t) => t.current > 0)
-                  .map((t) => ({
-                    categoryName: t.categoryName,
-                    total: t.current,
-                  }))}
-              />
-            </Panel>
-
-            {/* All time has no earlier period to compare with. */}
-            {!allTime ? (
-              <Panel title="Category comparison" className="min-w-0 xl:order-1">
-                <CategoryComparisonChart
-                  trends={data.categoryTrends}
-                  currentLabel={periodCaption}
-                  previousLabel={comparedWith}
-                  resetKey={expenseScopeKey}
-                />
-              </Panel>
-            ) : null}
-          </div>
-
-          {/* ===================== 4. THE TABLE ===================== */}
-          {/* The accessible reading of every chart above, and the relief the
-              palette's contrast check requires: nothing on this page is
-              knowable only by colour. */}
-          <Panel
-            title="Category summary"
-            action={
-              <span className="text-xs text-ink-500">
-                {formatDayRange(data.periodStart.slice(0, 10), data.periodEnd.slice(0, 10))}
-              </span>
-            }
-            bodyClassName="px-0 pb-0"
-          >
-            {/* On a phone, a six-column table turns comparison into horizontal
-                scavenger hunting. The same values become compact category
-                records; the semantic table remains the desktop reading. */}
-            <div id={categoryDisclosure.contentId}>
-              <ul className="space-y-2 px-4 pb-4 md:hidden">
-                {data.categoryTrends.slice(0, categoryDisclosure.visibleCount).map((trend) => (
-                  <li
-                    key={trend.categoryId}
-                    className="rounded-xl border border-paper-200 bg-paper-100/50 p-3.5"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="font-semibold text-ink-900">
-                          {trend.categoryName}
-                        </p>
-                        <p className="mt-0.5 text-xs text-ink-500">
-                          {trend.recordCount} expense
-                          {trend.recordCount === 1 ? "" : "s"} ·{" "}
-                          {summary.total > 0
-                            ? ((trend.current / summary.total) * 100).toFixed(1)
-                            : "0.0"}
-                          %
+          <div id="expense-categories" className="scroll-mt-6">
+            {/* ===================== 4. THE TABLE ===================== */}
+            {/* The accessible reading of every chart above, and the relief the
+                palette's contrast check requires: nothing on this page is
+                knowable only by colour. */}
+            <Panel
+              title="Category summary"
+              action={
+                <span className="text-xs text-ink-500">
+                  {formatDayRange(data.periodStart.slice(0, 10), data.periodEnd.slice(0, 10))}
+                </span>
+              }
+              bodyClassName="px-0 pb-0"
+            >
+              {/* On a phone, a six-column table turns comparison into horizontal
+                  scavenger hunting. The same values become compact category
+                  records; the semantic table remains the desktop reading. */}
+              <div id={categoryDisclosure.contentId}>
+                <ul className="space-y-2 px-4 pb-4 md:hidden">
+                  {data.categoryTrends.slice(0, categoryDisclosure.visibleCount).map((trend) => (
+                    <li
+                      key={trend.categoryId}
+                      className="rounded-xl border border-paper-200 bg-paper-100/50 p-3.5"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-semibold text-ink-900">
+                            {trend.categoryName}
+                          </p>
+                          <p className="mt-0.5 text-xs text-ink-500">
+                            {trend.recordCount} expense
+                            {trend.recordCount === 1 ? "" : "s"} ·{" "}
+                            {summary.total > 0
+                              ? ((trend.current / summary.total) * 100).toFixed(1)
+                              : "0.0"}
+                            %
+                          </p>
+                        </div>
+                        <p className="figure shrink-0 text-sm font-bold text-ink-900">
+                          {formatMoney(trend.current)}
                         </p>
                       </div>
-                      <p className="figure shrink-0 text-sm font-bold text-ink-900">
-                        {formatMoney(trend.current)}
-                      </p>
-                    </div>
-                    <ShareBar
-                      percent={summary.total > 0 ? (trend.current / summary.total) * 100 : 0}
-                      color="rgb(var(--chart-emphasis))"
-                      className="mt-2.5 h-1.5"
-                    />
-                    {!allTime ? (
-                    <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-paper-200 pt-3">
-                      <div>
-                        <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
-                          {comparedWith}
-                        </dt>
-                        <dd className="figure mt-1 text-sm text-ink-600">
-                          {formatMoney(trend.previous)}
-                        </dd>
-                      </div>
-                      <div className="text-right">
-                        <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
-                          Change
-                        </dt>
-                        <dd className="mt-1 text-sm">
-                          <ChangeFigure
-                            change={trend.change}
-                            percent={trend.percentChange}
-                          />
-                        </dd>
-                      </div>
-                    </dl>
-                    ) : null}
-                  </li>
-                ))}
-                <li className="flex items-center justify-between gap-3 border-t border-paper-200 px-1 pt-3 text-sm">
-                  <span className="font-semibold text-ink-600">Total</span>
-                  <span className="figure font-bold text-ink-900">
-                    {formatMoney(summary.total)}
-                  </span>
-                </li>
-              </ul>
-
-              <div className="scroll-slim hidden overflow-x-auto md:block">
-                <table className="w-full border-collapse text-left text-sm">
-                  <caption className="sr-only">
-                    Expenses by category for {selected.name}, {periodText}
-                    {allTime ? "" : `, compared with ${comparedWith}`}.
-                  </caption>
-                  <thead>
-                    <tr className="border-y border-paper-200 bg-paper-100/60">
-                      <th
-                        scope="col"
-                        className="px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                      >
-                        Category
-                      </th>
-                      <th
-                        scope="col"
-                        className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                      >
-                        {periodCaption}
-                      </th>
-                      <th
-                        scope="col"
-                        className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                      >
-                        Share
-                      </th>
+                      <ShareBar
+                        percent={summary.total > 0 ? (trend.current / summary.total) * 100 : 0}
+                        color="rgb(var(--chart-emphasis))"
+                        className="mt-2.5 h-1.5"
+                      />
                       {!allTime ? (
-                        <>
-                          <th
-                            scope="col"
-                            className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                          >
+                      <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-paper-200 pt-3">
+                        <div>
+                          <dt className="text-xs font-semibold uppercase tracking-[0.04em] text-ink-500">
                             {comparedWith}
-                          </th>
-                          <th
-                            scope="col"
-                            className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                          >
+                          </dt>
+                          <dd className="figure mt-1 text-sm text-ink-600">
+                            {formatMoney(trend.previous)}
+                          </dd>
+                        </div>
+                        <div className="text-right">
+                          <dt className="text-xs font-semibold uppercase tracking-[0.04em] text-ink-500">
                             Change
-                          </th>
-                        </>
+                          </dt>
+                          <dd className="mt-1 text-sm">
+                            <ChangeFigure
+                              change={trend.change}
+                              percent={trend.percentChange}
+                            />
+                          </dd>
+                        </div>
+                      </dl>
                       ) : null}
-                      <th
-                        scope="col"
-                        className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                      >
-                        Count
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.categoryTrends.slice(0, categoryDisclosure.visibleCount).map((t) => (
-                      <tr
-                        key={t.categoryId}
-                        className="border-b border-paper-200 last:border-0"
-                      >
+                    </li>
+                  ))}
+                  <li className="flex items-center justify-between gap-3 border-t border-paper-200 px-1 pt-3 text-sm">
+                    <span className="font-semibold text-ink-600">Total</span>
+                    <span className="figure font-bold text-ink-900">
+                      {formatMoney(summary.total)}
+                    </span>
+                  </li>
+                </ul>
+
+                <div className="scroll-slim hidden overflow-x-auto md:block">
+                  <table className="w-full border-collapse text-left text-sm">
+                    <caption className="sr-only">
+                      Expenses by category for {selected.name}, {periodText}
+                      {allTime ? "" : `, compared with ${comparedWith}`}.
+                    </caption>
+                    <thead>
+                      <tr className="border-y border-paper-200 bg-paper-100/60">
+                        <th
+                          scope="col"
+                          className="px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                        >
+                          Category
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                        >
+                          {periodCaption}
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                        >
+                          Share
+                        </th>
+                        {!allTime ? (
+                          <>
+                            <th
+                              scope="col"
+                              className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                            >
+                              {comparedWith}
+                            </th>
+                            <th
+                              scope="col"
+                              className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                            >
+                              Change
+                            </th>
+                          </>
+                        ) : null}
+                        <th
+                          scope="col"
+                          className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                        >
+                          Count
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.categoryTrends.slice(0, categoryDisclosure.visibleCount).map((t) => (
+                        <tr
+                          key={t.categoryId}
+                          className="border-b border-paper-200 last:border-0"
+                        >
+                          <th
+                            scope="row"
+                            className="px-5 py-3 text-left font-medium text-ink-900"
+                          >
+                            {t.categoryName}
+                          </th>
+                          <td className="figure px-4 py-3 text-right font-semibold text-ink-900">
+                            {formatMoney(t.current)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-ink-600">
+                            <div className="flex items-center justify-end gap-2.5">
+                              <div className="w-20">
+                                <ShareBar
+                                  percent={summary.total > 0 ? (t.current / summary.total) * 100 : 0}
+                                  color="rgb(var(--chart-emphasis))"
+                                  className="h-1.5"
+                                />
+                              </div>
+                              <span className="figure w-12">
+                                {summary.total > 0
+                                  ? ((t.current / summary.total) * 100).toFixed(1)
+                                  : "0.0"}
+                                %
+                              </span>
+                            </div>
+                          </td>
+                          {!allTime ? (
+                            <>
+                              <td className="figure px-4 py-3 text-right text-ink-500">
+                                {formatMoney(t.previous)}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <ChangeFigure
+                                  change={t.change}
+                                  percent={t.percentChange}
+                                />
+                              </td>
+                            </>
+                          ) : null}
+                          <td className="figure px-5 py-3 text-right text-ink-600">
+                            {t.recordCount}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t border-paper-200 bg-paper-100/60">
                         <th
                           scope="row"
-                          className="px-5 py-3 text-left font-medium text-ink-900"
+                          className="px-5 py-3 text-left text-xs font-bold uppercase tracking-[0.06em] text-ink-600"
                         >
-                          {t.categoryName}
+                          Total
                         </th>
-                        <td className="figure px-4 py-3 text-right font-semibold text-ink-900">
-                          {formatMoney(t.current)}
+                        <td className="figure px-4 py-3 text-right font-bold text-ink-900">
+                          {formatMoney(summary.total)}
                         </td>
-                        <td className="px-4 py-3 text-right text-ink-600">
-                          <div className="flex items-center justify-end gap-2.5">
-                            <div className="w-20">
-                              <ShareBar
-                                percent={summary.total > 0 ? (t.current / summary.total) * 100 : 0}
-                                color="rgb(var(--chart-emphasis))"
-                                className="h-1.5"
-                              />
-                            </div>
-                            <span className="figure w-12">
-                              {summary.total > 0
-                                ? ((t.current / summary.total) * 100).toFixed(1)
-                                : "0.0"}
-                              %
-                            </span>
-                          </div>
+                        <td className="figure px-4 py-3 text-right text-ink-600">
+                          100.0%
                         </td>
                         {!allTime ? (
                           <>
-                            <td className="figure px-4 py-3 text-right text-ink-500">
-                              {formatMoney(t.previous)}
+                            <td className="figure px-4 py-3 text-right text-ink-600">
+                              {formatMoney(data.totals.previous)}
                             </td>
                             <td className="px-4 py-3 text-right">
                               <ChangeFigure
-                                change={t.change}
-                                percent={t.percentChange}
+                                change={summary.periodDelta}
+                                percent={summary.periodPercent}
                               />
                             </td>
                           </>
                         ) : null}
                         <td className="figure px-5 py-3 text-right text-ink-600">
-                          {t.recordCount}
+                          {data.categoryTrends.reduce(
+                            (s, t) => s + t.recordCount,
+                            0,
+                          )}
                         </td>
                       </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t border-paper-200 bg-paper-100/60">
-                      <th
-                        scope="row"
-                        className="px-5 py-3 text-left text-xs font-bold uppercase tracking-[0.06em] text-ink-600"
-                      >
-                        Total
-                      </th>
-                      <td className="figure px-4 py-3 text-right font-bold text-ink-900">
-                        {formatMoney(summary.total)}
-                      </td>
-                      <td className="figure px-4 py-3 text-right text-ink-600">
-                        100.0%
-                      </td>
-                      {!allTime ? (
-                        <>
-                          <td className="figure px-4 py-3 text-right text-ink-600">
-                            {formatMoney(data.totals.previous)}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <ChangeFigure
-                              change={summary.periodDelta}
-                              percent={summary.periodPercent}
-                            />
-                          </td>
-                        </>
-                      ) : null}
-                      <td className="figure px-5 py-3 text-right text-ink-600">
-                        {data.categoryTrends.reduce(
-                          (s, t) => s + t.recordCount,
-                          0,
-                        )}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
+                    </tfoot>
+                  </table>
+                </div>
               </div>
-            </div>
-            <ListDisclosureControl
-              disclosure={categoryDisclosure}
-              total={data.categoryTrends.length}
-              itemLabel="categories"
-              className="mx-4 pb-3"
-            />
-          </Panel>
+              <ListDisclosureControl
+                disclosure={categoryDisclosure}
+                total={data.categoryTrends.length}
+                itemLabel="categories"
+                className="mx-4 pb-3"
+              />
+            </Panel>
+          </div>
 
           {/* ============ 4.5 REDUCTION OPPORTUNITIES — the next step ============
               Placed right after "what changed" and before the lower-priority
@@ -2464,14 +2419,14 @@ function ExpenseInsightPage() {
                                   deviations. "4.2× usual" lands; "z-score 3.2"
                                   does not. */}
                               {times && times >= 1.5 ? (
-                                <span className="figure mt-0.5 inline-block rounded-full bg-tint-danger px-1.5 py-0.5 text-[11px] font-semibold text-tone-danger">
+                                <span className="figure mt-0.5 inline-block rounded-full bg-tint-danger px-1.5 py-0.5 text-xs font-semibold text-tone-danger">
                                   {times.toFixed(1)}× usual
                                 </span>
                               ) : null}
                             </div>
                           </div>
                           <UsualBar amount={u.amount} usual={u.categoryMean} />
-                          <p className="mt-1.5 text-[11px] text-ink-500">
+                          <p className="mt-1.5 text-xs text-ink-500">
                             Usual{" "}
                             <span className="figure font-medium text-ink-700">
                               {formatMoney(u.categoryMean)}
@@ -2507,6 +2462,15 @@ function ExpenseInsightPage() {
             ) : null}
 
               </div>
+            ) : null}
+            {/* Findings are reviewed in the Needs review queue; this page only points there. */}
+            {showPeriodFindings && findings.length > 0 ? (
+              <p className="text-sm text-ink-600">
+                {findings.length} open {findings.length === 1 ? "finding" : "findings"} about spending patterns.{" "}
+                <Link to="/records/flagged" className="tap-inline link-action">
+                  Review in Needs review
+                </Link>
+              </p>
             ) : null}
           </section>
         </div>
@@ -2545,65 +2509,15 @@ function ExpenseInsightPage() {
             </Callout>
           ) : null}
 
-          {/* One row, equal-height cards: findings, the agenda, then the
-              candidates. Columns follow how many of the three are showing so
-              a lone card never sits in a third of the width. */}
+          {/* One row, equal-height cards: the agenda, then the candidates. */}
           <div
             id={showRecurringBlock ? "expense-recurring" : undefined}
             className={`grid gap-5 scroll-mt-6 ${
-              lowerRowCount >= 3
-                ? "lg:grid-cols-2 xl:grid-cols-3"
-                : lowerRowCount === 2
+              lowerRowCount === 2
                   ? "lg:grid-cols-2"
                   : ""
             }`}
           >
-            {showPeriodFindings ? (
-              <Panel
-                title="Findings to review"
-                className="h-full min-w-0"
-                action={
-                  findingsState === "stale" ? (
-                    <Pill>Saved data</Pill>
-                  ) : findingsState === "unavailable" ? (
-                    <Pill>Unavailable</Pill>
-                  ) : findingsState === "ready" && findings.length > 0 ? (
-                    <span className="text-xs text-ink-500">
-                      {findings.length} open
-                    </span>
-                  ) : null
-                }
-              >
-              <SupplementNotice state={findingsState} label="finding details" />
-              {findingsState === "loading" ? (
-                <p aria-live="polite" className="py-6 text-center text-sm text-ink-500">
-                  Loading findings…
-                </p>
-              ) : findingsState === "unavailable" || (findingsState === "stale" && findings.length === 0) ? null
-              : findings.length === 0 ? null : (
-                <>
-                <ul className="space-y-3">
-                  {findings.slice(0, FINDINGS_PREVIEW_COUNT).map((finding) => (
-                    <FindingCard
-                      key={finding.id}
-                      finding={finding}
-                      onReview={(id, status, feedback) => void reviewFinding(id, status, feedback)}
-                    />
-                  ))}
-                </ul>
-                {findings.length > FINDINGS_PREVIEW_COUNT ? (
-                  <SeeAllFooter
-                    shown={FINDINGS_PREVIEW_COUNT}
-                    total={findings.length}
-                    noun="findings"
-                    to={EXPENSE_FINDINGS_PATH}
-                  />
-                ) : null}
-                </>
-              )}
-              </Panel>
-            ) : null}
-
             {/* Hidden when there is no successful snapshot or the server
                 definitively reports that schedules are unavailable. */}
             {showRecurringBlock && recurringSchedules !== null ? (

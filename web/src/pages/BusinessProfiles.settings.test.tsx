@@ -124,7 +124,7 @@ describe("BusinessProfiles settings", () => {
 
     expect(screen.getByLabelText(/^Business name/)).toHaveValue("Harbor Cafe");
     expect(screen.getByLabelText(/^Business type/)).toHaveValue("Food business");
-    expect(screen.getByLabelText(/^Starting available funds/)).toHaveValue(60_000);
+    expect(screen.getByLabelText(/^Opening balance/)).toHaveValue(60_000);
     expect(screen.getByLabelText(/^Starting monthly expense estimate/)).toHaveValue(200_000);
     expect(screen.getByLabelText(/^Operating days per month/)).toHaveValue(26);
     expect(screen.getByLabelText(/^Flag single expenses over/)).toHaveValue(40_000);
@@ -146,7 +146,7 @@ describe("BusinessProfiles settings", () => {
     fireEvent.change(screen.getByLabelText(/^Business name/), {
       target: { value: "Harbor Cafe and Bakery" },
     });
-    fireEvent.change(screen.getByLabelText(/^Starting available funds/), {
+    fireEvent.change(screen.getByLabelText(/^Opening balance/), {
       target: { value: "72500" },
     });
 

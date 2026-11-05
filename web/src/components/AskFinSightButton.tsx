@@ -112,7 +112,7 @@ export function AskFinSightButton({ originModule, initialQuestion, reductionOppo
         remember a magic number. <main> already reserves pb-24 / lg:pb-12 for
         the bottom nav; these make up the difference to the owl's full height.
       */}
-      <div aria-hidden className="h-14 lg:h-12" />
+      <div aria-hidden className="hidden lg:block lg:h-12" />
 
       {createPortal(
         <button
@@ -121,15 +121,15 @@ export function AskFinSightButton({ originModule, initialQuestion, reductionOppo
           onClick={() => ask(initialQuestion, reductionOpportunity)}
           aria-label="Ask FinSight"
           /*
-           * bottom-20 clears the fixed bottom nav (AppShell renders it under
-           * `lg:hidden`, roughly 56px plus the safe-area inset); from `lg` up
-           * there is no bar, so it drops back to the page's own margin.
+           * Desktop only. On phones a floating owl sat on top of figures and
+           * charts; every page that renders this trigger also has an inline
+           * Ask FinSight link, and search ("ask") opens the same drawer.
            *
            * z-30 matches that nav and stays below the modal layer (z-40+), so
            * an overlay opened over the page covers the trigger rather than
            * leaving it floating on top of the panel.
            */
-          className="fixed bottom-20 right-1 z-30 transition-transform duration-150 ease-shell hover:scale-105 active:scale-95 lg:bottom-6 lg:right-6"
+          className="fixed bottom-6 right-6 z-30 hidden transition-transform duration-150 ease-shell hover:scale-105 active:scale-95 lg:block"
         >
           <img
             src="/mascot/ask-fin.webp"
@@ -143,13 +143,7 @@ export function AskFinSightButton({ originModule, initialQuestion, reductionOppo
             //
             // No CSS shadow: the soft one under the owl and the bubble is
             // painted into the art already, and a second would double it.
-            //
-            // Smaller below `lg`, and tucked to `right-1` above: at 375px a
-            // 76px box starting at right-4 reaches left to x=268, which is
-            // inside the content column — it landed on top of the centred
-            // action buttons of a short page's empty state. The narrow phone
-            // viewport is the only place the two compete for the same space.
-            className="h-[47px] w-[60px] animate-bob select-none lg:h-[60px] lg:w-[76px]"
+            className="h-[60px] w-[76px] animate-bob select-none"
             draggable={false}
           />
         </button>,

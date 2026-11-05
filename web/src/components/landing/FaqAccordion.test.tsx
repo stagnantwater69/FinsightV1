@@ -6,11 +6,16 @@ import { describe, expect, it } from "vitest";
 import { FaqAccordion } from "./FaqAccordion";
 
 describe("landing FAQ", () => {
-  it("opens the first answer and keeps collapsed answers out of the accessibility tree", () => {
+  it("starts with every answer closed, and keeps collapsed answers out of the accessibility tree", async () => {
+    const user = userEvent.setup();
     render(<MemoryRouter><FaqAccordion /></MemoryRouter>);
     const faq = within(screen.getByRole("region", { name: "Frequently Asked Questions" }));
 
     const [first, ...collapsed] = screen.getAllByRole("button");
+    expect(first).toHaveAttribute("aria-expanded", "false");
+    expect(faq.queryAllByRole("region")).toHaveLength(0);
+
+    await user.click(first);
     expect(first).toHaveAttribute("aria-expanded", "true");
     const answer = screen.getByRole("region", { name: first.textContent ?? "" });
     expect(first).toHaveAttribute("aria-controls", answer.id);
@@ -29,6 +34,7 @@ describe("landing FAQ", () => {
     const faq = within(screen.getByRole("region", { name: "Frequently Asked Questions" }));
 
     const [first, second] = screen.getAllByRole("button");
+    await user.click(first);
     second.focus();
     await user.keyboard("{Enter}");
     expect(second).toHaveFocus();

@@ -273,7 +273,7 @@ describe("Recovery Target — terminology and freshness (plan §6/§8.1)", () =>
     renderPage();
 
     const progress = await screen.findByRole("progressbar", {
-      name: "Month-to-date coverage of monthly expense basis",
+      name: "Month-to-date coverage of monthly costs",
     });
     expect(progress).toHaveAttribute("aria-valuenow", "100");
   });
@@ -299,7 +299,7 @@ describe("Recovery Target — hypothetical scenario", () => {
       await screen.findByRole("button", { name: "Try a scenario" }),
     );
 
-    const input = screen.getByLabelText(/Assumed monthly expense basis/);
+    const input = screen.getByLabelText(/Assumed monthly costs/);
     await userEvent.clear(input);
     await userEvent.type(input, "15000");
     await userEvent.click(
@@ -326,7 +326,7 @@ describe("Recovery Target — hypothetical scenario", () => {
       await screen.findByRole("button", { name: "Try a scenario" }),
     );
 
-    const input = screen.getByLabelText(/Assumed monthly expense basis/);
+    const input = screen.getByLabelText(/Assumed monthly costs/);
     await userEvent.clear(input);
     await userEvent.type(input, "15000");
     await userEvent.click(
@@ -354,7 +354,7 @@ describe("Recovery Target — hypothetical scenario", () => {
       await screen.findByRole("button", { name: "Try a scenario" }),
     );
 
-    const input = screen.getByLabelText(/Assumed monthly expense basis/);
+    const input = screen.getByLabelText(/Assumed monthly costs/);
     // fireEvent rather than userEvent.type: a number input strips a bare "-"
     // keystroke-by-keystroke under userEvent's simulated typing, so it never
     // reaches a negative value the way a real browser's autofill/paste would.
@@ -385,7 +385,7 @@ describe("Recovery Target — hypothetical scenario", () => {
     );
 
     const input = screen.getByLabelText(
-      /Assumed monthly expense basis/,
+      /Assumed monthly costs/,
     ) as HTMLInputElement;
     const form = input.closest("form")!;
 
@@ -432,7 +432,7 @@ describe("Recovery Target — hypothetical scenario", () => {
     );
 
     const input = screen.getByLabelText(
-      /Assumed monthly expense basis/,
+      /Assumed monthly costs/,
     ) as HTMLInputElement;
 
     await userEvent.clear(input);
@@ -794,7 +794,7 @@ describe("Recovery Target — scenario deltas (plan §10.7, Phase 4)", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Try a scenario" }),
     );
-    const input = screen.getByLabelText(/Assumed monthly expense basis/);
+    const input = screen.getByLabelText(/Assumed monthly costs/);
     await userEvent.clear(input);
     await userEvent.type(input, value);
     await userEvent.click(
@@ -880,7 +880,7 @@ describe("Recovery Target — scenario deltas (plan §10.7, Phase 4)", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Show scenario" }));
     expect(screen.getByText("Hypothetical. Not saved.")).toBeInTheDocument();
-    expect(screen.getByLabelText(/Assumed monthly expense basis/)).toHaveValue(15000);
+    expect(screen.getByLabelText(/Assumed monthly costs/)).toHaveValue(15000);
     // Showing it again re-renders the kept result; it does not re-request it.
     expect(postCalls).toHaveLength(1);
   });

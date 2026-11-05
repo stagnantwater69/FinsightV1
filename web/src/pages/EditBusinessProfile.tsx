@@ -54,7 +54,6 @@ export function BusinessProfileEditor({
       <PageHead
         title="Business profile"
         subtitle="Settings apply to this business only."
-        inBreadcrumb
         actions={
           <ButtonLink to="/business-profiles/all" variant="secondary" size="sm">
             View all businesses
@@ -64,6 +63,7 @@ export function BusinessProfileEditor({
 
       <BusinessProfileForm
         key={profile.id}
+        profileId={profile.id}
         submitLabel="Save changes"
         onCancel={handleCancel}
         onDirtyChange={setDirty}

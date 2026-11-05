@@ -39,11 +39,9 @@ export function SectionNav({
       // Sticky under the topbar rather than scrolling away with the page —
       // otherwise the active-section highlight below is only ever visible
       // near the very top, defeating its own purpose on a page long enough
-      // to need a jump-to bar in the first place. No band behind it: a
-      // full-width white strip read as a box around the pill on the tinted
-      // page. The pill keeps its own opaque fill, so content scrolling under
-      // it stays out of the labels.
-      className="scroll-slim sticky top-[var(--topbar-h)] z-10 short:top-0 -mx-2 overflow-x-auto px-2 py-2"
+      // to need a jump-to bar in the first place. The band matches the
+      // scrolled topbar's translucent fill, so the two read as one header.
+      className="scroll-slim sticky top-[var(--topbar-h)] z-10 short:top-0 -mx-2 overflow-x-auto bg-paper-50/60 px-2 py-2 backdrop-blur-md"
     >
       <div className="inline-flex min-w-max items-center rounded-2xl bg-paper p-1 ring-1 ring-paper-200">
         <span className="flex h-9 shrink-0 items-center gap-2 px-3 text-xs font-semibold text-ink-600">

@@ -139,6 +139,15 @@ const NAV_GROUPS: NavGroup[] = [
 // falling back to the generic "FinSight".
 const EXTRA_PAGE_TITLES: Record<string, string> = {
   "/notifications": "Notifications",
+  "/records/expenses/new": "Add expense",
+  "/records/expenses": "Edit expense",
+  "/records/sales/new": "Add sale",
+  "/records/sales": "Edit sale",
+  "/records/receipts/new": "Scan receipt",
+  "/records/csv-imports/new": "Import CSV",
+  "/records/flagged": "Needs review",
+  "/insights/recovery/month-end-review": "Month-end review",
+  "/business-profiles/new": "New business",
   "/records/categories": "Categories",
   "/business-profiles/all": "All businesses",
   "/account-settings": "Account settings",
@@ -156,10 +165,12 @@ const EXTRA_PAGE_TITLES: Record<string, string> = {
  * wins, so /records/categories resolves to Categories rather than Records.
  */
 function pageTitleFor(pathname: string): string {
+  // Specific page names first: on a tie (the "Insights" group shares Expense
+  // insight's URL) the stable sort below keeps the earlier entry.
   const candidates = [
-    ...NAV_GROUPS.flatMap((g) => g.items.flatMap((i) => [i, ...(i.children ?? [])])),
     ...INSIGHTS_LINKS,
     ...Object.entries(EXTRA_PAGE_TITLES).map(([to, label]) => ({ to, label })),
+    ...NAV_GROUPS.flatMap((g) => g.items.flatMap((i) => [i, ...(i.children ?? [])])),
   ];
   const match = candidates
     .filter((i) => pathname === i.to || pathname.startsWith(`${i.to}/`))
@@ -289,6 +300,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   const mainRef = useRef<HTMLElement>(null);
   const [routeAnnouncement, setRouteAnnouncement] = useState("");
   const isFirstRoute = useRef(true);
+
+  // Tabs, history and screen-reader page announcements need a name per page.
+  useEffect(() => {
+    const name = pageTitleFor(location.pathname);
+    document.title = name === "FinSight" ? "FinSight" : `${name} · FinSight`;
+  }, [location.pathname]);
 
   useEffect(() => {
     if (isFirstRoute.current) {
@@ -455,7 +472,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               {railCollapsed ? (
                 groupIndex > 0 ? <hr className="mx-2 my-2 border-sidebar-fg/10" aria-hidden /> : null
               ) : (
-                <div className="px-3 pb-1 pt-2.5 text-[10.5px] font-bold uppercase tracking-[0.13em] text-sidebar-accent">
+                <div className="px-3 pb-1 pt-2.5 text-xs font-bold uppercase tracking-[0.13em] text-sidebar-accent">
                   {group.heading}
                 </div>
               )}
@@ -580,7 +597,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <span className="block truncate text-[13px] font-semibold text-sidebar-ink">
                   {[user?.firstName, user?.lastName].filter(Boolean).join(" ") || "Account"}
                 </span>
-                <span className="block truncate text-[11.5px] text-sidebar-accent">{user?.email}</span>
+                <span className="block truncate text-xs text-sidebar-accent">{user?.email}</span>
               </span>
             </Link>
           )}

@@ -295,6 +295,16 @@ export default {
           from: { opacity: "0", transform: "translateX(8px)" },
           to: { opacity: "1", transform: "none" },
         },
+        // The setup wizard's step change: forward slides in from the right,
+        // Back from the left, so the direction matches the button pressed.
+        "step-next": {
+          from: { opacity: "0", transform: "translateX(24px)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        "step-back": {
+          from: { opacity: "0", transform: "translateX(-24px)" },
+          to: { opacity: "1", transform: "none" },
+        },
         // The unread badge on the notification bell, so a count that arrives
         // while the page is open is noticed rather than silently appearing.
         "badge-in": {
@@ -360,6 +370,8 @@ export default {
         "fade-up": "fade-up 220ms cubic-bezier(.16,1,.3,1) both",
         "toast-in": "toast-in 250ms cubic-bezier(.16,1,.3,1) both",
         "slide-in-right": "slide-in-right 200ms cubic-bezier(.16,1,.3,1) both",
+        "step-next": "step-next 360ms cubic-bezier(.16,1,.3,1) both",
+        "step-back": "step-back 360ms cubic-bezier(.16,1,.3,1) both",
         "badge-in": "badge-in 260ms cubic-bezier(.2,.9,.3,1) both",
         bob: "bob 2.8s ease-in-out infinite",
         "rule-draw": "rule-draw 700ms cubic-bezier(.16,1,.3,1) both",

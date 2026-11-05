@@ -415,8 +415,9 @@ describe("Dashboard cash flow and recent records", () => {
     const table = screen.getByRole("table", { name: /Most recent records/ });
     expect(within(table).getByText("Inventory")).toBeInTheDocument();
     expect(within(table).getByText("Sales")).toBeInTheDocument();
-    expect(within(table).getByRole("link", { name: "Market day takings" })).toHaveAttribute("href", "/records/sales/1/edit");
-    expect(within(table).getByRole("link", { name: "Rice sacks" })).toHaveAttribute("href", "/records/expenses/2/edit");
+    // Each record opens in the edit popup on the dashboard rather than leaving for another page.
+    expect(within(table).getByRole("button", { name: "Market day takings, edit" })).toBeInTheDocument();
+    expect(within(table).getByRole("button", { name: "Rice sacks, edit" })).toBeInTheDocument();
     expect(within(table).getByText("Needs review")).toBeVisible();
     const flaggedSale = within(table).getByRole("row", { name: /Market day takings/ });
     expect(within(flaggedSale).getByText("Possible duplicate")).toBeVisible();

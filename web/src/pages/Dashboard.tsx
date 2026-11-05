@@ -262,10 +262,8 @@ function DashboardPage() {
   return (
     <div>
       <PageHead
-        inBreadcrumb
         title="Dashboard"
         subtitle={selected ? <b className="font-semibold text-ink-700">{selected.name}</b> : "Set up your business to see figures."}
-        actions={<PeriodFilter />}
       />
 
       {isRefreshing ? (
@@ -405,6 +403,61 @@ function DashboardPage() {
           className="space-y-6"
           aria-busy={isRefreshing}
         >
+          {/* Today: the current month's target and what needs a decision now.
+              Not tied to the period selector, so it sits above it. */}
+          <section aria-labelledby="dashboard-today" className="space-y-3">
+            <h2 id="dashboard-today" className="eyebrow">Today</h2>
+            {/* The recovery card spans the row; the two cards under it sit side by
+                side and stretch to the taller of the pair, which differ by little. */}
+            <div className="grid gap-5 lg:grid-cols-12">
+              <RecoveryFocus summary={summary} needsSetup={recoveryNeedsSetup} action={recoveryAction} onAddSale={addRecord.openSales} />
+              <div className="grid min-w-0 gap-5 lg:col-span-12 lg:grid-cols-2">
+                <Panel title={<PanelTitle icon={BellRing}>Needs attention</PanelTitle>} className="min-w-0" bodyClassName="!px-0 !pb-1">
+                  {/* Capped so a long finding scrolls inside the card instead of stretching the row. */}
+                  <ul className="scroll-none max-h-72 overflow-y-auto overscroll-contain divide-y divide-paper-200 border-t border-paper-200">
+                    <AttentionRow
+                      icon={summary.recordsNeedingReview ? Flag : CheckCircle2}
+                      title="Records to review"
+                      value={String(summary.recordsNeedingReview)}
+                      detail={summary.recordsNeedingReview ? "Flagged or pending review · all dates" : "All clear across your records"}
+                      action={summary.recordsNeedingReview ? <ArrowLink to="/records/flagged">Review records</ArrowLink> : null}
+                    />
+                    {topOpportunity ? (
+                      <AttentionRow icon={Lightbulb} title={topOpportunity.categoryName}
+                        detail={<><span className="block text-ink-700">{topOpportunity.observation}</span><span className="mt-1 block">Spent {periodPhrase(selection)}: <span className="figure font-semibold">{formatMoney(topOpportunity.evidence.currentAmount)}</span></span></>}
+                        action={<ArrowLink to="/insights/expense-behavior">Review reduction opportunity</ArrowLink>}
+                      />
+                    ) : opportunityState === "error" ? (
+                      <li className="px-5 py-3"><FeedNotice label="Reduction opportunities" onRetry={reloadExpenseOverview} /></li>
+                    ) : opportunityState === "loading" ? (
+                      <li role="status" className="px-5 py-4 text-xs text-ink-500">Checking spending opportunities…</li>
+                    ) : topCategory ? (
+                      <AttentionRow icon={PieChart} title="Largest expense category" value={`${Math.round(topCategory.percent)}%`}
+                        detail={<><span className="font-medium text-ink-700">{topCategory.categoryName}</span> · <span className="figure">{formatMoney(topCategory.total)}</span><span className="mt-1 block">Of expenses {periodPhrase(selection)}</span></>}
+                        action={<ArrowLink to="/insights/expense-behavior">See category spending</ArrowLink>}
+                      />
+                    ) : null}
+                  </ul>
+                  <div className="grid grid-cols-2 border-t border-paper-200">
+                    <button type="button" onClick={() => askFinSight(expandQuestion)} aria-label="Ask FinSight about these figures" className="flex min-h-tap items-center justify-center gap-2 border-r border-paper-200 px-3 py-3 text-xs font-semibold text-tone-brand transition-colors hover:bg-paper-50">
+                      <Sparkles aria-hidden className="h-4 w-4" />Ask FinSight
+                    </button>
+                    <Link to="/insights/spending-impact" className="flex min-h-tap items-center justify-center gap-2 px-3 py-3 text-xs font-semibold text-tone-brand transition-colors hover:bg-paper-50">
+                      <ShoppingBag aria-hidden className="h-4 w-4" />Plan a purchase
+                    </Link>
+                  </div>
+                </Panel>
+                <UpcomingExpenses businessProfileId={selected.id} />
+              </div>
+            </div>
+          </section>
+
+          {/* Everything below the selector follows it. */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-paper-200 pt-5">
+            <h2 className="font-display text-lg font-semibold text-ink-900">{periodCaption}</h2>
+            <PeriodFilter />
+          </div>
+
           <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-1 text-xs leading-relaxed text-ink-500">
             <p className="inline-flex items-center gap-1.5"><RefreshCw aria-hidden className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin motion-reduce:animate-none" : ""}`} />{isRefreshing ? "Refreshing overview…" : overviewUpdatedAt ? <>Overview updated <time dateTime={new Date(overviewUpdatedAt).toISOString()}>{new Date(overviewUpdatedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time></> : "Overview update time unavailable"}</p>
             <p className="inline-flex items-center gap-1.5"><History aria-hidden className="h-3.5 w-3.5" />Latest transaction recorded: {latestRecordDate ? <time dateTime={latestRecordDate.slice(0, 10)}>{formatCalendarDate(latestRecordDate)}</time> : summary.lifetime?.recordCount === 0 ? "No records yet" : "Unavailable"}</p>
@@ -414,7 +467,6 @@ function DashboardPage() {
             aria-label="Key figures"
             className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 sm:gap-4 xl:grid-cols-4"
           >
-            <h2 className="sr-only">Key figures</h2>
             <div className="stat-tile [container-type:inline-size]">
               <div className="flex items-start justify-between gap-3">
                 <p className="text-xs font-medium text-ink-600">
@@ -425,7 +477,7 @@ function DashboardPage() {
               <p className={`${KPI_FIGURE} text-ink-900`}>
                 {formatMoney(summary.overview.availableFunds)}
               </p>
-              <p className="mt-1.5 text-xs leading-relaxed text-ink-500">{fundsCalculation ? "Starting balance + confirmed records" : "From your business profile"}</p>
+              <p className="mt-1.5 text-xs leading-relaxed text-ink-500">{fundsCalculation ? <>Opening balance + confirmed records since <time dateTime={fundsCalculation.baselineDate.slice(0, 10)}>{formatCalendarDate(fundsCalculation.baselineDate)}</time></> : "From your business profile"}</p>
               <details className="mt-1 text-xs text-ink-500">
                 <summary className="disclosure">How it’s calculated</summary>
                 <p className="pb-1 leading-relaxed">{fundsProvenance}</p>
@@ -469,95 +521,9 @@ function DashboardPage() {
           </section>
 
           <div className="grid gap-5 lg:grid-cols-12">
-            <RecoveryFocus summary={summary} needsSetup={recoveryNeedsSetup} action={recoveryAction} onAddSale={addRecord.openSales} />
-            <Panel title={<PanelTitle icon={BellRing}>Needs attention</PanelTitle>} className="min-w-0 lg:col-span-5" bodyClassName="!px-0 !pb-1">
-              <ul className="divide-y divide-paper-200 border-t border-paper-200">
-                <AttentionRow
-                  icon={summary.recordsNeedingReview ? Flag : CheckCircle2}
-                  title="Records to review"
-                  value={String(summary.recordsNeedingReview)}
-                  detail={summary.recordsNeedingReview ? "Flagged or pending review · all dates" : "All clear across your records"}
-                  action={summary.recordsNeedingReview ? <ArrowLink to="/records/flagged">Review records</ArrowLink> : null}
-                />
-                {topOpportunity ? (
-                  <AttentionRow icon={Lightbulb} title={topOpportunity.categoryName}
-                    detail={<><span className="block text-ink-700">{topOpportunity.observation}</span><span className="mt-1 block">Spent {periodPhrase(selection)}: <span className="figure font-semibold">{formatMoney(topOpportunity.evidence.currentAmount)}</span></span></>}
-                    action={<ArrowLink to="/insights/expense-behavior">Review reduction opportunity</ArrowLink>}
-                  />
-                ) : opportunityState === "error" ? (
-                  <li className="px-5 py-3"><FeedNotice label="Reduction opportunities" onRetry={reloadExpenseOverview} /></li>
-                ) : opportunityState === "loading" ? (
-                  <li role="status" className="px-5 py-4 text-xs text-ink-500">Checking spending opportunities…</li>
-                ) : topCategory ? (
-                  <AttentionRow icon={PieChart} title="Largest expense category" value={`${Math.round(topCategory.percent)}%`}
-                    detail={<><span className="font-medium text-ink-700">{topCategory.categoryName}</span> · <span className="figure">{formatMoney(topCategory.total)}</span><span className="mt-1 block">Of expenses {periodPhrase(selection)}</span></>}
-                    action={<ArrowLink to="/insights/expense-behavior">See category spending</ArrowLink>}
-                  />
-                ) : null}
-              </ul>
-              <div className="grid grid-cols-2 border-t border-paper-200">
-                <button type="button" onClick={() => askFinSight(expandQuestion)} aria-label="Ask FinSight about these figures" className="flex min-h-tap items-center justify-center gap-2 border-r border-paper-200 px-3 py-3 text-xs font-semibold text-tone-brand transition-colors hover:bg-paper-50">
-                  <Sparkles aria-hidden className="h-4 w-4" />Ask FinSight
-                </button>
-                <Link to="/insights/spending-impact" className="flex min-h-tap items-center justify-center gap-2 px-3 py-3 text-xs font-semibold text-tone-brand transition-colors hover:bg-paper-50">
-                  <ShoppingBag aria-hidden className="h-4 w-4" />Plan a purchase
-                </Link>
-              </div>
-            </Panel>
-          </div>
-
-          <div className="grid gap-5 lg:grid-cols-12">
-            <Panel
-              title={<PanelTitle icon={BarChart3}>Cash flow</PanelTitle>}
-              className="min-w-0 lg:col-span-12"
-              action={
-                <div role="group" aria-label="Cash flow range" className="inline-flex rounded-lg bg-paper-100 p-0.5 ring-1 ring-paper-200">
-                  {(["monthly", "daily"] as const).map((g) => (
-                    <button
-                      key={g}
-                      type="button"
-                      aria-pressed={granularity === g}
-                      onClick={() => setGranularity(g)}
-                      className="min-h-tap rounded-md px-3 text-xs font-semibold text-ink-600 transition-colors aria-pressed:bg-paper aria-pressed:text-ink-900 aria-pressed:shadow-sm"
-                    >
-                      {g === "daily" ? "7 days" : "6 months"}
-                    </button>
-                  ))}
-                </div>
-              }
-            >
-              <p className="mb-4 text-xs text-ink-500">{granularity === "daily" ? "Last 7 days" : "Last 6 months"}, through today</p>
-              {cashflow.state.status === "error" && cashflow.state.data ? <FeedNotice label="Cash flow" onRetry={cashflow.reload} retained /> : null}
-              {cashflow.state.status === "error" && !cashflow.state.data ? (
-                <FeedNotice label="Cash flow" onRetry={cashflow.reload} />
-              ) : !cashflow.state.data ? (
-                <div aria-live="polite" className="py-16 text-center text-sm text-ink-500">Loading cash flow…</div>
-              ) : cashflow.state.data.points.every((p) => p.sales === 0 && p.expenses === 0) ? (
-                <div className="py-14 text-center">
-                  <p className="text-sm text-ink-600">
-                    No sales or expenses in the {granularity === "daily" ? "last 7 days" : "last 6 months"}.
-                  </p>
-                  {granularity === "daily" ? (
-                    <button
-                      type="button"
-                      onClick={() => setGranularity("monthly")}
-                      className="tap-inline mt-2 text-sm link-action"
-                    >
-                      Show the last 6 months
-                    </button>
-                  ) : null}
-                </div>
-              ) : (
-                <CashflowChart points={cashflow.state.data.points} granularity={cashflow.state.data.granularity} />
-              )}
-            </Panel>
-
-          </div>
-
-          <div className="grid gap-5 lg:grid-cols-12">
             <Panel
               title={<PanelTitle icon={ListOrdered}>Recent records</PanelTitle>}
-              className="min-w-0 lg:col-span-7"
+              className="min-w-0 lg:col-span-12"
               bodyClassName="!px-0 !pb-2"
               action={<ArrowLink to={recordsHref}>View all records</ArrowLink>}
             >
@@ -575,10 +541,10 @@ function DashboardPage() {
                   <colgroup>
                     <col className="w-[3.5rem] sm:w-24" />
                     <col />
-                    <col className="w-[7rem] sm:w-36" />
+                    <col className="w-[7rem] sm:w-44" />
                   </colgroup>
                   <thead>
-                    <tr className="border-y border-paper-200 bg-paper-50 text-[11px] uppercase tracking-[0.06em] text-ink-500">
+                    <tr className="border-y border-paper-200 bg-paper-50 text-xs uppercase tracking-[0.06em] text-ink-500">
                       <th scope="col" className="px-3 py-2 font-semibold sm:px-5">Date</th>
                       <th scope="col" className="px-2 py-2 font-semibold sm:px-3">Record</th>
                       <th scope="col" className="px-3 py-2 text-right font-semibold sm:px-5">Amount</th>
@@ -586,14 +552,29 @@ function DashboardPage() {
                   </thead>
                   <tbody>
                     {recent.state.data.items.map((r) => (
-                      <tr key={`${r.type}-${r.id}`} className="border-b border-paper-200 last:border-0">
+                      // The whole row opens the record for a pointer; the name is the keyboard and screen-reader control.
+                      <tr
+                        key={`${r.type}-${r.id}`}
+                        onClick={() => addRecord.openEdit(r.type === "sales" ? "sales" : "expense", r.id)}
+                        className="cursor-pointer border-b border-paper-200 transition-colors last:border-0 hover:bg-paper-50"
+                      >
                         <td className="figure px-3 py-2.5 text-xs text-ink-500 sm:px-5">
                           {new Date(r.date).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })}
                         </td>
                         <td className="px-2 py-2 sm:px-3">
                           <div className="flex min-w-0 items-center gap-2.5">
                             <IconTile size="sm" icon={r.type === "sales" ? ArrowDownLeft : Receipt} />
-                            <Link to={`/records/${r.type === "sales" ? "sales" : "expenses"}/${r.id}/edit`} className="tap-inline link-action [overflow-wrap:anywhere]">{r.description}</Link>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                addRecord.openEdit(r.type === "sales" ? "sales" : "expense", r.id);
+                              }}
+                              className="tap-inline link-action text-left [overflow-wrap:anywhere]"
+                            >
+                              {r.description}
+                              <span className="sr-only">, edit</span>
+                            </button>
                           </div>
                           <p className="truncate pl-[2.375rem] text-xs text-ink-500">
                             {r.type === "sales"
@@ -602,12 +583,12 @@ function DashboardPage() {
                           </p>
                           {r.reviewStatus === "Needs Review" || r.duplicateStatus === "Flagged" ? (
                             <div className="mt-1 flex flex-wrap gap-1 pl-[2.375rem]">
-                              {r.reviewStatus === "Needs Review" ? <span className="rounded bg-tint-danger px-1.5 py-0.5 text-[11px] font-semibold text-tone-danger">Needs review</span> : null}
-                              {r.duplicateStatus === "Flagged" ? <span className="rounded bg-tint-accent px-1.5 py-0.5 text-[11px] font-semibold text-tone-accent">Possible duplicate</span> : null}
+                              {r.reviewStatus === "Needs Review" ? <span className="rounded bg-tint-danger px-1.5 py-0.5 text-xs font-semibold text-tone-danger">Needs review</span> : null}
+                              {r.duplicateStatus === "Flagged" ? <span className="rounded bg-tint-accent px-1.5 py-0.5 text-xs font-semibold text-tone-accent">Possible duplicate</span> : null}
                             </div>
                           ) : null}
                         </td>
-                        <td className={`figure whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold sm:px-5 sm:text-sm ${r.type === "sales" ? "text-tone-brand" : "text-ink-900"}`}>
+                        <td className={`figure px-3 py-2.5 text-right text-xs font-semibold sm:px-5 sm:text-sm ${r.type === "sales" ? "text-tone-brand" : "text-ink-900"}`}>
                           <span className="sr-only">{r.type === "sales" ? "Sale of " : "Expense of "}</span>
                           {r.type === "sales" ? "+" : "−"}
                           {formatMoney(r.amount)}
@@ -618,8 +599,6 @@ function DashboardPage() {
                 </table>
               )}
             </Panel>
-
-            <UpcomingExpenses businessProfileId={selected.id} />
           </div>
 
           <div className="lg:hidden">
@@ -685,6 +664,58 @@ function DashboardPage() {
               </Panel>
             ) : null}
           </div>
+
+          {/* A fixed recent window with its own range control; the period selector above does not apply. */}
+          <section aria-labelledby="dashboard-trend" className="space-y-3 border-t border-paper-200 pt-5">
+            <h2 id="dashboard-trend" className="eyebrow">Trend</h2>
+            <div className="grid gap-5 lg:grid-cols-12">
+              <Panel
+                title={<PanelTitle icon={BarChart3}>Cash flow</PanelTitle>}
+                className="min-w-0 lg:col-span-12"
+                action={
+                  <div role="group" aria-label="Cash flow range" className="inline-flex rounded-lg bg-paper-100 p-0.5 ring-1 ring-paper-200">
+                    {(["monthly", "daily"] as const).map((g) => (
+                      <button
+                        key={g}
+                        type="button"
+                        aria-pressed={granularity === g}
+                        onClick={() => setGranularity(g)}
+                        className="min-h-tap rounded-md px-3 text-xs font-semibold text-ink-600 transition-colors aria-pressed:bg-paper aria-pressed:text-ink-900 aria-pressed:shadow-sm"
+                      >
+                        {g === "daily" ? "7 days" : "6 months"}
+                      </button>
+                    ))}
+                  </div>
+                }
+              >
+                <p className="mb-4 text-xs text-ink-500">{granularity === "daily" ? "Last 7 days" : "Last 6 months"}, through today</p>
+                {cashflow.state.status === "error" && cashflow.state.data ? <FeedNotice label="Cash flow" onRetry={cashflow.reload} retained /> : null}
+                {cashflow.state.status === "error" && !cashflow.state.data ? (
+                  <FeedNotice label="Cash flow" onRetry={cashflow.reload} />
+                ) : !cashflow.state.data ? (
+                  <div aria-live="polite" className="py-16 text-center text-sm text-ink-500">Loading cash flow…</div>
+                ) : cashflow.state.data.points.every((p) => p.sales === 0 && p.expenses === 0) ? (
+                  <div className="py-14 text-center">
+                    <p className="text-sm text-ink-600">
+                      No sales or expenses in the {granularity === "daily" ? "last 7 days" : "last 6 months"}.
+                    </p>
+                    {granularity === "daily" ? (
+                      <button
+                        type="button"
+                        onClick={() => setGranularity("monthly")}
+                        className="tap-inline mt-2 text-sm link-action"
+                      >
+                        Show the last 6 months
+                      </button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <CashflowChart points={cashflow.state.data.points} granularity={cashflow.state.data.granularity} />
+                )}
+              </Panel>
+
+            </div>
+          </section>
 
           {!hasAnyRecords ? (
             <EmptyState

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useAuth } from "../context/AuthContext";
@@ -8,18 +8,24 @@ import { useImportBatchPages } from "../lib/useImportBatchPages";
 import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
 import { getErrorMessage } from "../lib/errors";
 import { Money } from "../components/Money";
+import { formatCalendarDate } from "../lib/dates";
+import { MoreActions } from "../components/MoreActions";
+import { ReviewReason } from "../components/LargeExpenseReason";
+import { useDismiss } from "../lib/hooks";
 import { Button, ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { DataTable, type Column, type SortState } from "../components/DataTable";
 import { IconDuplicate, IconEdit, IconSearch, IconTrash } from "../components/icons";
 import {
   RECORD_SOURCE_LABELS,
+  type BusinessProfile,
   type FlaggedRecordCounts,
   type RecordItem,
   type RecordSort,
   type RecordSource,
 } from "../lib/types";
-import { PageHead, Pill, Tag, type PillTone } from "../components/ui";
+import { PageHead, Pill, Tag } from "../components/ui";
+import { Check, CircleAlert, Copy, type LucideIcon } from "lucide-react";
 import { SelectInput, TextInput } from "../components/Field";
 import { CategoryFilter } from "../components/CategoryFilter";
 import { useConfirm } from "../components/ConfirmDialog";
@@ -69,10 +75,133 @@ const DEFAULT_SORT: SortState = { key: "date", direction: "desc" };
  * "Needs Review" (expenseRecord.service.ts), so they fall out of this
  * naturally without a fourth case.
  */
-function recordStatus(r: RecordItem): { label: string; tone: PillTone } {
-  if (r.duplicateStatus === "Flagged") return { label: "Possible Duplicate", tone: "info" };
-  if (r.reviewStatus === "Needs Review") return { label: "Needs Review", tone: "warn" };
-  return { label: "Reviewed", tone: "ok" };
+type RecordStatus = { label: string; hint: string; Icon: LucideIcon; className: string };
+
+/**
+ * A symbol plus a short word. Confirmed rows stay quiet so the two states that
+ * need the owner (a check, a possible repeat) are what the eye lands on.
+ */
+function recordStatus(r: RecordItem): RecordStatus {
+  if (r.duplicateStatus === "Flagged") {
+    return {
+      label: "Repeat?",
+      hint: "Possible duplicate of another record",
+      Icon: Copy,
+      className: "rounded-full bg-tint-info px-2 py-0.5 font-semibold text-tone-info ring-1 ring-edge-info",
+    };
+  }
+  if (r.reviewStatus === "Needs Review") {
+    return {
+      label: "Check",
+      hint: "Needs your review",
+      Icon: CircleAlert,
+      className: "rounded-full bg-tint-accent px-2 py-0.5 font-semibold text-tone-accent ring-1 ring-edge-accent",
+    };
+  }
+  return { label: "Confirmed", hint: "Confirmed record", Icon: Check, className: "font-medium text-ink-500" };
+}
+
+function RecordStatusBadge({ record }: { record: RecordItem }) {
+  const { label, hint, Icon, className } = recordStatus(record);
+  return (
+    <span title={hint} className={`inline-flex items-center gap-1 whitespace-nowrap text-xs ${className}`}>
+      <Icon aria-hidden className="size-3.5 shrink-0" />
+      {label}
+    </span>
+  );
+}
+
+/** Why a "Check" record is waiting, from what the record itself carries. */
+/**
+ * The status is where the owner acts: "Repeat?" opens the compare window and
+ * "Check" opens a short reason with Confirm and Edit. "Confirmed" has nothing
+ * to do, so it stays plain text.
+ */
+function RecordStatusControl({
+  record,
+  profile,
+  onCompare,
+  onConfirm,
+  onEdit,
+}: {
+  record: RecordItem;
+  profile: BusinessProfile | null;
+  onCompare: () => void;
+  onConfirm: () => Promise<void>;
+  onEdit: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  const { ref, triggerRef } = useDismiss(open, close);
+  const affordance = "cursor-pointer transition hover:brightness-95 hover:underline underline-offset-2";
+
+  if (record.duplicateStatus === "Flagged") {
+    return (
+      <button
+        type="button"
+        onClick={onCompare}
+        aria-label={`Possible duplicate: compare ${record.description}`}
+        className={`tap-inline rounded-full ${affordance}`}
+      >
+        <RecordStatusBadge record={record} />
+      </button>
+    );
+  }
+  if (record.reviewStatus !== "Needs Review") return <RecordStatusBadge record={record} />;
+
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-expanded={open}
+        aria-label={`Needs your review: why ${record.description} was flagged`}
+        onClick={() => setOpen((v) => !v)}
+        className={`tap-inline rounded-full ${affordance}`}
+      >
+        <RecordStatusBadge record={record} />
+      </button>
+      {open ? (
+        <div className="absolute right-0 z-30 mt-1 w-72 rounded-xl bg-paper p-3 text-left text-sm text-ink-700 shadow-lg ring-1 ring-paper-200">
+          <p className="leading-relaxed">
+            <ReviewReason record={record} profile={profile} />
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button
+              size="sm"
+              variant="brand"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await onConfirm();
+                  close();
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? "Confirming…" : "Confirm"}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                close();
+                onEdit();
+              }}
+            >
+              Edit
+            </Button>
+          </div>
+          <Link to="/records/flagged" className="tap-inline mt-2 block text-xs link-action">
+            See all notes in Needs review
+          </Link>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -475,6 +604,25 @@ export function Records() {
    * so the restored row is a new record with a new id, which is why the list is
    * reloaded from the server afterwards rather than patched back in memory.
    */
+  async function handleConfirmRecord(record: RecordItem) {
+    const requestScopeKey = recordsScopeKey;
+    const path = record.type === "expense" ? `/records/expenses/${record.id}` : `/records/sales/${record.id}`;
+    try {
+      await api.patch(path, { reviewStatus: "Reviewed" }, {
+        serverStateScope: { businessProfileId: record.businessProfileId },
+      });
+      if (activeRecordsScopeRef.current !== requestScopeKey) return;
+      setRecords((rows) =>
+        rows.map((r) => (r.type === record.type && r.id === record.id ? { ...r, reviewStatus: "Reviewed" } : r)),
+      );
+      loadFlaggedCount();
+      toast(`Confirmed "${record.description}"`);
+    } catch (err) {
+      if (activeRecordsScopeRef.current !== requestScopeKey) return;
+      setError(getErrorMessage(err));
+    }
+  }
+
   async function handleDelete(record: RecordItem) {
     const requestScopeKey = recordsScopeKey;
     const ok = await confirm({
@@ -566,7 +714,7 @@ export function Records() {
       await Promise.allSettled([loadRecords(), loadFlaggedCount()]);
     } catch (err) {
       if (!isCurrent()) return;
-      setError(task.confirmed ? "The record is restored, but recovery cleanup could not finish. Open its Add form to finish recovery." : `${getErrorMessage(err)} Open the Add ${record.type === "expense" ? "expense" : "sales reference"} form to review a saved recovery request.`);
+      setError(task.confirmed ? "The record is restored, but recovery cleanup could not finish. Open its Add form to finish recovery." : `${getErrorMessage(err)} Open the Add ${record.type === "expense" ? "expense" : "sale"} form to review a saved recovery request.`);
     } finally {
       task.busy = false;
       task.controller = undefined;
@@ -613,14 +761,8 @@ export function Records() {
   const recordsUnavailable = Boolean(error && records.length === 0);
   const advancedCount = activeAdvancedCount(filters);
 
-  async function handleEdit(r: RecordItem) {
-    const ok = await confirm({
-      title: `Edit "${r.description}"?`,
-      body: <>You'll get a popup with this record's fields to change.</>,
-      confirmLabel: "Edit record",
-      tone: "brand",
-    });
-    if (!ok) return;
+  // No confirmation: opening the form changes nothing until Save.
+  function handleEdit(r: RecordItem) {
     if (r.type === "expense") setEditingExpenseId(r.id);
     else setEditingSalesId(r.id);
   }
@@ -660,7 +802,7 @@ export function Records() {
       // Date and Amount are the two the API can order by; every other column
       // below deliberately offers no sort affordance at all.
       sortable: true,
-      cell: (r) => <span className="figure text-ink-600">{r.date.slice(0, 10)}</span>,
+      cell: (r) => <span className="whitespace-nowrap text-ink-600">{formatCalendarDate(r.date)}</span>,
     },
     {
       key: "type",
@@ -690,7 +832,11 @@ export function Records() {
       key: "vendor",
       header: "Vendor",
       width: "content",
-      cell: (r) => <span className="text-ink-500">{r.vendor || "—"}</span>,
+      cell: (r) => (
+        <span className="block max-w-[10rem] truncate text-ink-500" title={r.vendor || undefined}>
+          {r.vendor || "—"}
+        </span>
+      ),
     },
     {
       key: "amount",
@@ -704,7 +850,7 @@ export function Records() {
               summary of it: a scanned 8.70 shown as "9" misstates what was
               saved, and the tooltip that carries the exact figure is not
               reachable by touch. Uniform 2dp also keeps the column aligned. */}
-          <Money value={r.amount} decimals />
+          <Money value={r.type === "expense" ? -r.amount : r.amount} decimals signed />
         </span>
       ),
     },
@@ -722,10 +868,15 @@ export function Records() {
       key: "status",
       header: "Status",
       width: "content",
-      cell: (r) => {
-        const status = recordStatus(r);
-        return <Pill tone={status.tone}>{status.label}</Pill>;
-      },
+      cell: (r) => (
+        <RecordStatusControl
+          record={r}
+          profile={selected}
+          onCompare={() => setReviewDuplicate({ id: r.id, type: r.type })}
+          onConfirm={() => handleConfirmRecord(r)}
+          onEdit={() => handleEdit(r)}
+        />
+      ),
     },
     {
       key: "actions",
@@ -734,24 +885,8 @@ export function Records() {
       width: "content",
       align: "right",
       cell: (r) => (
-        <div className="flex min-w-[9rem] flex-wrap items-center justify-end gap-1">
-          {r.duplicateStatus === "Flagged" ? (
-            /*
-              A button, not a link to the flagged queue. The decision is about
-              THIS row and belongs next to it — see DuplicateReviewModal.
-            */
-            <button
-              type="button"
-              onClick={() => setReviewDuplicate({ id: r.id, type: r.type })}
-              title="Review possible duplicate"
-              aria-label={`Review possible duplicate — ${r.description}`}
-              className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-tone-info transition hover:bg-tint-info"
-            >
-              <span aria-hidden className="text-base leading-none">
-                ⧉
-              </span>
-            </button>
-          ) : null}
+        // Revealed on row hover or keyboard focus where a pointer can hover; always shown on touch.
+        <div className="flex flex-nowrap items-center justify-end gap-1 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100">
           <button
             type="button"
             onClick={() => handleEdit(r)}
@@ -951,7 +1086,6 @@ export function Records() {
   return (
     <div>
       <PageHead
-        inBreadcrumb
         eyebrow="Records management"
         title="Records"
         subtitle={selected ? selected.name : undefined}
@@ -960,7 +1094,7 @@ export function Records() {
             {flaggedCount > 0 ? (
               <Link
                 to="/records/flagged"
-                className="tap gap-2 rounded-xl border border-edge-accent bg-tint-accent px-3 text-sm font-semibold text-tone-accent transition hover:brightness-95"
+                className="tap gap-2 rounded-xl border border-ink-200 bg-paper px-3 text-sm font-semibold text-ink-700 transition hover:bg-paper-100"
               >
                 Review flagged
                 <Pill tone="warn">{flaggedCount}</Pill>
@@ -970,22 +1104,17 @@ export function Records() {
                 same action, larger and with the context to explain it. Two
                 buttons for one action is not twice the invitation. */}
             {isPristine ? null : (
-              <Button variant="brand" size="sm" onClick={() => setAddExpenseOpen(true)}>
+              <Button variant="primary" size="sm" onClick={() => setAddExpenseOpen(true)}>
                 + Add expense
               </Button>
             )}
-            {/* The less-used create paths, in the same group as the primary so
-                every way to add a record sits in one place. From lg up they
-                follow it on one row behind a hairline; below lg they take a
-                row of their own that scrolls sideways rather than wrapping
-                into rows that push the table off-screen. DOM order matches the
-                visual order at every width, so tab order does too.
-
-                Hidden while the page is empty: the empty state below already
-                offers every one of these routes in context. */}
+            {/* The less-used create paths. From lg up they follow the primary
+                on one row behind a hairline; below lg they fold into one
+                "More" button so the header stays a single row. Hidden while
+                the page is empty: the empty state offers every route. */}
             {isPristine ? null : (
-              <div className="scroll-slim -mx-4 basis-full overflow-x-auto px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:basis-auto lg:overflow-visible lg:border-l lg:border-paper-200 lg:pl-2 lg:pr-0">
-                <div className="flex w-max gap-2">
+              <>
+                <div className="hidden gap-2 lg:flex lg:border-l lg:border-paper-200 lg:pl-2">
                   <Button variant="secondary" size="sm" onClick={() => setAddSalesOpen(true)}>
                     + Add sales
                   </Button>
@@ -996,7 +1125,19 @@ export function Records() {
                     Import CSV
                   </ButtonLink>
                 </div>
-              </div>
+                <div className="lg:hidden">
+                  <MoreActions
+                    trigger={<>More ▾</>}
+                    label="More ways to add records"
+                    triggerClassName="tap rounded-xl border border-ink-200 bg-paper px-3 text-sm font-medium text-ink-700 transition hover:bg-paper-100"
+                    actions={[
+                      { label: "Add sales", onSelect: () => setAddSalesOpen(true) },
+                      { label: "Scan receipt", to: "/records/receipts/new" },
+                      { label: "Import CSV", to: "/records/csv-imports/new" },
+                    ]}
+                  />
+                </div>
+              </>
             )}
           </>
         }
@@ -1109,16 +1250,17 @@ export function Records() {
           loading={loading || (refreshing && records.length === 0)}
           caption={
             selected
-              ? `Expense and sales reference records for ${selected.name}`
-              : "Expense and sales reference records"
+              ? `Expense and sales records for ${selected.name}`
+              : "Expense and sales records"
           }
           itemNoun="records"
           storageKey="records"
+          defaultPageSize={25}
           sort={sort}
           onSortChange={handleSortChange}
           toolbar={toolbar}
           rowClassName={(r) =>
-            highlightRecordId && r.type === "expense" && r.id === highlightRecordId ? "bg-tint-accent" : ""
+            `group ${highlightRecordId && r.type === "expense" && r.id === highlightRecordId ? "bg-tint-accent" : ""}`
           }
           empty={
             hasFilters ? (
@@ -1147,14 +1289,13 @@ export function Records() {
             )
           }
           mobileRow={(r) => {
-            const status = recordStatus(r);
             return (
               <div>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-ink-900">{r.description}</p>
                     <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-500">
-                      <span className="figure">{r.date.slice(0, 10)}</span>
+                      <span>{formatCalendarDate(r.date)}</span>
                       <span aria-hidden>·</span>
                       <Tag kind={r.type === "expense" ? "expense" : "sales"} />
                       {r.type === "expense" ? <span>· {categoryName(r.categoryId)}</span> : null}
@@ -1173,59 +1314,32 @@ export function Records() {
                       {/* Same reasoning as the table column, and more so here:
                           this is the phone layout, where there is no hover to
                           recover the exact figure from. */}
-                      <Money value={r.amount} decimals />
+                      <Money value={r.type === "expense" ? -r.amount : r.amount} decimals signed />
                     </p>
-                    <Pill tone={status.tone}>{status.label}</Pill>
+                    <div className="flex items-center gap-1">
+                      <RecordStatusControl
+                        record={r}
+                        profile={selected}
+                        onCompare={() => setReviewDuplicate({ id: r.id, type: r.type })}
+                        onConfirm={() => handleConfirmRecord(r)}
+                        onEdit={() => handleEdit(r)}
+                      />
+                      <MoreActions
+                        trigger={<span aria-hidden>⋯</span>}
+                        label={`Actions for ${r.description}`}
+                        triggerClassName="tap flex h-11 w-11 items-center justify-center rounded-lg text-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
+                        actions={[
+                          { label: "Edit", onSelect: () => handleEdit(r) },
+                          { label: "Duplicate", onSelect: () => handleDuplicate(r) },
+                          { label: "Delete", onSelect: () => handleDelete(r), danger: true },
+                        ]}
+                      />
+                    </div>
                   </div>
                 </div>
 
-                <div className="mt-3 flex items-center justify-between border-t border-paper-200 pt-2">
-                  <span className="text-xs text-ink-500">
-                    {RECORD_SOURCE_LABELS[r.source as RecordSource] ?? r.source}
-                  </span>
-                  {/* Wraps: three labelled actions are wider than a 200px
-                      viewport (400px at 200% zoom) and were scrolling the page
-                      sideways rather than stacking. */}
-                  <div className="flex flex-wrap justify-end gap-1">
-                    {r.duplicateStatus === "Flagged" ? (
-                      <button
-                        type="button"
-                        onClick={() => setReviewDuplicate({ id: r.id, type: r.type })}
-                        className="tap rounded-lg px-3 text-sm font-medium text-tone-info transition hover:bg-tint-info"
-                      >
-                        Compare
-                        <span className="sr-only"> possible duplicate — {r.description}</span>
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => handleEdit(r)}
-                      className="tap rounded-lg px-3 text-sm font-medium text-tone-brand transition hover:bg-tint-brand"
-                    >
-                      Edit
-                      <span className="sr-only"> {r.description}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDuplicate(r)}
-                      className="tap rounded-lg px-3 text-sm font-medium text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
-                    >
-                      Duplicate
-                      <span className="sr-only"> {r.description}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(r)}
-                      className="tap rounded-lg px-3 text-sm font-medium text-ink-500 transition hover:bg-tint-danger hover:text-tone-danger"
-                    >
-                      Delete
-                      <span className="sr-only"> {r.description}</span>
-                    </button>
-                  </div>
-                </div>
               </div>
-            );
-          }}
+            );          }}
         />
       )}
 

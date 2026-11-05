@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordOriginPanel } from "./RecordOriginPanel";
+import { api } from "../lib/api";
 import type { RecordOrigin } from "../lib/types";
 
 /**
@@ -71,6 +72,7 @@ const receiptOrigin: Extract<RecordOrigin, { kind: "receipt_scan" }> = {
       addedByOwner: false,
     },
   ],
+  otherLines: [],
   siblings: [],
 };
 
@@ -113,6 +115,62 @@ describe("RecordOriginPanel — CSV import", () => {
     expect(screen.getByRole("tab", { name: /file rows/i })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: /import details/i })).toHaveAttribute("aria-selected", "false");
     vi.unstubAllGlobals();
+  });
+
+  it("writes the file's dates and amounts the way the app does, and right-aligns number columns", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({ data: {
+      headers: ["Date", "Description", "Amount"],
+      previewRows: [
+        { Date: "2026-10-01", Description: "Monthly burger stall rent", Amount: "4500.00" },
+        { Date: "2026-10-01", Description: "Stall helper daily wage", Amount: "450" },
+      ],
+      totalRows: 2,
+    } });
+    const user = userEvent.setup();
+    render(<RecordOriginPanel origin={csvOrigin} recordAmount={1200} />);
+
+    await user.click(screen.getByRole("tab", { name: /file rows/i }));
+
+    expect(await screen.findByText("4,500.00")).toHaveClass("text-right");
+    expect(screen.getByText("450")).toBeInTheDocument();
+    expect(screen.getAllByText(/Oct 1, 2026|1 Oct 2026|10\/1\/2026/)).toHaveLength(2);
+    expect(screen.getByRole("columnheader", { name: "Amount" })).toHaveClass("text-right");
+    vi.restoreAllMocks();
+  });
+
+  it("asks for the record's row and highlights it, even past the first page of the file", async () => {
+    const get = vi.spyOn(api, "get").mockResolvedValue({ data: {
+      headers: ["date", "description", "amount"],
+      previewRows: Array.from({ length: 50 }, (_, i) => ({ date: "2026-10-13", description: `Row ${41 + i}`, amount: "240.00" })),
+      totalRows: 150,
+      firstRowNumber: 41,
+      matchedRowNumbers: [45],
+    } });
+    const user = userEvent.setup();
+    render(<RecordOriginPanel origin={csvOrigin} recordAmount={240} expenseId={9} />);
+
+    await user.click(screen.getByRole("tab", { name: /file rows/i }));
+
+    expect(await screen.findByText(/highlighted row is the one this record came from \(row 45\)/)).toBeVisible();
+    expect(get).toHaveBeenCalledWith("/records/csv-imports/batches/42/preview", { params: { expenseId: 9 } });
+    const current = screen.getByRole("row", { current: true });
+    expect(current).toHaveTextContent("Row 45");
+    expect(screen.getByText("Showing rows 41 to 90 of 150.")).toBeVisible();
+    vi.restoreAllMocks();
+  });
+
+  it("says so when the record's row cannot be found", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({ data: {
+      headers: ["description"], previewRows: [{ description: "Rent" }], totalRows: 1, firstRowNumber: 1, matchedRowNumbers: [],
+    } });
+    const user = userEvent.setup();
+    render(<RecordOriginPanel origin={csvOrigin} recordAmount={240} expenseId={9} />);
+
+    await user.click(screen.getByRole("tab", { name: /file rows/i }));
+
+    expect(await screen.findByText(/row couldn't be found in the file/)).toBeVisible();
+    expect(screen.queryByRole("row", { current: true })).toBeNull();
+    vi.restoreAllMocks();
   });
 });
 
@@ -176,6 +234,23 @@ describe("RecordOriginPanel — scanned receipt", () => {
     await user.keyboard("{End}");
     expect(photo).toHaveFocus();
     expect(photo).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("shows the whole receipt with this record's lines highlighted", () => {
+    render(
+      <RecordOriginPanel
+        origin={{ ...receiptOrigin, otherLines: [{ lineNumber: 3, name: "Paper cups", quantity: 1, unitPrice: 2, amount: 2, recordId: 51 }] }}
+        recordAmount={8.17}
+      />,
+    );
+
+    expect(screen.getByText("This receipt has 3 lines. The 2 highlighted make up this record.")).toBeVisible();
+    expect(screen.getAllByRole("row", { current: true }).map((r) => r.textContent)).toEqual([
+      expect.stringContaining("Americano"),
+      expect.stringContaining("Almond Scone"),
+    ]);
+    expect(screen.getByText("Paper cups")).toBeVisible();
+    expect(screen.queryByText(/AI read from photo/)).toBeNull();
   });
 
   it("offers no photo tab when the image link could not be minted", () => {

@@ -57,7 +57,7 @@ describe("EditSalesRecord load failure", () => {
     getImpl = () => Promise.reject(rejection(404, "Record not found"));
     renderPage();
 
-    expect(await screen.findByText(/couldn't load this sales reference/i)).toBeTruthy();
+    expect(await screen.findByText(/couldn't load this sale\./i)).toBeTruthy();
     expect(screen.queryByText("Loading…")).toBeNull();
     expect(screen.getByRole("button", { name: /retry/i })).toBeTruthy();
   });
@@ -95,6 +95,6 @@ describe("EditSalesRecord load failure", () => {
 
     settle!();
     await Promise.resolve();
-    expect(screen.queryByText(/couldn't load this sales reference/i)).toBeNull();
+    expect(screen.queryByText(/couldn't load this sale\./i)).toBeNull();
   });
 });

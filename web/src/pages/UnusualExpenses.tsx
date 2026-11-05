@@ -156,14 +156,14 @@ function UnusualExpenses() {
                         {formatMoney(u.amount)}
                       </p>
                       {times && times >= 1.5 ? (
-                        <span className="figure mt-0.5 inline-block rounded-full bg-tint-danger px-1.5 py-0.5 text-[11px] font-semibold text-tone-danger">
+                        <span className="figure mt-0.5 inline-block rounded-full bg-tint-danger px-1.5 py-0.5 text-xs font-semibold text-tone-danger">
                           {times.toFixed(1)}× usual
                         </span>
                       ) : null}
                     </div>
                   </div>
                   <UsualBar amount={u.amount} usual={u.categoryMean} />
-                  <p className="mt-1.5 text-[11px] text-ink-500">
+                  <p className="mt-1.5 text-xs text-ink-500">
                     Usual{" "}
                     <span className="figure font-medium text-ink-700">
                       {formatMoney(u.categoryMean)}

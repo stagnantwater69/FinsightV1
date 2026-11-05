@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { IconChevronLeft } from "./icons";
 import { Wordmark } from "./Wordmark";
@@ -125,6 +125,9 @@ export function AuthLayout({
   children: ReactNode;
 }) {
   const navigate = useNavigate();
+  useEffect(() => {
+    document.title = `${title} · FinSight`;
+  }, [title]);
   const backButtonClass =
     "h-11 w-11 items-center justify-center rounded-full border border-paper-200 bg-paper text-ink-500 shadow-sm transition duration-250 ease-shell hover:scale-105 hover:border-paper-300 hover:bg-paper-100 hover:text-ink-800 hover:shadow-md active:scale-95";
   return (
@@ -192,7 +195,7 @@ export function AuthLayout({
                 a scroll-triggered reveal. */}
             <div className="mt-7 animate-rise [animation-delay:80ms] short:mt-4">
               {eyebrow ? (
-                <span className="block font-display text-[11px] font-bold uppercase tracking-[0.16em] text-brand-600">
+                <span className="block font-display text-xs font-bold uppercase tracking-[0.16em] text-brand-600">
                   {eyebrow}
                 </span>
               ) : null}
@@ -223,7 +226,7 @@ export function AuthLayout({
                     >
                       <span
                         aria-hidden
-                        className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-brand-700 text-[10px] font-bold text-white"
+                        className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-brand-700 text-xs font-bold text-white"
                       >
                         ✓
                       </span>

@@ -65,7 +65,7 @@ export function NotificationBell() {
             className="absolute -right-1 -top-1 flex h-[17px] min-w-[17px] animate-badge-in items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none text-white ring-2 ring-paper"
             style={{ backgroundColor: STATUS_TEXT_COLORS.critical }}
           >
-            {unreadCount > 9 ? "9+" : unreadCount}
+            {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         ) : null}
       </button>

@@ -75,7 +75,7 @@ function ImpactGauge({ data }: { data: SpendingImpactData }) {
         highAt={data.thresholdPercent}
         band={data.impactBand}
       />
-      <p className="mt-2 text-[11px] text-ink-500">
+      <p className="mt-2 text-xs text-ink-500">
         High impact from {data.thresholdPercent}% (<Money value={data.thresholdAmount} />)
       </p>
     </div>
@@ -378,7 +378,7 @@ function PurchaseReviewCard({
                 <RefreshCw aria-hidden size={14} /> {busy ? "Looking…" : "Item changed: look again"}
               </button>
             ) : null}
-            <p className="text-center text-[11.5px] text-ink-600">The decision is yours.</p>
+            <p className="text-center text-xs text-ink-600">The decision is yours.</p>
           </div>
         </aside>
 
@@ -628,13 +628,9 @@ function SpendingImpactPage() {
     data?.funds.before ??
     selected?.availableFunds ??
     0;
-  const availableFundsLabel = fundsCalculation
-    ? "Recorded available funds"
-    : data
-      ? "Available funds"
-      : "Starting available funds";
+  const availableFundsLabel = fundsCalculation ? "Recorded available funds" : "Available funds";
   const availableFundsProvenance = fundsCalculation
-    ? `Starting ${formatMoney(fundsCalculation.baselineAmount)}, plus ${formatMoney(fundsCalculation.confirmedSalesAdded)} sales, less ${formatMoney(fundsCalculation.confirmedExpensesDeducted)} expenses.`
+    ? `Opening balance ${formatMoney(fundsCalculation.baselineAmount)}, plus ${formatMoney(fundsCalculation.confirmedSalesAdded)} sales, less ${formatMoney(fundsCalculation.confirmedExpensesDeducted)} expenses.`
     : null;
 
   // Before the first simulation, the stored starting amount is the only v1
@@ -653,7 +649,6 @@ function SpendingImpactPage() {
   return (
     <div>
       <PageHead
-        inBreadcrumb
         eyebrow="Insights"
         title="Spending impact"
         subtitle="What-if check. Nothing is saved."
@@ -682,7 +677,7 @@ function SpendingImpactPage() {
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="e.g. Display fridge"
                 style={{ width: `${description ? Math.max(description.length, 4) + 1 : 17}ch` }}
-                className="max-w-full border-0 border-b-2 border-dashed border-ink-300 bg-transparent px-1 text-tone-brand placeholder:font-normal placeholder:text-ink-300 focus:border-solid focus:border-brand-600 focus:outline-none"
+                className="max-w-full border-0 border-b-2 border-dashed border-ink-300 bg-transparent px-1 text-tone-brand placeholder:font-normal placeholder:italic placeholder:text-ink-300 focus:border-solid focus:border-brand-600 focus:outline-none"
               />{" "}
               for{" "}
               <span className="inline-flex items-baseline whitespace-nowrap">
@@ -701,9 +696,9 @@ function SpendingImpactPage() {
                   // A focused number box would otherwise change its value
                   // when the owner scrolls the page past it.
                   onWheel={(e) => e.currentTarget.blur()}
-                  placeholder="11000"
-                  style={{ width: `${Math.max(String(plannedAmount).length, 5) + 1}ch` }}
-                  className="figure border-0 border-b-2 border-dashed border-ink-300 bg-transparent px-1 text-tone-brand [appearance:textfield] placeholder:font-normal placeholder:text-ink-300 focus:border-solid focus:border-brand-600 focus:outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  placeholder="e.g. 11000"
+                  style={{ width: `${plannedAmount === "" ? 11 : Math.max(String(plannedAmount).length, 5) + 1}ch` }}
+                  className="figure border-0 border-b-2 border-dashed border-ink-300 bg-transparent px-1 text-tone-brand [appearance:textfield] placeholder:font-normal placeholder:italic placeholder:text-ink-300 focus:border-solid focus:border-brand-600 focus:outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 />
               </span>
               , what is left?
@@ -812,21 +807,30 @@ function SpendingImpactPage() {
               <div className="min-w-0 text-xs text-ink-500 sm:text-right">
                 {selected ? (
                   <>
-                    <span>{availableFundsLabel}</span>:{" "}
-                    <b className="figure text-ink-700">
-                      {formatMoney(displayedAvailableFunds)}
-                    </b>
+                    {data ? (
+                      <>
+                        <span>{availableFundsLabel}</span>:{" "}
+                        <b className="figure text-ink-700">
+                          {formatMoney(displayedAvailableFunds)}
+                        </b>
+                      </>
+                    ) : (
+                      // The opening balance is not what the check uses, so it is not shown as if it were.
+                      <span>Checked against your recorded available funds.</span>
+                    )}
                     {availableFundsProvenance ? (
                       <span className="mt-1 block leading-relaxed text-ink-500">
                         {availableFundsProvenance}
                       </span>
                     ) : null}
-                    <Link
-                      to={`/business-profiles/${selected.id}/edit`}
-                      className="tap-inline mt-1 inline-block link-action"
-                    >
-                      Edit starting funds
-                    </Link>
+                    <span className="mt-1 block">
+                      <Link
+                        to={`/business-profiles/${selected.id}/edit`}
+                        className="tap-inline link-action"
+                      >
+                        Edit opening balance
+                      </Link>
+                    </span>
                   </>
                 ) : (
                   <>
@@ -858,7 +862,7 @@ function SpendingImpactPage() {
               <div className="receipt-slip relative px-6 pt-6 sm:px-7">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-[11rem]">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-500">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink-500">
                       What-if slip
                     </p>
                     <p className="mt-0.5 text-xs text-ink-500">
@@ -867,7 +871,7 @@ function SpendingImpactPage() {
                   </div>
                   {data ? (
                     <span
-                      className={`impact-stamp inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 font-display text-[11px] font-bold uppercase tracking-[0.08em] ${STAMP_INK[data.impactBand]}`}
+                      className={`impact-stamp inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 font-display text-xs font-bold uppercase tracking-[0.08em] ${STAMP_INK[data.impactBand]}`}
                     >
                       <span aria-hidden>{BAND_GLYPH[data.impactBand]}</span>
                       {data.impactBand}

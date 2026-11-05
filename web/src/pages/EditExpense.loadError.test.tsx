@@ -92,6 +92,31 @@ describe("EditExpense load failure", () => {
     await waitFor(() => expect(screen.getByDisplayValue("Rice sack")).toBeTruthy());
   });
 
+  it("says why a flagged record is marked Repeat?", async () => {
+    getImpl = () => Promise.resolve({ data: { ...RECORD, duplicateStatus: "Flagged" } });
+    renderPage();
+
+    expect(await screen.findByText("Why this is marked Repeat?")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /compare them in needs review/i })).toHaveAttribute("href", "/records/flagged");
+  });
+
+  it("shows the record a Repeat? matches, so the owner need not look for it", async () => {
+    getImpl = (url) =>
+      Promise.resolve({ data: url.endsWith("/88")
+        ? { ...RECORD, id: 88, description: "Rice sack (first entry)", date: "2026-10-01T00:00:00.000Z", source: "MANUAL_ENTRY" }
+        : { ...RECORD, duplicateStatus: "Flagged", duplicateOfRecordId: 88 } });
+    renderPage();
+
+    expect(await screen.findByText("Rice sack (first entry)")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Compare and decide" })).toBeTruthy();
+
+    // Shown under the form, not on another page.
+    await userEvent.click(screen.getByRole("button", { name: "Show the other record" }));
+    expect(screen.getByRole("heading", { name: "The other record" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Edit it" })).toHaveAttribute("href", "/records/expenses/88/edit");
+    expect(screen.getByRole("button", { name: "Keep both" })).toBeTruthy();
+  });
+
   it("offers a route back to the records list", async () => {
     getImpl = () => Promise.reject(rejection(404, "Record not found"));
     renderPage();

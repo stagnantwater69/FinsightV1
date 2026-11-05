@@ -121,7 +121,7 @@ describe("Dashboard period filter", () => {
     expect(within(group).getByRole("button", { name: "All time" })).toBeInTheDocument();
     expect(within(group).getAllByRole("button")).toHaveLength(2);
     for (const gone of ["Today", "7 days", "30 days"]) {
-      expect(screen.queryByRole("button", { name: gone })).toBeNull();
+      expect(within(group).queryByRole("button", { name: gone })).toBeNull();
     }
   });
 

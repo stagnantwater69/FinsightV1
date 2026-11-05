@@ -9,7 +9,6 @@ import {
   Pencil,
   Settings2,
   ShieldCheck,
-  Trash2,
   UserRound,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
@@ -71,7 +70,6 @@ export function Profile() {
     return (
       <div>
         <PageHead
-          inBreadcrumb
           title="My profile"
           subtitle="Manage your personal account details and sign-in security."
         />
@@ -168,7 +166,6 @@ export function Profile() {
   return (
     <div className="w-full">
       <PageHead
-        inBreadcrumb
         title="My profile"
         subtitle="Manage your personal account details and sign-in security."
       />
@@ -430,16 +427,13 @@ export function Profile() {
 
           <section
             aria-labelledby="danger-zone-heading"
-            className="overflow-hidden rounded-2xl border border-edge-danger bg-tint-danger"
+            className="overflow-hidden rounded-2xl border border-edge-danger bg-paper"
           >
-            <div className="flex items-start gap-3 p-5 sm:px-6">
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-paper text-tone-danger ring-1 ring-edge-danger">
-                <Trash2 size={20} aria-hidden />
-              </span>
+            <div className="px-5 pt-4 sm:px-6">
               <div>
                 <h2
                   id="danger-zone-heading"
-                  className="text-base font-semibold text-tone-danger"
+                  className="text-sm font-semibold text-tone-danger"
                 >
                   Danger zone
                 </h2>

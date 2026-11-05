@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import type { RecordItem } from "../lib/types";
 import { Callout, FormPage } from "../components/ui";
+import { SkeletonFormFields } from "../components/Skeleton";
 import { Button, ButtonLink } from "../components/Button";
 import { useToast } from "../components/Toast";
 import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
@@ -82,9 +83,9 @@ export function EditSalesRecord() {
 
   if (loadError) {
     return (
-      <FormPage eyebrow="Records" title="Edit sales reference">
+      <FormPage eyebrow="Records" title="Edit sale">
         <Callout tone="warn">
-          <b className="font-semibold">Couldn't load this sales reference.</b> {loadError}
+          <b className="font-semibold">Couldn't load this sale.</b> {loadError}
           <div className="mt-2 flex flex-wrap gap-2">
             <Button type="button" variant="secondary" size="sm" onClick={() => setAttempt((n) => n + 1)}>
               Retry
@@ -99,11 +100,15 @@ export function EditSalesRecord() {
   }
 
   if (!record) {
-    return <p className="text-sm text-ink-500">Loading…</p>;
+    return (
+      <FormPage eyebrow="Records" title="Edit sale">
+        <SkeletonFormFields />
+      </FormPage>
+    );
   }
 
   return (
-    <FormPage eyebrow="Records" title="Edit sales reference">
+    <FormPage eyebrow="Records" title="Edit sale">
       <form onSubmit={handleSubmit} className="space-y-4">
         <TransactionDateField field={dateField} />
         <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting} />
