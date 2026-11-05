@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AnalysisJobKind, AnalysisJobStatus, Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { logger } from "../../config/logger";
-import { utcToday } from "../../lib/dates";
+import { resolveBusinessToday, utcToday } from "../../lib/dates";
 import { detectAmountOutlierForExpense } from "./amountOutlier.service";
 import { detectBehavioralNoveltyForExpense } from "./behavioralNovelty.service";
 import { refreshOwnedCategoryStatistics } from "./categoryStatistics.service";
@@ -214,9 +214,10 @@ async function processJob(job: ClaimedJob, mutate: AnalysisMutationGuard) {
     }
     return;
   }
-  const profile = await prisma.businessProfile.findUnique({ where: { id: job.businessProfileId }, select: { userId: true } });
+  const profile = await prisma.businessProfile.findUnique({ where: { id: job.businessProfileId }, select: { userId: true, timezone: true } });
   if (!profile) return;
-  const today = utcToday();
+  // The business's calendar day, not the server's: a Manila owner's "today" starts 8 hours before UTC's.
+  const today = resolveBusinessToday(profile.timezone);
   await refreshOwnedCategoryStatistics(profile.userId, job.businessProfileId, today, RUNTIME_DETECTION_CONFIG, mutate);
   await refreshRecurringPatterns(profile.userId, job.businessProfileId, RUNTIME_DETECTION_CONFIG, today, mutate);
   await refreshTrendFindings(profile.userId, job.businessProfileId, today, RUNTIME_DETECTION_CONFIG, mutate);
