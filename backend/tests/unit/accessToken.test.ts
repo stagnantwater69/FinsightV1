@@ -107,6 +107,19 @@ describe("verifyAccessToken", () => {
     expect(verdict.authUserId).toBeUndefined();
   });
 
+  // The key id is public (jwks.json), so anyone can pair it with an algorithm
+  // the key does not use; supabase-js throws a plain Error for that.
+  it.each(["none", "PS256", "RS256"])("refuses, rather than throws on, a token claiming alg %s for the project key", async (alg) => {
+    const claims = userClaims();
+    liveSessions.add(claims.session_id);
+    const forged = `${encode({ alg, typ: "JWT", kid: KID })}.${encode(claims)}.c2lnbmF0dXJl`;
+
+    const verdict = await verifyAccessToken(forged);
+
+    expect(verdict.authUserId).toBeUndefined();
+    expect(verdict.error?.message).toBeTruthy();
+  });
+
   it("leaves legacy shared-secret tokens to Supabase Auth", async () => {
     const authUserId = randomUUID();
     getUserAnswer.mockReturnValue({ status: 200, body: { id: authUserId, aud: "authenticated" } });
