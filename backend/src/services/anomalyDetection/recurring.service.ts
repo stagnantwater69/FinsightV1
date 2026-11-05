@@ -237,12 +237,13 @@ export async function refreshRecurringPatterns(
 ) {
   if (!config.featureFlags.recurring) return [];
   await requireOwnedBusinessProfile(userId, businessProfileId);
-  const rows = await prisma.expenseRecord.findMany({
+  // Newest first so the cap drops the oldest records, not this cycle's payments; then back to oldest first.
+  const rows = (await prisma.expenseRecord.findMany({
     where: { businessProfileId, date: { gte: utcAddDays(today, -730), lte: utcEndOfDay(today) } },
     select: { id: true, categoryId: true, vendor: true, description: true, amount: true, date: true },
-    orderBy: [{ date: "asc" }, { id: "asc" }],
+    orderBy: [{ date: "desc" }, { id: "desc" }],
     take: 10_000,
-  });
+  })).reverse();
   const groups = new Map<string, RecurringRecord[]>();
   // Same records, keyed by the un-hashed identity, so an owner's schedule can
   // be matched to its records without ever hashing owner-edited text.

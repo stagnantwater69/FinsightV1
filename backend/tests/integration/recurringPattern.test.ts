@@ -69,6 +69,22 @@ describe("recurring pattern persistence", () => {
     expect(await prisma.anomalyFinding.count({ where: { businessProfileId: ctx.profile.id } })).toBe(0);
   });
 
+  it("keeps the newest records when the two-year window holds more than the read cap", async () => {
+    // 10,000 older one-off purchases, then a bill whose cycles all come after them.
+    await prisma.expenseRecord.createMany({
+      data: Array.from({ length: 10_000 }, (_, i) => ({
+        businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!,
+        date: new Date("2025-01-01T00:00:00Z"), amount: 100 + i, description: `Stock ${i}`, source: "MANUAL_ENTRY" as const,
+      })),
+    });
+    await add("2026-01-01"); await add("2026-01-31"); await add("2026-03-02");
+
+    const patterns = await refreshRecurringPatterns(ctx.user.id, ctx.profile.id, RECURRING_ENABLED_CONFIG, new Date("2026-03-05T00:00:00Z"));
+
+    expect(patterns.map((p) => p.description)).toEqual(["Monthly electricity"]);
+    expect(patterns[0]!.lastOccurrence.toISOString().slice(0, 10)).toBe("2026-03-02");
+  });
+
   it("protects pattern review by ownership", async () => {
     await add("2026-01-01"); await add("2026-01-31"); await add("2026-03-02");
     const [pattern] = await refreshRecurringPatterns(ctx.user.id, ctx.profile.id, RECURRING_ENABLED_CONFIG, new Date("2026-03-05T00:00:00Z"));
