@@ -421,7 +421,7 @@ function buildOpportunityForCategory(
       categoryId,
       categoryName,
       confidence,
-      observation: `${categoryName} accumulated ${recordCount} purchases this period, with a typical record around ${medianAmount.toFixed(2)}.`,
+      observation: `${categoryName} has ${recordCount} expense records this period, typically around PHP ${medianAmount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} each.`,
       rationale: "Many individually modest records can add up to a material total — worth checking ordering frequency, consolidation, and repeated fees.",
       evidence: evidenceBase,
       costBehavior,

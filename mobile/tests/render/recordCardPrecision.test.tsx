@@ -59,7 +59,7 @@ describe('RecordCard exact peso amounts', () => {
     const { screen, onPress, onDelete, onResolve } = await mount(record(type, amount));
     expect(screen.getByText(printed)).toBeTruthy();
     const card = screen.getByRole('button', {
-      name: `Stock delivery, ${printed}, 2026-10-13, ${kind}, possible duplicate, needs review, large expense, Manual Entry`,
+      name: `Stock delivery, ${printed}, 2026-10-13, ${kind}, possible repeat, needs your check, large expense, Manual Entry`,
     });
     expect(onDelete).not.toHaveBeenCalled();
     expect(onResolve).not.toHaveBeenCalled();

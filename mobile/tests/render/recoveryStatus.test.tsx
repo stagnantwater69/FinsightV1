@@ -176,7 +176,7 @@ describe('RecoveryTargetScreen — terminology and freshness', () => {
     await fireEvent.press(queries.getByRole('button', { name: 'About the recovery target' }));
     expect(await queries.findByText('About this target')).toBeTruthy();
     expect(
-      queries.getByText('Your Sales Coverage Target compares recorded sales references with your expected monthly expense amount.'),
+      queries.getByText('Your Sales Coverage Target compares recorded sales with your expected monthly expense amount.'),
     ).toBeTruthy();
     expect(
       queries.getByText('It is a planning guide and does not calculate profit, cash flow, or formal break-even.'),

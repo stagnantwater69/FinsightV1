@@ -150,7 +150,7 @@ describe('Recovery next goal safeguards', () => {
   it('keeps a reached goal from prompting additional sales', async () => {
     const q = await render(themed(<RecoveryNextGoal period={{ ...basePeriod, status: 'covered', remainingTarget: 0 }} />));
     expect(q.getByText('Sales coverage target reached')).toBeTruthy();
-    expect(q.getByText("Recorded sales cover this period's expense basis.")).toBeTruthy();
+    expect(q.getByText("Recorded sales cover this period's costs.")).toBeTruthy();
     expect(q.queryByText(/PHP .* \/ day/)).toBeNull();
     expect(q.queryByText(/behind today's pace/)).toBeNull();
   });

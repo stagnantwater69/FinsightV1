@@ -529,7 +529,7 @@ export function OnboardingScreen({
                 </WhyWeAsk>
                 <Field
                   ref={fundsRef}
-                  label="Starting available funds (PHP)"
+                  label="Opening balance (PHP)"
                   value={draft.availableFunds}
                   onChangeText={(v) => update("availableFunds", v)}
                   error={fieldErrors.availableFunds}
@@ -661,7 +661,7 @@ export function OnboardingScreen({
 
                 <View style={{ gap: space.sm, marginBottom: space.lg }}>
                   <ReadyLine label="Business" value={draft.type.trim() || "Type not set"} />
-                  <ReadyLine label="Starting available funds" value={pesos(draft.availableFunds)} />
+                  <ReadyLine label="Opening balance" value={pesos(draft.availableFunds)} />
                   <ReadyLine
                     label="Starting monthly expense estimate"
                     value={`${pesos(draft.expectedMonthlyExpenses)} over ${draft.operatingDays || "not set"} operating days`}

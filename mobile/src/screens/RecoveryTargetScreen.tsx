@@ -999,7 +999,7 @@ const ABOUT_POINTS: { icon: keyof typeof Ionicons.glyphMap; title: string; body:
   {
     icon: "bar-chart-outline",
     title: "What it compares",
-    body: "Your Sales Coverage Target compares recorded sales references with your expected monthly expense amount.",
+    body: "Your Sales Coverage Target compares recorded sales with your expected monthly expense amount.",
   },
   {
     icon: "bulb-outline",

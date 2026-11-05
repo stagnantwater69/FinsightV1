@@ -171,7 +171,7 @@ export function TodayGoalSummary({
   const coverage = Math.max(0, Math.min(100, recovery.monthCoveragePercent));
   const goalData: ChartDatum[] = [
     { key: "today", label: "Today's sales goal", values: [{ label: "Sales recorded", value: recovery.todaysSales }, { label: "Today's target", value: recovery.todaysTarget }, { label: "Coverage", value: todayPct, display: `${todayPct.toFixed(1)}%` }, { label: "Gap", value: recovery.todaysGap, display: formatMoney(recovery.todaysGap, { decimals: true, signed: true }) }], note: statusLabel },
-    { key: "month", label: "Monthly expenses covered by sales", values: [{ label: "Sales this month", value: recovery.salesThisMonth }, { label: "Expense basis", value: recovery.expectedMonthlyExpenses }, { label: "Coverage", value: recovery.monthCoveragePercent, display: `${recovery.monthCoveragePercent.toFixed(1)}%` }], note: basisNote ?? "Based on recorded sales" },
+    { key: "month", label: "Monthly expenses covered by sales", values: [{ label: "Sales this month", value: recovery.salesThisMonth }, { label: "Monthly costs", value: recovery.expectedMonthlyExpenses }, { label: "Coverage", value: recovery.monthCoveragePercent, display: `${recovery.monthCoveragePercent.toFixed(1)}%` }], note: basisNote ?? "Based on recorded sales" },
   ];
   const goalSelection = useChartSelection(goalData, recovery.asOfDate);
   return (

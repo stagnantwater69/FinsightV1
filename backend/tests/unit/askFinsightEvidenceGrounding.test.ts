@@ -249,7 +249,7 @@ describe("Ask FinSight keeps correct answers whole", () => {
     "Matching \"ingredients\": 13 record(s) totalling PHP 28,360.00 [fact:f17]",
     "- \"Bulk flour and butter\" PHP 7,900.00 on 2026-10-28 in Ingredients [ref:e30] [fact:f20]",
     "- [HIGH] Unusual Ingredients expense: unusual for this category; Your usual amount in this category is PHP 1,683.00 [fact:f21]",
-    "- Sales reference recorded this month: PHP 2,670.00 of PHP 62,000.00 needed (4.3% covered) [fact:f13]",
+    "- Sales recorded this month: PHP 2,670.00 of PHP 62,000.00 needed (4.3% covered) [fact:f13]",
     "- Adjusted daily target from here: PHP 2,472.08 [fact:f15]",
   ].join("\n");
 

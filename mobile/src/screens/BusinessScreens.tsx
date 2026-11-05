@@ -316,7 +316,7 @@ export function BusinessProfilesScreen({ navigation }: MoreScreenProps<"Business
                   <View style={{ gap: space.xs }}><T style={{ color: t.textPrimary, fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>{detailsProfile.name}</T><T variant="caption">{detailsProfile.type}</T></View>
                   <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 22 }}>These are your starting figures and record coverage, not current funds or profit.</T>
                   <View style={{ gap: space.md }}>
-                    <RowLine label="Starting funds" value={detailsProfile.availableFunds} />
+                    <RowLine label="Opening balance" value={detailsProfile.availableFunds} />
                     <RowLine label="Starting monthly estimate" value={detailsProfile.expectedMonthlyExpenses} />
                     <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}><T variant="caption" style={{ flex: 1 }}>Operating days / month</T><T style={{ fontSize: typeScale.label }}>{detailsProfile.operatingDays}</T></View>
                     <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}><T variant="caption" style={{ flex: 1 }}>Expense records complete through</T><T style={{ flexShrink: 1, textAlign: "right", fontSize: typeScale.label }}>{detailsProfile.expenseRecordsCompleteThroughMonth ? formatMonthLabel(detailsProfile.expenseRecordsCompleteThroughMonth) : "Not confirmed"}</T></View>
@@ -484,7 +484,7 @@ export function BusinessProfileFormScreen({ navigation, route }: MoreScreenProps
               ref={fundsRef}
               error={fieldErrors.availableFunds}
               editable={!busy}
-              label="Starting available funds (PHP)"
+              label="Opening balance (PHP)"
               value={form.availableFunds}
               onChangeText={set("availableFunds")}
               keyboardType="decimal-pad"
@@ -713,7 +713,7 @@ function FinancialPositionCard({
 
             <View style={{ height: 1, backgroundColor: t.border, marginVertical: space.lg }} />
 
-            <T variant="label" style={{ color: t.ink[700] }}>Monthly expense basis</T>
+            <T variant="label" style={{ color: t.ink[700] }}>Monthly costs</T>
             <Money value={position.monthlyExpenseBasis.amount} size={20} weight="semibold" style={{ marginTop: 2 }} />
             <T variant="caption" style={{ marginTop: 4, lineHeight: 18 }}>
               {monthlyExpenseBasisProvenance(position.monthlyExpenseBasis)}

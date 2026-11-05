@@ -32,7 +32,7 @@ const references = new Map([fries, wrappers, meals].map((r) => [recordTag(r.reco
 
 const CONTEXT = `=== BUSINESS PROFILE ===
 Name: Kusina ni Ana (Restaurant)
-Starting available funds: PHP 50,000.00 (baseline date 2022-01-01)
+Opening balance: PHP 50,000.00 (baseline date 2022-01-01)
 
 === THE FLAG THE OWNER IS ASKING ABOUT ===
 Flag: Unusual Business Meals expense (severity medium, status open)

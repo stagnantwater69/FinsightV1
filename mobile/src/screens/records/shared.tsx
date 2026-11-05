@@ -35,15 +35,15 @@ export interface ImportBatchSummary {
   status: string;
 }
 
-/** Status badges, shared by the list, Edit and the review queue. */
+/** Status badges, shared by the list, Edit and the review queue. Same words as web Records: "Check" and "Repeat?". */
 export function badges(r: RecordItem) {
   // Nothing flagged, nothing rendered: an empty row still carried its top
   // margin and padded every unflagged card.
   if (r.duplicateStatus !== "Flagged" && r.reviewStatus !== "Needs Review" && !r.largeExpenseFlag) return null;
   return (
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: space.sm }}>
-      {r.duplicateStatus === "Flagged" ? <AlertBadge kind="duplicate" /> : null}
-      {r.reviewStatus === "Needs Review" ? <AlertBadge kind="needs-review" /> : null}
+      {r.duplicateStatus === "Flagged" ? <AlertBadge kind="duplicate" label="Repeat?" /> : null}
+      {r.reviewStatus === "Needs Review" ? <AlertBadge kind="needs-review" label="Check" /> : null}
       {r.largeExpenseFlag ? <AlertBadge kind="large-expense" /> : null}
     </View>
   );

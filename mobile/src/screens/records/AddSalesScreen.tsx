@@ -150,7 +150,7 @@ export function AddSalesScreen({ navigation }: RecordsScreenProps<"AddSales">) {
     <FormScreen>
       <ScreenHeader
         eyebrow="Money in"
-        title="Add sales reference"
+        title="Add sale"
         subtitle="Log a sales total so FinSight can measure recovery progress."
       />
       <Card>

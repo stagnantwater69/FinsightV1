@@ -93,7 +93,7 @@ describe('Home chart exploration', () => {
     expect(chartReadout(q, 'Sales goals').props.accessibilityLabel).toContain('Sales recorded: PHP 0.00');
     expect(chartReadout(q, 'Sales goals').props.accessibilityLabel).toContain("Today's target: PHP 150.75");
     await tapChart(q, 'Monthly expenses covered by sales');
-    expect(chartReadout(q, 'Sales goals').props.accessibilityLabel).toContain('Expense basis: PHP 1,000.50');
+    expect(chartReadout(q, 'Sales goals').props.accessibilityLabel).toContain('Monthly costs: PHP 1,000.50');
     expect(open).not.toHaveBeenCalled();
   });
   it('maps spending segments by amount and retains navigation actions', async () => {

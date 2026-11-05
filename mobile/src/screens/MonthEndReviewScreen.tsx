@@ -151,7 +151,7 @@ function ReviewContent({
   const circumference = 2 * Math.PI * 50;
   const missing = data.missingOrProvisionalDayCount > 0;
   const sourceLabel = data.monthlyExpenseBasis?.source === "previous_complete_month" ? "Confirmed expense records" : "Starting estimate";
-  const coverageData: ChartDatum[] = [{ key: data.month, label: `${formatMonthLabel(data.month)} sales coverage`, values: [{ label: "Expense basis", value: data.monthlyExpenseBasis?.amount ?? null, unavailableLabel: "Unavailable" }, { label: "Coverage", value: Number.isFinite(data.coveragePercent) ? data.coveragePercent : null, display: coverage === null ? undefined : `${coverage}%`, unavailableLabel: "Unavailable" }, { label: shortfall ? "Shortfall" : "Above expense basis", value: Math.abs(data.surplusOrShortfall) }], note: `${sourceLabel}. Sales above the expense basis are not a measure of profit.${missing ? " Some open days need complete sales records." : ""}` }];
+  const coverageData: ChartDatum[] = [{ key: data.month, label: `${formatMonthLabel(data.month)} sales coverage`, values: [{ label: "Monthly costs", value: data.monthlyExpenseBasis?.amount ?? null, unavailableLabel: "Unavailable" }, { label: "Coverage", value: Number.isFinite(data.coveragePercent) ? data.coveragePercent : null, display: coverage === null ? undefined : `${coverage}%`, unavailableLabel: "Unavailable" }, { label: shortfall ? "Shortfall" : "Above monthly costs", value: Math.abs(data.surplusOrShortfall) }], note: `${sourceLabel}. Sales above monthly costs are not a measure of profit.${missing ? " Some open days need complete sales records." : ""}` }];
   const coverageSelection = useChartSelection(coverageData, data.month);
 
   return (
@@ -172,14 +172,14 @@ function ReviewContent({
           </ChartPlotPressArea>
           <View style={{ flex: stacked ? undefined : 1, width: stacked ? "100%" : undefined, gap: space.sm, alignItems: stacked ? "center" : "flex-start" }}>
             <Money value={Math.abs(data.surplusOrShortfall)} decimals size={typeScale.titleLg} weight="semibold" color={t.onBrandSolid} style={{ alignSelf: "stretch", textAlign: stacked ? "center" : "left" }} />
-            <T style={{ color: t.onBrandSolidMuted, fontFamily: font.sansMedium, fontSize: typeScale.bodyLg, lineHeight: 24, textAlign: stacked ? "center" : "left" }}>{shortfall ? "still to cover" : aboveBasis ? "Above expense basis" : "Expense basis covered"}</T>
+            <T style={{ color: t.onBrandSolidMuted, fontFamily: font.sansMedium, fontSize: typeScale.bodyLg, lineHeight: 24, textAlign: stacked ? "center" : "left" }}>{shortfall ? "still to cover" : aboveBasis ? "Above monthly costs" : "Monthly costs covered"}</T>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: radius.full, backgroundColor: shortfall ? t.ACCENT.fill : t.onBrandSolidMuted }}>
               <Ionicons name={shortfall ? "alert-circle" : "checkmark-circle"} size={16} color={shortfall ? t.ACCENT.onFill : t.brandSolidPressed} accessible={false} />
               <T style={{ flexShrink: 1, color: shortfall ? t.ACCENT.onFill : t.brandSolidPressed, fontFamily: font.sansMedium, fontSize: typeScale.label }}>{shortfall ? "Below target" : aboveBasis ? "Above basis" : "Covered"}</T>
             </View>
           </View>
         </View>
-        <T style={{ color: t.onBrandSolid, fontSize: typeScale.bodySm, lineHeight: 22, textAlign: "center" }}>Sales compared with expense basis</T>
+        <T style={{ color: t.onBrandSolid, fontSize: typeScale.bodySm, lineHeight: 22, textAlign: "center" }}>Sales compared with monthly costs</T>
         <ChartValueReadout data={coverageData} selection={coverageSelection} chartLabel="Month-end sales coverage" />
       </View>
 
@@ -193,7 +193,7 @@ function ReviewContent({
           <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.md }}>
             <Ionicons name="calculator-outline" size={24} color={t.textSecondary} accessible={false} />
             <View style={{ flex: 1, gap: space.xs }}>
-              <T accessibilityRole="header" style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>Expense basis</T>
+              <T accessibilityRole="header" style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>Monthly costs</T>
               <T variant="caption">{sourceLabel}</T>
               <Money value={data.monthlyExpenseBasis.amount} decimals size={typeScale.title} weight="semibold" style={{ flexShrink: 1 }} />
             </View>
@@ -201,7 +201,7 @@ function ReviewContent({
           <Disclosure title="How this is calculated">
             <View style={{ gap: space.sm, paddingTop: space.sm }}>
               <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 22 }}>{monthlyExpenseBasisProvenance(data.monthlyExpenseBasis)}</T>
-              <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 22 }}>Sales coverage compares recorded sales with this expense basis. Amounts above the basis are not a measure of profit.</T>
+              <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 22 }}>Sales coverage compares recorded sales with these monthly costs. Amounts above them are not a measure of profit.</T>
             </View>
           </Disclosure>
         </Card>
@@ -233,7 +233,7 @@ function ReviewContent({
         </Card>
       </View>
 
-      {data.baselineAppearsOffFromPattern ? <Callout tone="info">Your monthly expense basis may not match the sales pattern recorded this month. This note does not change your starting estimate or record coverage.</Callout> : null}
+      {data.baselineAppearsOffFromPattern ? <Callout tone="info">Your monthly costs may not match the sales pattern recorded this month. This note does not change your starting estimate or record coverage.</Callout> : null}
 
       <View style={{ gap: space.md }}>
         <SectionHeading>Next month: what to check</SectionHeading>
