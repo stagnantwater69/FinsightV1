@@ -68,7 +68,7 @@ function FaqItem({
 }
 
 export function FaqAccordion() {
-  const [openQuestion, setOpenQuestion] = useState<string | null>(SHOWN_FAQS[0]?.q ?? null);
+  const [openQuestion, setOpenQuestion] = useState<string | null>(null);
   const mid = Math.ceil(SHOWN_FAQS.length / 2);
   const columns = [SHOWN_FAQS.slice(0, mid), SHOWN_FAQS.slice(mid)];
 

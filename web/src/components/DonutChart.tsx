@@ -98,6 +98,8 @@ export function DonutChart({ breakdown }: { breakdown: { categoryName: string; t
   const palette = useCategoricalPalette();
   const [active, setActive] = useState<string | null>(null);
   const slices = toSlices(breakdown, palette);
+  // Categories, not slices: "Other (6)" is one slice holding six categories.
+  const categoryCount = breakdown.filter((b) => b.total > 0).length;
   if (slices.length === 0) return null;
 
   const total = slices.reduce((s, d) => s + d.total, 0);
@@ -152,7 +154,7 @@ export function DonutChart({ breakdown }: { breakdown: { categoryName: string; t
           })}
         </svg>
         <div className="pointer-events-none absolute inset-0 grid place-content-center px-8 text-center">
-          <span className="block text-[11px] font-medium uppercase tracking-[0.08em] text-ink-500">
+          <span className="block text-xs font-medium uppercase tracking-[0.08em] text-ink-500">
             {focus ? `${((focus.total / total) * 100).toFixed(1)}%` : "Total spent"}
           </span>
           <span
@@ -162,7 +164,7 @@ export function DonutChart({ breakdown }: { breakdown: { categoryName: string; t
             {centerValue}
           </span>
           <span className="mx-auto mt-1.5 block max-w-[7.5rem] truncate text-xs text-ink-600">
-            {focus ? focus.name : `${slices.length} ${slices.length === 1 ? "category" : "categories"}`}
+            {focus ? focus.name : `${categoryCount} ${categoryCount === 1 ? "category" : "categories"}`}
           </span>
         </div>
       </div>

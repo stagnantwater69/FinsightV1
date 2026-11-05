@@ -68,7 +68,7 @@ const DESTINATIONS: Destination[] = [
   { label: "Month-end review", to: "/insights/recovery/month-end-review", section: "Insights", keywords: "recovery month summary recap last month coverage surplus shortfall suggested questions" },
   { label: "Recovery target notifications", to: "/business-profiles/:id/recovery-notifications", section: "Insights", keywords: "recovery alerts notify quiet hours frequency reminders coverage" },
   { label: "Add expense", to: "/records/expenses/new", section: "Actions", keywords: "new create spend cost" },
-  { label: "Add sales reference", to: "/records/sales/new", section: "Actions", keywords: "new create revenue income takings" },
+  { label: "Add sale", to: "/records/sales/new", section: "Actions", keywords: "new create revenue income takings" },
   { label: "Scan receipt", to: "/records/receipts/new", section: "Actions", keywords: "ocr photo camera capture" },
   { label: "Import CSV", to: "/records/csv-imports/new", section: "Actions", keywords: "upload spreadsheet excel bulk import file" },
   { label: "Add recurring payment", to: "/insights/recurring-schedules/new", section: "Actions", keywords: "recurring repeat schedule monthly weekly rent salary bill subscription due watch" },
@@ -204,7 +204,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
         label: r.description,
         section: "Records",
         to: r.type === "expense" ? `/records/expenses/${r.id}/edit` : `/records/sales/${r.id}/edit`,
-        meta: `${r.date.slice(0, 10)} · ${r.type === "expense" ? "Expense" : "Sales ref."}`,
+        meta: `${r.date.slice(0, 10)} · ${r.type === "expense" ? "Expense" : "Sale"}`,
         trailing: <Money value={r.amount} />,
       });
     }
@@ -329,7 +329,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
         />
         {/* The shortcut hint. Hidden on touch, where there is no keyboard to
             press it with and it would just be a mystery label. */}
-        <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded-md border border-paper-200 bg-paper px-1.5 py-0.5 font-sans text-[10.5px] font-semibold text-ink-500 lg:block">
+        <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded-md border border-paper-200 bg-paper px-1.5 py-0.5 font-sans text-xs font-semibold text-ink-500 lg:block">
           ⌘K
         </kbd>
       </div>
@@ -356,7 +356,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
                     {showSection ? (
                       <div
                         role="presentation"
-                        className="px-2.5 pb-1 pt-2.5 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500"
+                        className="px-2.5 pb-1 pt-2.5 text-xs font-bold uppercase tracking-[0.12em] text-ink-500"
                       >
                         {result.section}
                       </div>
@@ -383,7 +383,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
                           {result.label}
                         </span>
                         {result.meta ? (
-                          <span className="block truncate text-[11.5px] text-ink-500">{result.meta}</span>
+                          <span className="block truncate text-xs text-ink-500">{result.meta}</span>
                         ) : null}
                       </span>
                       {result.trailing ? (
@@ -404,7 +404,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
               <button type="button" disabled={searching} onClick={() => setSearchAttempt((value) => value + 1)} className="tap rounded-lg px-3 text-xs font-semibold text-tone-brand hover:bg-tint-brand">Retry record search</button>
             </div>
           ) : null}
-          <div className="flex items-center gap-3 border-t border-paper-200 bg-paper-100 px-3 py-2 text-[11px] text-ink-600">
+          <div className="flex items-center gap-3 border-t border-paper-200 bg-paper-100 px-3 py-2 text-xs text-ink-600">
             <span>
               <b className="font-semibold text-ink-600">↑↓</b> to move
             </span>

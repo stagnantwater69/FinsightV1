@@ -970,7 +970,7 @@ function SpendingImpactContent({ navigation, route }: InsightsScreenProps<"Spend
 
             <View style={{ marginTop: space.md, alignSelf: "flex-start" }}>
               <Button
-                title="Edit starting funds"
+                title="Edit opening balance"
                 variant="secondary"
                 onPress={() => {
                   haptics.tapped();

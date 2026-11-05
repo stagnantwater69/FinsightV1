@@ -122,7 +122,7 @@ export function Alert({
       <div className="flex flex-1 flex-wrap items-start gap-x-3 gap-y-2 p-3">
         <span
           aria-hidden
-          className="mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+          className="mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
           style={{ backgroundColor: spec.solid }}
         >
           {spec.glyph}

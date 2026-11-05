@@ -39,7 +39,7 @@ export const MODULE_COPY: Record<InteractionModule, ModuleCopy> = {
     title: "Ask FinSight about your dashboard",
     scope: "Scoped to your Dashboard — I can walk through your totals, what needs review, and your recovery pace.",
     greeting:
-      "I can explain what's on your dashboard right now — your expenses, sales reference, alerts, and recovery pace. What would you like to know?",
+      "I can explain what's on your dashboard right now — your expenses, sales, alerts, and recovery pace. What would you like to know?",
     starters: ["Summarise this month for me", "What needs my attention?", "How can I reduce my expenses?"],
   },
   "Expense Insights": {
@@ -81,7 +81,7 @@ export const MODULE_COPY: Record<InteractionModule, ModuleCopy> = {
     scope: "Scoped to Recovery Target — I can explain today's gap and how the remaining target spreads across your remaining operating days.",
     starters: ["How much more sales do I need?", "Did I reach today's target?", "What is my adjusted daily target?"],
     greeting:
-      "I can compare your recorded sales reference against your needed target and show how much is still needed. What would you like to check?",
+      "I can compare your recorded sales against your needed target and show how much is still needed. What would you like to check?",
   },
 };
 

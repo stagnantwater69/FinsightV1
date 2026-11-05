@@ -185,7 +185,7 @@ describe('Recovery Target — hypothetical scenario', () => {
     await queries.findByText('Hypothetical recovery target');
 
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly costs, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
@@ -200,7 +200,7 @@ describe('Recovery Target — hypothetical scenario', () => {
     ).toBeTruthy();
     expect(queries.getAllByText('Current (unchanged)').length).toBeGreaterThan(0);
     expect(queries.getAllByText('Hypothetical (not saved)').length).toBeGreaterThan(0);
-    expect(queries.getByText('Assumed monthly expense basis:')).toBeTruthy();
+    expect(queries.getByText('Assumed monthly costs:')).toBeTruthy();
   });
 
   it('never calls a profile-update endpoint from this sheet', async () => {
@@ -209,7 +209,7 @@ describe('Recovery Target — hypothetical scenario', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly costs, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
@@ -227,7 +227,7 @@ describe('Recovery Target — hypothetical scenario', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly costs, in Philippine pesos'),
       '-5',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
@@ -242,14 +242,14 @@ describe('Recovery Target — hypothetical scenario', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly costs, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
     await queries.findByText('Hypothetical result. Your real target and profile are unchanged.');
 
-    // Monthly expense basis: 30000 -> 20000, delta -10000, -33.3%.
-    expect(queries.getAllByText('Monthly expense basis').length).toBeGreaterThan(0);
+    // Monthly costs: 30000 -> 20000, delta -10000, -33.3%.
+    expect(queries.getAllByText('Monthly costs').length).toBeGreaterThan(0);
     expect(await queries.findByText(/−PHP 10,000\.00 \(-33\.3%\)/)).toBeTruthy();
 
     // "Estimated transactions per day" is always the explicit unavailable note, never a number.
@@ -276,7 +276,7 @@ describe('Recovery Target — hypothetical scenario', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly costs, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
@@ -304,7 +304,7 @@ describe('Recovery Target — hypothetical scenario', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly costs, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
@@ -336,7 +336,7 @@ describe('Recovery Target — inline what-if card', () => {
     apiPost.mockResolvedValue(scenario({ assumedExpectedMonthlyExpenses: 27000 }));
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'Try −10% of your monthly expense basis' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Try −10% of your monthly costs' }));
 
     await waitFor(() =>
       expect(apiPost).toHaveBeenCalledWith('/insights/recovery-scenario', {
@@ -375,7 +375,7 @@ describe('Recovery Target — inline what-if card', () => {
     await queries.findByRole('button', { name: 'Type amount' });
     expect(queries.queryByRole('button', { name: 'Save as my plan' })).toBeNull();
 
-    await fireEvent.press(queries.getByRole('button', { name: 'Try −20% of your monthly expense basis' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Try −20% of your monthly costs' }));
     await fireEvent.press(await queries.findByRole('button', { name: 'Save as my plan' }));
 
     await waitFor(() =>
@@ -412,7 +412,7 @@ describe('Recovery Target — "Save this as a plan"', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly costs, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
@@ -460,7 +460,7 @@ describe('Recovery Target — "Save this as a plan"', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly costs, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
@@ -482,7 +482,7 @@ describe('Recovery Target — "Save this as a plan"', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly costs, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));

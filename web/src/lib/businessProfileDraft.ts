@@ -191,7 +191,7 @@ export function validateNumbers(draft: BusinessProfileDraft): BusinessFieldError
 
   const funds = Number(draft.availableFunds);
   if (draft.availableFunds === "" || !Number.isFinite(funds) || funds < 0) {
-    errors.availableFunds = "Enter the starting funds available to the business. Enter 0 if none.";
+    errors.availableFunds = "Enter the opening balance: money the business has today. Enter 0 if none.";
   }
 
   const expenses = Number(draft.expectedMonthlyExpenses);

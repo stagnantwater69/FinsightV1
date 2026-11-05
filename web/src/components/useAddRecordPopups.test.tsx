@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAddRecordPopups } from "./useAddRecordPopups";
 
-let selected: { id: number } | null = null;
+let selected: { id: number } | null = { id: 1 };
 vi.mock("../context/BusinessProfileContext", () => ({ useBusinessProfiles: () => ({ selected }) }));
 let expenseMounts = 0;
 vi.mock("./AddExpenseModal", async () => {
   const { useEffect } = await import("react");
   return {
-    AddExpenseModal: ({ open, onSaved, onClose }: { open: boolean; onSaved: () => void; onClose: () => void }) => {
+    AddExpenseModal: ({ open, recordId, onSaved, onClose }: { open: boolean; recordId?: number; onSaved: () => void; onClose: () => void }) => {
       useEffect(() => { expenseMounts += 1; }, []);
       return open ? (
         <div role="dialog" aria-label="Add expense">
+          expense popup {recordId ?? "new"}
           <button type="button" onClick={() => { onSaved(); onClose(); }}>Save</button>
         </div>
       ) : null;
@@ -21,7 +22,8 @@ vi.mock("./AddExpenseModal", async () => {
   };
 });
 vi.mock("./AddSalesModal", () => ({
-  AddSalesModal: ({ open }: { open: boolean }) => (open ? <div role="dialog" aria-label="Add sales" /> : null),
+  AddSalesModal: ({ open, recordId }: { open: boolean; recordId?: number }) =>
+    open ? <div role="dialog" aria-label="Add sales">sales popup {recordId ?? "new"}</div> : null,
 }));
 
 function Page({ onSaved }: { onSaved: () => void }) {
@@ -47,11 +49,32 @@ function renderPage(onSaved = () => {}) {
   );
 }
 
-describe("add-record popups on any page", () => {
-  beforeEach(() => { selected = null; expenseMounts = 0; });
+beforeEach(() => { selected = { id: 1 }; expenseMounts = 0; });
+
+function Harness() {
+  const popups = useAddRecordPopups();
+  return (
+    <>
+      <button onClick={() => popups.openEdit("sales", 7)}>edit sale</button>
+      <button onClick={popups.openSales}>add sale</button>
+      {popups.popups}
+    </>
+  );
+}
+
+describe("useAddRecordPopups", () => {
+  it("opens a saved record for editing, then a fresh form for adding", () => {
+    render(<MemoryRouter><Harness /></MemoryRouter>);
+
+    fireEvent.click(screen.getByText("edit sale"));
+    expect(screen.getByText("sales popup 7")).toBeInTheDocument();
+
+    // Adding after an edit must not reopen the old record.
+    fireEvent.click(screen.getByText("add sale"));
+    expect(screen.getByText("sales popup new")).toBeInTheDocument();
+  });
 
   it("opens one popup at a time in place, and closes it after a save", () => {
-    selected = { id: 10 };
     const onSaved = vi.fn();
     renderPage(onSaved);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -72,12 +95,12 @@ describe("add-record popups on any page", () => {
   });
 
   it("mounts no form until the owner opens one", () => {
-    selected = { id: 10 };
     renderPage();
     expect(expenseMounts).toBe(0);
   });
 
   it("goes to the full-page form when no business is selected", () => {
+    selected = null;
     renderPage();
     fireEvent.click(screen.getByRole("button", { name: "Add sale" }));
     expect(screen.getByRole("heading", { name: "Sales page" })).toBeInTheDocument();

@@ -12,6 +12,11 @@ import {
   relativeTime,
 } from "../lib/notificationPresentation";
 import type { Notification } from "../lib/types";
+import { formatCalendarDate } from "../lib/dates";
+
+/** Stored messages carry ISO dates ("2026-10-16"); owners read "Oct 16, 2026". */
+export const readableMessage = (message: string) =>
+  message.replace(/\b\d{4}-\d{2}-\d{2}\b/g, (key) => formatCalendarDate(key));
 
 const PRESENTATION = {
   duplicate: {
@@ -49,7 +54,7 @@ export function NotificationItem({
   const target = notificationTarget(notification);
   return (
     <article
-      className={`flex gap-3 ${compact ? "px-4 py-4" : "px-4 py-5 sm:px-6"} ${notification.readStatus ? "bg-paper" : "bg-tint-brand/30"}`}
+      className={`group flex gap-3 ${compact ? "px-4 py-4" : "px-4 py-5 sm:px-6"} ${notification.readStatus ? "bg-paper" : "bg-tint-brand/30"}`}
     >
       <span
         className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${color}`}
@@ -82,7 +87,7 @@ export function NotificationItem({
           </time>
         </div>
         <p className="mt-2 max-w-[70ch] break-words text-sm leading-relaxed text-ink-600 [overflow-wrap:anywhere]">
-          {notification.message}
+          {readableMessage(notification.message)}
         </p>
         {target || !notification.readStatus ? (
           <div className="-ml-2 mt-2 flex flex-wrap items-center gap-x-2">
@@ -103,7 +108,8 @@ export function NotificationItem({
               <button
                 type="button"
                 onClick={() => onMarkRead(notification.id)}
-                className="tap rounded-lg px-2 text-xs font-medium text-ink-600 transition hover:bg-paper-100 hover:text-ink-900"
+                // Shown on hover or keyboard focus where a pointer can hover; always on touch.
+                className="tap rounded-lg px-2 text-xs font-medium text-ink-600 transition hover:bg-paper-100 hover:text-ink-900 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:focus-visible:opacity-100 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100"
               >
                 Mark read
                 <span className="sr-only">: {notification.message}</span>

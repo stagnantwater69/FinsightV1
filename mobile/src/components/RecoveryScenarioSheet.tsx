@@ -135,7 +135,7 @@ export function RecoveryScenarioSheet({
                 Hypothetical recovery target
               </T>
               <T variant="caption" style={{ marginTop: 2 }}>
-                What if the monthly expense basis were different?
+                What if the monthly costs were different?
               </T>
             </View>
             <Pressable
@@ -163,7 +163,7 @@ export function RecoveryScenarioSheet({
 
             <View>
               <T variant="label" style={{ marginBottom: 4 }}>
-                Assumed monthly expense basis (PHP)
+                Assumed monthly costs (PHP)
               </T>
               <TextInput
                 value={rawValue}
@@ -177,7 +177,7 @@ export function RecoveryScenarioSheet({
                 keyboardType="decimal-pad"
                 placeholder={`e.g. ${Math.round(currentExpectedMonthlyExpenses)}`}
                 placeholderTextColor={ink[400]}
-                accessibilityLabel="Assumed monthly expense basis, in Philippine pesos"
+                accessibilityLabel="Assumed monthly costs, in Philippine pesos"
                 style={{
                   minHeight: TAP_FLOOR,
                   borderWidth: 1,
@@ -259,12 +259,12 @@ function RecoveryScenarioResult({ result }: { result: RecoveryScenario }) {
       </T>
 
       <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
-        <T style={{ fontSize: typeScale.bodySm }}>Assumed monthly expense basis:</T>
+        <T style={{ fontSize: typeScale.bodySm }}>Assumed monthly costs:</T>
         <Money value={result.assumedExpectedMonthlyExpenses} size={typeScale.bodySm} weight="semibold" />
       </View>
 
       <ScenarioRow
-        label="Monthly expense basis"
+        label="Monthly costs"
         current={result.current.expectedMonthlyExpenses}
         hypothetical={result.hypothetical.expectedMonthlyExpenses}
         delta={result.delta?.totalCoverageGoal}

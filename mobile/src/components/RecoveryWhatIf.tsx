@@ -47,7 +47,7 @@ export function RecoveryWhatIfCard({
   onPlanSaved,
 }: {
   businessProfileId: number;
-  /** The real monthly expense basis. Never changed by anything on this card. */
+  /** The real monthly costs. Never changed by anything on this card. */
   basis: number;
   plan: RecoveryPlan | null;
   /** Opens the full scenario sheet for a typed amount. */
@@ -257,7 +257,7 @@ export function RecoveryWhatIfCard({
               key={preset.label}
               accessibilityRole="button"
               accessibilityState={{ selected: on, disabled: saving }}
-              accessibilityLabel={`Try ${preset.label} of your monthly expense basis`}
+              accessibilityLabel={`Try ${preset.label} of your monthly costs`}
               onPress={() => choose(preset.pct)}
               disabled={saving}
               style={({ pressed }) => ({

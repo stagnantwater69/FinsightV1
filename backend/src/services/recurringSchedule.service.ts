@@ -3,7 +3,7 @@ import type { RecurringSchedule } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
-import { utcAddDays, utcToday } from "../lib/dates";
+import { resolveBusinessToday, utcAddDays, utcToday } from "../lib/dates";
 import { DUE_SOON_LEAD_DAYS, RECURRING_VERSION } from "./anomalyDetection/recurring.service";
 import { RUNTIME_DETECTION_CONFIG } from "./anomalyDetection/config";
 import { NOTIFICATION_TYPES } from "./notification.service";
@@ -115,7 +115,8 @@ type ScheduleRow = RecurringSchedule & { category?: { name: string } };
  * Prisma.Decimal serializes as an object, so `expectedAmount` arrives as
  * `{ s, e, d }` and every money component downstream renders NaN.
  */
-function toDTO(row: ScheduleRow, today = utcToday()) {
+// `today` is the business's calendar day (resolveBusinessToday), the same one the watchdog judges by.
+function toDTO(row: ScheduleRow, today: Date) {
   return {
     id: row.id,
     businessProfileId: row.businessProfileId,
@@ -222,8 +223,8 @@ export async function listRecurringSchedules(userId: number, businessProfileId: 
   // Refuses rather than returning []: an empty agenda is indistinguishable from
   // "you have no schedules", which is a lie of a different kind.
   assertRecurringSchedulesEnabled();
-  await requireOwnedBusinessProfile(userId, businessProfileId);
-  const today = utcToday();
+  const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
+  const today = resolveBusinessToday(profile.timezone);
   const rows = await prisma.recurringSchedule.findMany({
     where: { businessProfileId },
     include: { category: { select: { name: true } } },
@@ -235,7 +236,7 @@ export async function listRecurringSchedules(userId: number, businessProfileId: 
 
 export async function createRecurringSchedule(userId: number, input: CreateInput) {
   assertRecurringSchedulesEnabled();
-  await requireOwnedBusinessProfile(userId, input.businessProfileId);
+  const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId);
   await verifyCategoryBelongsToProfile(input.categoryId, input.businessProfileId);
 
   const row = await prisma.recurringSchedule.create({
@@ -253,17 +254,21 @@ export async function createRecurringSchedule(userId: number, input: CreateInput
     },
     include: { category: { select: { name: true } } },
   });
-  return toDTO(row);
+  return toDTO(row, resolveBusinessToday(profile.timezone));
 }
 
 export async function updateRecurringSchedule(userId: number, id: number, input: UpdateInput) {
   assertRecurringSchedulesEnabled();
   // Scoped lookup, never a separate ownership query and never a 403: another
   // owner's schedule must be indistinguishable from one that does not exist.
-  const existing = await prisma.recurringSchedule.findFirst({ where: { id, businessProfile: { userId } } });
+  const existing = await prisma.recurringSchedule.findFirst({
+    where: { id, businessProfile: { userId } },
+    include: { businessProfile: { select: { timezone: true } } },
+  });
   if (!existing) {
     throw new ApiError(404, "Recurring schedule not found");
   }
+  const today = resolveBusinessToday(existing.businessProfile.timezone);
 
   if (input.categoryId !== undefined) {
     await verifyCategoryBelongsToProfile(input.categoryId, existing.businessProfileId);
@@ -294,9 +299,9 @@ export async function updateRecurringSchedule(userId: number, id: number, input:
 
   if (input.isActive === false) {
     const [row] = await prisma.$transaction([update, ...retireScheduleWatchWrites(existing)]);
-    return toDTO(row);
+    return toDTO(row, today);
   }
-  return toDTO(await update);
+  return toDTO(await update, today);
 }
 
 export async function deleteRecurringSchedule(userId: number, id: number) {
@@ -329,7 +334,7 @@ export async function confirmRecurringPattern(userId: number, patternId: number)
   assertRecurringSchedulesEnabled();
   const pattern = await prisma.recurringPattern.findFirst({
     where: { id: patternId, businessProfile: { userId } },
-    include: { derivedSchedule: { select: { id: true } } },
+    include: { derivedSchedule: { select: { id: true } }, businessProfile: { select: { timezone: true } } },
   });
   if (!pattern) {
     throw new ApiError(404, "Recurring pattern not found");
@@ -367,5 +372,5 @@ export async function confirmRecurringPattern(userId: number, patternId: number)
     }),
   ]);
 
-  return toDTO(schedule);
+  return toDTO(schedule, resolveBusinessToday(pattern.businessProfile.timezone));
 }

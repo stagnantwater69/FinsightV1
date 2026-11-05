@@ -4,6 +4,7 @@ import { IconTile } from "../../components/IconTile";
 import { Button } from "../../components/Button";
 import { Pill, type PillTone } from "../../components/ui";
 import { formatMoney } from "../../components/Money";
+import { feedbackActions } from "../../lib/findingPresentation";
 import type {
   AnomalyFinding,
   AnomalyFindingFeedback,
@@ -57,29 +58,21 @@ export function FindingCard({
         leads to.
       */}
       <div className="mt-3 flex flex-wrap items-center gap-2 pl-11">
-        <Button
-          type="button"
-          size="sm"
-          onClick={() =>
-            onReview(
-              finding.id,
-              "CONFIRMED",
-              finding.type === "POSSIBLE_DUPLICATE" ? "DUPLICATE" : "CONFIRMED_UNUSUAL",
-            )
-          }
-        >
-          Confirm
-          <span className="sr-only"> — {finding.title}</span>
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          onClick={() => onReview(finding.id, "DISMISSED", "EXPECTED_TRANSACTION")}
-        >
-          Expected / dismiss
-          <span className="sr-only"> — {finding.title}</span>
-        </Button>
+        {/* The queue's own first two answers for this kind of finding, in its words. */}
+        {feedbackActions(finding.type === "POSSIBLE_DUPLICATE" ? "duplicate" : "unusual")
+          .slice(0, 2)
+          .map((action, index) => (
+            <Button
+              key={action.feedback}
+              type="button"
+              size="sm"
+              variant={index === 0 ? "brand" : "secondary"}
+              onClick={() => onReview(finding.id, action.status, action.feedback)}
+            >
+              {action.label}
+              <span className="sr-only">: {finding.title}</span>
+            </Button>
+          ))}
         <Link to="/records/flagged" className="tap-inline text-xs link-action">
           More options
           <span className="sr-only"> for {finding.title}, on the review queue</span>

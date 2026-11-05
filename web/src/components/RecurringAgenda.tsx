@@ -173,7 +173,7 @@ function ScheduleGroupSection({ group, resetKey, visibleItems, onEdit }: {
 
   return (
     <section aria-label={group.label}>
-      <h3 className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-500">
+      <h3 className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.13em] text-ink-500">
         {group.label}
         <span className="figure font-semibold normal-case tracking-normal">
           {group.items.length}

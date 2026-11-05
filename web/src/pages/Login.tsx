@@ -86,7 +86,7 @@ export function Login() {
       heroBody={
         <>
           An AI-assisted financial monitoring platform that helps small business owners record expenses, track
-          sales reference, and understand where their money goes.
+          sales, and understand where their money goes.
         </>
       }
       points={[

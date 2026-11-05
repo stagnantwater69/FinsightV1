@@ -66,7 +66,6 @@ import {
   CumulativeSalesChart,
   DailySalesChart,
   ProgressRing,
-  TargetBreakdown,
 } from "./recovery/RecoveryCharts";
 import { buildCumulativeSeries, shortDay } from "./recovery/recoverySeries";
 import type {
@@ -212,8 +211,8 @@ function reportingPeriodBasisSource(
 
   if (!basis) {
     return period.targetBasis === "prorated_monthly_expenses"
-      ? "Prorated from the monthly expense basis"
-      : "Monthly expense basis from the server";
+      ? "Prorated from monthly costs"
+      : "Monthly costs";
   }
 
   if (basis.source === "previous_complete_month") {
@@ -317,14 +316,15 @@ function checkpointStatusColor(status: RecoveryCheckpointStatus): string {
         : "";
 }
 
-function checkpointStatusLabel(status: RecoveryCheckpointStatus): string {
+/** `finished` is a checkpoint whose week is over, so "pace" no longer applies. */
+function checkpointStatusLabel(status: RecoveryCheckpointStatus, finished = false): string {
   switch (status) {
     case "behind":
-      return "Behind pace";
+      return finished ? "Missed target" : "Behind pace";
     case "on_pace":
-      return "On pace";
+      return finished ? "Met target" : "On pace";
     case "ahead":
-      return "Ahead of pace";
+      return finished ? "Beat target" : "Ahead of pace";
     case "pending":
       return "Pending";
   }
@@ -371,9 +371,11 @@ function formatCheckpointDate(date: string): string {
 function CheckpointCard({
   label,
   checkpoint,
+  finished,
 }: {
   label: string;
   checkpoint: RecoveryCheckpoint;
+  finished: boolean;
 }) {
   const isPending = checkpoint.status === "pending";
   const look = CHECKPOINT_LOOK[checkpoint.status];
@@ -390,7 +392,7 @@ function CheckpointCard({
         <div className="flex min-w-0 items-center gap-2.5">
           <IconTile icon={Flag} />
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-600">
+            <p className="text-xs font-semibold uppercase tracking-[0.04em] text-ink-600">
               {label}
             </p>
             <p className="text-sm font-semibold text-ink-900">
@@ -399,7 +401,7 @@ function CheckpointCard({
           </div>
         </div>
         <Pill tone={CHECKPOINT_STATUS_TONE[checkpoint.status]}>
-          {checkpointStatusLabel(checkpoint.status)}
+          {checkpointStatusLabel(checkpoint.status, finished)}
         </Pill>
       </div>
       <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
@@ -444,7 +446,7 @@ function CheckpointCard({
             />
           ) : null}
         </div>
-        <p className="mt-1.5 text-[11px] text-ink-500">
+        <p className="mt-1.5 text-xs text-ink-500">
           {reached !== null
             ? `${Math.round(reached)}% of this checkpoint's target recorded`
             : "Counts once this date arrives"}
@@ -457,7 +459,7 @@ function CheckpointCard({
 // Secondary, full list — plan §10.4: "keep the full list secondary". Reuses
 // the DataTable convention every other tabular surface on this page already
 // uses, rather than hand-rolling a second table shape.
-const CHECKPOINT_COLUMNS: Column<RecoveryCheckpoint>[] = [
+const checkpointColumns = (isFinished: (c: RecoveryCheckpoint) => boolean): Column<RecoveryCheckpoint>[] => [
   {
     key: "endDate",
     header: "End date",
@@ -521,7 +523,7 @@ const CHECKPOINT_COLUMNS: Column<RecoveryCheckpoint>[] = [
     sortValue: (c) => c.status,
     cell: (c) => (
       <Pill tone={CHECKPOINT_STATUS_TONE[c.status]}>
-        {checkpointStatusLabel(c.status)}
+        {checkpointStatusLabel(c.status, isFinished(c))}
       </Pill>
     ),
   },
@@ -564,13 +566,16 @@ function RecoveryCheckpoints({
   checkpoints,
   todayKey,
   periodName,
+  periodComplete,
 }: {
   checkpoints: RecoveryCheckpoint[];
   todayKey: string;
   periodName: string;
+  periodComplete: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (checkpoints.length === 0) return null;
+  const isFinished = (c: RecoveryCheckpoint) => periodComplete || c.endDate < todayKey;
 
   const { current, next } = findCurrentAndNextCheckpoints(
     checkpoints,
@@ -605,10 +610,10 @@ function RecoveryCheckpoints({
     >
       <div className={`grid gap-4 ${current && next ? "sm:grid-cols-2" : ""}`}>
         {current ? (
-          <CheckpointCard label="Current checkpoint" checkpoint={current} />
+          <CheckpointCard label="Current checkpoint" checkpoint={current} finished={isFinished(current)} />
         ) : null}
         {next ? (
-          <CheckpointCard label="Next checkpoint" checkpoint={next} />
+          <CheckpointCard label="Next checkpoint" checkpoint={next} finished={isFinished(next)} />
         ) : null}
       </div>
 
@@ -616,7 +621,7 @@ function RecoveryCheckpoints({
         <div className="mt-4">
           <DataTable
             rows={checkpoints}
-            columns={CHECKPOINT_COLUMNS}
+            columns={checkpointColumns(isFinished)}
             getRowKey={(c) => c.endDate}
             caption={`All weekly checkpoints for ${periodName}.`}
             itemNoun="checkpoints"
@@ -644,7 +649,7 @@ function RecoveryCheckpoints({
                   </p>
                 </div>
                 <Pill tone={CHECKPOINT_STATUS_TONE[c.status]}>
-                  {checkpointStatusLabel(c.status)}
+                  {checkpointStatusLabel(c.status, isFinished(c))}
                 </Pill>
               </div>
             )}
@@ -689,7 +694,7 @@ const DAILY_COVERAGE_COLUMNS: Column<DailyCoverageRow>[] = [
   },
   {
     key: "sales",
-    header: "Sales reference",
+    header: "Sales recorded",
     width: "content",
     align: "right",
     sortValue: (d) => d.sales,
@@ -1457,7 +1462,7 @@ function RecoveryScenarioPanel({
   return (
     <Panel
       eyebrow="Optional"
-      title="What if my monthly expense basis changed?"
+      title="What if my monthly costs changed?"
       action={
         expanded ? (
           <Button
@@ -1517,7 +1522,7 @@ function RecoveryScenarioPanel({
             noValidate
           >
             <Field
-              label="Assumed monthly expense basis"
+              label="Assumed monthly costs"
               htmlFor="recovery-scenario-value"
               hint="Your saved figure is unaffected."
               className="min-w-[14rem] flex-1"
@@ -1565,7 +1570,7 @@ function RecoveryScenarioPanel({
                 <p className="text-sm leading-relaxed text-ink-700">
                   <b className="font-semibold text-tone-accent">Hypothetical. Not saved.</b>{" "}
                   This does not change your records, starting estimate, or
-                  active monthly expense basis. Assumed value used:{" "}
+                  active monthly costs. Assumed value used:{" "}
                   <span className="figure font-semibold text-ink-900">
                     {formatMoney(scenario.assumedExpectedMonthlyExpenses)}
                   </span>
@@ -1580,7 +1585,7 @@ function RecoveryScenarioPanel({
                 </p>
                 <div className="mt-2 grid gap-3 sm:grid-cols-3">
                   <ScenarioCompareCard
-                    label="Monthly expense basis"
+                    label="Monthly costs"
                     current={scenario.current.expectedMonthlyExpenses}
                     hypothetical={scenario.hypothetical.expectedMonthlyExpenses}
                   />
@@ -1646,7 +1651,7 @@ function RecoveryScenarioPanel({
                 ) : (
                   <form onSubmit={handleSavePlan} className="space-y-3">
                     <p className="text-xs text-ink-600">
-                      Saves the assumed monthly expense basis above (
+                      Saves the assumed monthly costs above (
                       {formatMoney(scenario.assumedExpectedMonthlyExpenses)}) as
                       this month's target amount for your own reference.
                       Optionally add a deadline and a buffer percentage. This
@@ -1858,7 +1863,7 @@ function RecoveryHero({
           ) : (
             <>
               <p className="mt-4 text-xs font-medium text-brand-200">
-                Sales reference {recoveryPeriodPhrase(period)}
+                Sales recorded {recoveryPeriodPhrase(period)}
               </p>
               <p className="figure mt-0.5 text-3xl font-semibold text-accent-200 sm:text-4xl">
                 {formatMoney(period.sales)}
@@ -1886,7 +1891,7 @@ function RecoveryHero({
             },
           ].map((item) => (
             <div key={item.label} className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0 sm:px-4">
-              <dt className="text-[11px] font-medium text-brand-200">{item.label}</dt>
+              <dt className="text-xs font-medium text-brand-200">{item.label}</dt>
               <dd className="figure mt-0.5 truncate text-sm font-semibold text-white sm:text-base">
                 {item.value}
               </dd>
@@ -1904,7 +1909,7 @@ function RecoveryHero({
           aria-valuemax={100}
           aria-label={
             isCurrentMonth
-              ? "Month-to-date coverage of monthly expense basis"
+              ? "Month-to-date coverage of monthly costs"
               : `${recoveryPeriodLabel(period)} sales coverage of the recovery target`
           }
         >
@@ -1958,7 +1963,7 @@ function PaceComparison({
     <dl className="space-y-2">
       {rows.map((row) => (
         <div key={row.label}>
-          <div className="flex items-baseline justify-between gap-3 text-[11px]">
+          <div className="flex items-baseline justify-between gap-3 text-xs">
             <dt className="text-ink-500">{row.label}</dt>
             <dd className="figure font-semibold text-ink-800">{formatMoney(row.value)}</dd>
           </div>
@@ -2145,7 +2150,7 @@ function OperatingDayDots({
           />
         ))}
       </div>
-      <p aria-hidden className="mt-1.5 text-[11px] font-medium text-tone-info">
+      <p aria-hidden className="mt-1.5 text-xs font-medium text-tone-info">
         {done} elapsed, {left} left
       </p>
     </div>
@@ -2165,14 +2170,14 @@ function DailyTargetDrift({
   const Arrow = up ? ArrowUp : adjusted < dailyTarget ? ArrowDown : Minus;
   return (
     <div className="flex items-center justify-between gap-2 rounded-xl bg-paper/80 px-3 py-2 ring-1 ring-edge-brand">
-      <span className="text-[11px] text-ink-600">
+      <span className="text-xs text-ink-600">
         Now{" "}
         <span className="figure font-semibold text-ink-900">{formatMoney(adjusted)}</span>{" "}
         a day
       </span>
       {Math.abs(percent) >= 0.5 ? (
         <span
-          className={`figure inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${
+          className={`figure inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-xs font-semibold ${
             up ? "bg-tint-danger text-tone-danger" : "bg-tint-brand text-tone-brand"
           }`}
         >
@@ -2227,7 +2232,7 @@ function TodayProgressCard({ data }: { data: RecoveryInsight }) {
         />
         <dl className="grid w-full min-w-0 max-w-md gap-2.5 text-sm">
           <div className="flex items-baseline justify-between gap-3">
-            <dt className="text-xs text-ink-500">Sales reference today</dt>
+            <dt className="text-xs text-ink-500">Sales recorded today</dt>
             <dd className="figure font-semibold text-ink-900">
               {formatMoney(data.todaysSales)}
             </dd>
@@ -2673,7 +2678,6 @@ function RecoveryInsightContent() {
   return (
     <div>
       <PageHead
-        inBreadcrumb
         eyebrow="Insights"
         title="Recovery target"
         subtitle={selected ? selected.name : undefined}
@@ -2817,6 +2821,51 @@ function RecoveryInsightContent() {
             />
           </div>
 
+          <AiCard
+            title="Summary"
+            subtitle="Composed from your records, not AI-written"
+            footer={
+              <button
+                type="button"
+                onClick={() => askFinSight(expandQuestion)}
+                className="tap-inline inline-flex items-center gap-1.5 font-semibold text-brand-200 underline-offset-2 hover:underline"
+              >
+                Ask about this period
+                <ArrowRight
+                  aria-hidden
+                  className="size-3.5"
+                />
+              </button>
+            }
+          >
+            Recorded sales {recoveryPeriodPhrase(reportingPeriod)} are{" "}
+            <Kw>
+              <span className="figure">
+                {formatMoney(reportingPeriod.sales)}
+              </span>
+            </Kw>{" "}
+            against a {formatMoney(reportingPeriod.target)} target. {" "}
+            {recoveryPeriodStatusLabel(reportingPeriod)}.
+            {!reportingPeriod.isComplete &&
+            reportingPeriod.adjustedDailyTarget !== null ? (
+              <>
+                {" "}The remaining target is{" "}
+                <Kw>
+                  <span className="figure">
+                    {formatMoney(reportingPeriod.remainingTarget)}
+                  </span>
+                </Kw>
+                , or about{" "}
+                <Kw>
+                  <span className="figure">
+                    {formatMoney(reportingPeriod.adjustedDailyTarget)}
+                  </span>
+                </Kw>{" "}
+                per remaining operating day.
+              </>
+            ) : null}
+          </AiCard>
+
           <section aria-labelledby="recovery-inputs-title">
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
               <h2
@@ -2849,7 +2898,7 @@ function RecoveryInsightContent() {
                 tone="neutral"
                 label={
                   reportingPeriod.kind === "month"
-                    ? "Monthly expense basis"
+                    ? "Monthly costs"
                     : "This week's target"
                 }
                 value={formatMoney(reportingPeriod.target)}
@@ -2946,11 +2995,10 @@ function RecoveryInsightContent() {
             />
           ) : null}
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            <Panel
+          <Panel
               title="Sales vs. target"
               eyebrow={`Running totals, ${recoveryPeriodLabel(reportingPeriod)}`}
-              className="min-w-0 lg:col-span-2"
+              className="min-w-0"
             >
               <CumulativeSalesChart
                 points={buildCumulativeSeries(
@@ -2962,13 +3010,6 @@ function RecoveryInsightContent() {
                 )}
               />
             </Panel>
-            <Panel title="Target breakdown" className="min-w-0">
-              <TargetBreakdown
-                sales={reportingPeriod.sales}
-                target={reportingPeriod.target}
-              />
-            </Panel>
-          </div>
 
           {/* `tabIndex={-1}` makes this focusable-by-script-only (not part of
               the normal tab order) so `focusSection` above can move keyboard
@@ -2992,7 +3033,7 @@ function RecoveryInsightContent() {
                   <PlanFigure
                     label={
                       reportingPeriod.kind === "month"
-                        ? "Monthly expense basis"
+                        ? "Monthly costs"
                         : "This week's target"
                     }
                     value={formatMoney(reportingPeriod.target)}
@@ -3001,8 +3042,8 @@ function RecoveryInsightContent() {
                   <PlanFigure
                     label={
                       reportingPeriod.kind === "month"
-                        ? "Sales reference so far this month"
-                        : "Sales reference this week"
+                        ? "Sales recorded so far this month"
+                        : "Sales recorded this week"
                     }
                     value={formatMoney(reportingPeriod.sales)}
                     sublabel="From your records"
@@ -3109,6 +3150,7 @@ function RecoveryInsightContent() {
                       checkpoints={data.weeklyCheckpoints!}
                       todayKey={reportingPeriod.asOfDate}
                       periodName={recoveryPeriodLabel(reportingPeriod)}
+                      periodComplete={reportingPeriod.isComplete}
                     />
                   </div>
                 ) : null}
@@ -3225,7 +3267,7 @@ function RecoveryInsightContent() {
                 rows={visibleDailyCoverage}
                 columns={DAILY_COVERAGE_COLUMNS}
                 getRowKey={(d) => d.date}
-                caption={`Daily sales reference against target for ${selected.name}, ${recoveryPeriodPhrase(reportingPeriod)}.`}
+                caption={`Daily sales recorded against target for ${selected.name}, ${recoveryPeriodPhrase(reportingPeriod)}.`}
                 itemNoun="days"
                 storageKey="recovery-daily-coverage"
                 initialSort={{ key: "date", direction: "desc" }}
@@ -3267,50 +3309,6 @@ function RecoveryInsightContent() {
             />
           </div>
 
-          <AiCard
-            title="Summary"
-            subtitle="Composed from your records, not AI-written"
-            footer={
-              <button
-                type="button"
-                onClick={() => askFinSight(expandQuestion)}
-                className="tap-inline inline-flex items-center gap-1.5 font-semibold text-accent-200 underline-offset-2 hover:underline"
-              >
-                Ask about this period
-                <ArrowRight
-                  aria-hidden
-                  className="size-3.5"
-                />
-              </button>
-            }
-          >
-            Recorded sales {recoveryPeriodPhrase(reportingPeriod)} are{" "}
-            <Kw>
-              <span className="figure">
-                {formatMoney(reportingPeriod.sales)}
-              </span>
-            </Kw>{" "}
-            against a {formatMoney(reportingPeriod.target)} target. {" "}
-            {recoveryPeriodStatusLabel(reportingPeriod)}.
-            {!reportingPeriod.isComplete &&
-            reportingPeriod.adjustedDailyTarget !== null ? (
-              <>
-                {" "}The remaining target is{" "}
-                <Kw>
-                  <span className="figure">
-                    {formatMoney(reportingPeriod.remainingTarget)}
-                  </span>
-                </Kw>
-                , or about{" "}
-                <Kw>
-                  <span className="figure">
-                    {formatMoney(reportingPeriod.adjustedDailyTarget)}
-                  </span>
-                </Kw>{" "}
-                per remaining operating day.
-              </>
-            ) : null}
-          </AiCard>
         </div>
       ) : null}
 

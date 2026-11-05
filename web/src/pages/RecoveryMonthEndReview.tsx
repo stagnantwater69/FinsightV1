@@ -215,8 +215,8 @@ function MonthEndReview() {
             <div>
               <p className="text-sm text-ink-700">
                 Covered{" "}
-                <span className="figure font-semibold">{Math.round(data.coveragePercent)}%</span> of the monthly
-                expense basis:{" "}
+                <span className="figure font-semibold">{Math.round(data.coveragePercent)}%</span> of monthly
+                costs:{" "}
                 <span className="figure font-semibold">{surplusOrShortfallText(data.surplusOrShortfall)}</span>.
               </p>
               <div aria-hidden className="mt-3 h-2 w-full overflow-hidden rounded-full bg-paper-200">
@@ -228,7 +228,7 @@ function MonthEndReview() {
             </div>
             {data.monthlyExpenseBasis ? (
               <div className="border-t border-paper-200 pt-4 md:border-l md:border-t-0 md:pl-8 md:pt-0">
-                <p className="text-xs font-semibold text-ink-500">Monthly expense basis</p>
+                <p className="text-xs font-semibold text-ink-500">Monthly costs</p>
                 <p className="figure mt-1 text-lg font-semibold text-ink-900">
                   {formatMoney(data.monthlyExpenseBasis.amount)}
                 </p>
@@ -280,7 +280,7 @@ function MonthEndReview() {
             <Panel title="Original vs. final adjusted daily target" className="min-w-0">
               <dl className="grid grid-cols-2 gap-4">
                 <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
+                  <dt className="text-xs font-semibold uppercase tracking-[0.04em] text-ink-500">
                     Original daily target
                   </dt>
                   <dd className="figure mt-0.5 text-lg font-semibold text-ink-900">
@@ -288,7 +288,7 @@ function MonthEndReview() {
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
+                  <dt className="text-xs font-semibold uppercase tracking-[0.04em] text-ink-500">
                     Final adjusted daily target
                   </dt>
                   {data.finalAdjustedDailyTarget !== null ? (

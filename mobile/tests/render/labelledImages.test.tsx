@@ -57,6 +57,7 @@ describe('Named illustrations are reachable', () => {
             imageUrl: 'https://example.test/receipt.jpg',
             items: [],
             itemsSubtotal: 450,
+            otherLines: [],
             siblings: [],
           }}
         />,

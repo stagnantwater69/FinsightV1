@@ -59,18 +59,19 @@
    The measured ratios that set this rule (worst theme first):
 
      surface        ink-400        ink-500        ink-600
-     paper          2.56 (light)   4.76 (light)   7.39 (classic)
-     paper-50       2.45 (light)   4.55 (light)   7.23 (classic)
-     paper-100      2.34 (light)   4.34 (light)   6.90 (classic)
-     paper-200      2.08 (light)   3.86 (light)   6.15 (light)
-     tint-*         2.33 (light)   4.33 (light)   6.73 (classic)
+     paper          3.29 (light)   5.39 (classic) 7.39 (classic)
+     paper-50       2.92 (light)   5.28 (classic) 6.74 (light)
+     paper-100      2.76 (light)   5.04 (classic) 6.37 (light)
+     paper-200      2.38 (light)   4.56 (light)   5.48 (light)
+     tint-*         2.67 (light)   4.49 (classic) 6.15 (light)
 
    So: ink-400 fails AA body text on every surface in Classic and Light, and
-   on `paper-200` in Dark. Anything a reader actually needs — a caption, a
-   timestamp, an "(optional)" marker, a step counter, the label of a control —
+   on `paper-200` in Dark. Anything a reader actually needs (a caption, a
+   timestamp, an "(optional)" marker, a step counter, the label of a control)
    uses **ink-500 on `paper`/`paper-50`** and **ink-600 on the sunken surfaces
-   (`paper-100`, `paper-200`, any `tint-*` wash)**, where ink-500 is 4.33–4.34
-   in Light and misses AA.
+   (`paper-100`, `paper-200`, any `tint-*` wash)**. Since the 2026-11 Light
+   retune ink-500 clears AA on every paper step, but it still sits at 4.49 on
+   Classic's tints, so the ink-600 rule stays.
 
    ink-400 survives in exactly four shapes, and `inkContrast.test.ts` fails
    the build on a fifth:
@@ -185,19 +186,21 @@
      teal-cooled, and the page sits a step brighter. For anyone who finds
      Classic's warmth muddy, or who is reading in bright light. */
   [data-theme="light"] {
-    --canvas-glow-a: 196 236 228;
-    --canvas-glow-b: 219 232 250;
+    --canvas-glow-a: 184 230 219;
+    --canvas-glow-b: 206 222 245;
     --paper: 255 255 255;
-    --paper-50: 248 250 252;
-    --paper-100: 241 245 249;
-    --paper-200: 226 232 240;
+    /* One step darker than white-on-near-white: the page sits under the
+       cards instead of matching them, and hairlines are visible. */
+    --paper-50: 238 242 247;
+    --paper-100: 230 236 243;
+    --paper-200: 212 220 230;
 
     --ink-50: 248 250 252;
-    --ink-100: 241 245 249;
-    --ink-200: 226 232 240;
-    --ink-300: 203 213 225;
-    --ink-400: 148 163 184;
-    --ink-500: 100 116 139;
+    --ink-100: 230 236 243;
+    --ink-200: 212 220 230;
+    --ink-300: 186 198 213;
+    --ink-400: 128 143 165;
+    --ink-500: 82 97 118;
     --ink-600: 71 85 105;
     --ink-700: 51 65 85;
     --ink-800: 30 41 59;
@@ -206,19 +209,19 @@
 
     --tint-brand: 222 246 240;
     --tone-brand: 15 80 75;
-    --edge-brand: 200 247 236;
+    --edge-brand: 164 228 212;
     --tint-accent: 254 240 210;
     --tone-accent: 148 82 11;
-    --edge-accent: 251 216 148;
+    --edge-accent: 244 200 120;
     --tint-danger: 255 228 231;
     --tone-danger: 159 18 57;
-    --edge-danger: 254 205 211;
+    --edge-danger: 250 184 194;
     --tint-info: 225 241 254;
     --tone-info: 12 74 110;
-    --edge-info: 186 230 253;
-    --tint-neutral: 232 238 245;
+    --edge-info: 160 212 245;
+    --tint-neutral: 226 232 240;
     --tone-neutral: 71 85 105;
-    --edge-neutral: 226 232 240;
+    --edge-neutral: 206 214 225;
 
     --sev-critical-bg: 254 242 242;
     --sev-critical-edge: 254 226 226;
@@ -250,7 +253,7 @@
        is brand-50 rather than a neutral grey — a faint mint wash top-to-
        bottom is the "still FinSight" cue a flat white panel would lose. */
     --sidebar-from: 255 255 255;
-    --sidebar-to: 239 252 249;
+    --sidebar-to: 228 245 240;
 
     /* Dark text and a dark wash source, because the rail is light here —
        see the sidebar note in tailwind.config.js. sidebar-accent reuses the
@@ -262,10 +265,10 @@
 
     /* Neutral rather than green-tinted, to match the cooler neutrals. */
     --shadow: 15 23 42;
-    --shadow-sm-a: 0.08;
-    --shadow-sm-b: 0.06;
-    --shadow-md-a: 0.11;
-    --shadow-lg-a: 0.14;
+    --shadow-sm-a: 0.1;
+    --shadow-sm-b: 0.07;
+    --shadow-md-a: 0.13;
+    --shadow-lg-a: 0.16;
   }
 
   /* ---------------------------------------------------------------
@@ -655,6 +658,12 @@
        background show through the gap, which is what the offset is for — and
        it is correct in all three themes without knowing which one is on. */
     @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-transparent;
+  }
+
+  /* Script-only focus targets (headings and <main> after a route or step
+     change) are not controls, so a ring around them reads as a selection box. */
+  [tabindex="-1"]:focus-visible {
+    @apply ring-0;
   }
 
   /* On the dark sidebar (Classic and Dark), brand-500 sits too close to the

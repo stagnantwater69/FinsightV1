@@ -139,7 +139,7 @@ export function AddSalesModal({
         });
         if (!saved || !isCurrent()) return;
         confirmedSave.current = true;
-        toast("Sales reference saved");
+        toast("Sale saved");
       }
       reset();
       try { onSaved(); } finally { onClose(); }
@@ -156,7 +156,7 @@ export function AddSalesModal({
   }
 
   return (
-    <Modal open={open} onClose={handleClose} title={editing ? "Edit sales reference" : "Add sales reference"}>
+    <Modal open={open} onClose={handleClose} title={editing ? "Edit sale" : "Add sale"}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {!editing ? <ManualCreateRecovery recovery={recovery} /> : null}
         {loading ? <p className="text-sm text-ink-500">Loading…</p> : null}
@@ -177,7 +177,10 @@ export function AddSalesModal({
         </fieldset>
         {error ? <FormError>{error}</FormError> : null}
         <Button type="submit" variant="primary" fullWidth disabled={confirmedSave.current || submitting || recovery.busy || recovery.corrupt || loading || (!editing && recovery.loading) || (!recovery.pending && dateField.invalid)}>
-          {submitting ? "Saving…" : editing ? "Save changes" : recovery.pending?.confirmedRecord ? "Finish recovery" : recovery.pending ? "Retry original save" : "Save sales reference"}
+          {submitting ? "Saving…" : editing ? "Save changes" : recovery.pending?.confirmedRecord ? "Finish recovery" : recovery.pending ? "Retry original save" : "Save sale"}
+        </Button>
+        <Button type="button" variant="ghost" fullWidth onClick={handleClose} disabled={submitting}>
+          Cancel
         </Button>
       </form>
     </Modal>

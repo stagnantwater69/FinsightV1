@@ -203,7 +203,9 @@ test("Escape cancels a destructive confirmation without deleting", async ({ page
   await page.goto("/records");
   await expect(page.getByRole("heading", { name: "Records", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: /^Delete /i }).first().click();
+  // At 400px the rows are cards, and a card keeps Delete in its ⋯ menu.
+  await page.getByRole("button", { name: /^Actions for /i }).filter({ visible: true }).first().click();
+  await page.getByRole("button", { name: "Delete", exact: true }).filter({ visible: true }).click();
   const dialog = page.getByRole("dialog", { name: /^Delete "/ });
   await expect(dialog).toBeVisible();
   await page.keyboard.press("Escape");

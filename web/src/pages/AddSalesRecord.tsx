@@ -73,11 +73,11 @@ function AddSalesRecordForm() {
       });
       if (!data || !isCurrent()) return;
       confirmedSave.current = true;
-      toast("Sales reference saved");
+      toast("Sale saved");
       navigate("/records");
     } catch (err) {
       if (!isCurrent()) return;
-      if (confirmedSave.current) { setError("Your sales reference is saved. Open Records to see it."); return; }
+      if (confirmedSave.current) { setError("Your sale is saved. Open Records to see it."); return; }
       if (recovery.pending || (!dateField.absorb(err) && !(await baselineChoice.absorb(err, isCurrent)))) {
         if (isCurrent()) setError(getErrorMessage(err));
       }
@@ -88,7 +88,7 @@ function AddSalesRecordForm() {
   }
 
   return (
-    <FormPage eyebrow="Records" title="Add sales reference">
+    <FormPage eyebrow="Records" title="Add sale">
       <form onSubmit={handleSubmit} className="space-y-4">
         <ManualCreateRecovery recovery={recovery} />
         <fieldset className="min-w-0 space-y-4" disabled={submitting || recovery.loading || recovery.frozen}>
@@ -110,7 +110,7 @@ function AddSalesRecordForm() {
         </fieldset>
         {error ? <FormError>{error}</FormError> : null}
         <Button type="submit" variant="primary" fullWidth disabled={confirmedSave.current || submitting || recovery.busy || recovery.loading || recovery.corrupt || (!recovery.pending && dateField.invalid)}>
-          {submitting ? "Saving…" : recovery.pending?.confirmedRecord ? "Finish recovery" : recovery.pending ? "Retry original save" : "Save sales reference"}
+          {submitting ? "Saving…" : recovery.pending?.confirmedRecord ? "Finish recovery" : recovery.pending ? "Retry original save" : "Save sale"}
         </Button>
       </form>
     </FormPage>

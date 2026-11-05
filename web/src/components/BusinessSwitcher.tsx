@@ -113,7 +113,7 @@ export function BusinessSwitcher({
           <span className="block text-[13px] font-semibold text-sidebar-ink">
             Add a business
           </span>
-          <span className="block text-[11px] text-sidebar-accent">
+          <span className="block text-xs text-sidebar-accent">
             Nothing set up yet
           </span>
         </span>
@@ -157,7 +157,7 @@ export function BusinessSwitcher({
                   aria-hidden
                   className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand-300"
                 />
-                <small className="truncate text-[11px] text-sidebar-muted">
+                <small className="truncate text-xs text-sidebar-muted">
                   Active business
                 </small>
               </span>
@@ -184,7 +184,7 @@ export function BusinessSwitcher({
             collapsed ? "left-full top-0 ml-2" : "left-0 top-full"
           }`}
         >
-          <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
+          <div className="px-2.5 pb-1.5 pt-2 text-xs font-bold uppercase tracking-[0.12em] text-ink-500">
             Switch business profile
           </div>
 
@@ -225,7 +225,7 @@ export function BusinessSwitcher({
                   <span className="block truncate text-[13.5px] font-semibold text-ink-900">
                     {p.name}
                   </span>
-                  <span className="block truncate text-[11.5px] text-ink-500">
+                  <span className="block truncate text-xs text-ink-500">
                     {p.type}
                   </span>
                 </span>
@@ -254,7 +254,7 @@ export function BusinessSwitcher({
               <span className="block text-[13.5px] font-semibold text-ink-900">
                 Add business profile
               </span>
-              <span className="block text-[11.5px] text-ink-500">
+              <span className="block text-xs text-ink-500">
                 Store, branch, or income source
               </span>
             </span>
@@ -273,7 +273,7 @@ export function BusinessSwitcher({
               <span className="block text-[13.5px] font-semibold text-ink-900">
                 Manage businesses
               </span>
-              <span className="block text-[11.5px] text-ink-500">
+              <span className="block text-xs text-ink-500">
                 Edit, archive, or restore
               </span>
             </span>

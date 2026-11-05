@@ -66,15 +66,26 @@ describe("dashboard upcoming expenses", () => {
 
     expect(screen.getAllByRole("listitem")).toHaveLength(3);
     expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
-      expect.stringContaining("RentPHP 1,000Past due date"),
+      expect.stringContaining("RentPHP 1,000Overdue since"),
       expect.stringContaining("ElectricityPHP 2,000Due soon"),
       expect.stringContaining("WaterPHP 3,000Scheduled"),
     ]);
-    expect(screen.getByRole("link", { name: "Manage schedules" })).toHaveAttribute("href", "/insights/expense-behavior#expense-recurring");
+    expect(screen.getByRole("link", { name: "Manage schedules" })).toHaveAttribute("href", "/insights/expense-behavior/recurring");
     expect(screen.getByText(/Sep 15/)).toBeInTheDocument();
     expect(screen.getByText("No matching expense recorded yet.")).toBeInTheDocument();
     expect(screen.queryByText("Paused rent")).not.toBeInTheDocument();
     expect(screen.queryByText("Internet")).not.toBeInTheDocument();
+  });
+
+  it("folds same-name, same-date schedules into one row that says how many there are", async () => {
+    const twin = { ...schedule(1, "Salary payout", "2026-05-31", "OVERDUE"), id: 2 } as RecurringSchedule;
+    get.mockResolvedValueOnce({ data: [schedule(1, "Salary payout", "2026-05-31", "OVERDUE"), twin] });
+    renderUpcoming();
+
+    await screen.findByRole("button", { name: "Salary payout" });
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByText("2 schedules with this name and date. Open one to edit or remove it.")).toBeInTheDocument();
+    expect(screen.getByText("2 overdue, oldest first")).toBeInTheDocument();
   });
 
   it("opens a schedule in a popup instead of leaving the dashboard", async () => {
@@ -97,7 +108,7 @@ describe("dashboard upcoming expenses", () => {
     expect(await screen.findByText("Recurring expense schedules aren’t available for this business.")).toBeVisible();
     expect(screen.queryByRole("link", { name: "Manage schedules" })).not.toBeInTheDocument();
     expect(screen.queryByText("No active recurring expenses")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Reload upcoming expenses" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reload recurring payments" })).not.toBeInTheDocument();
   });
 
   it("offers a retry after a temporary failure and an add action only after an empty result succeeds", async () => {
@@ -105,9 +116,9 @@ describe("dashboard upcoming expenses", () => {
     get.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ data: [] });
     renderUpcoming();
 
-    expect(await screen.findByText("Upcoming expenses couldn’t load.")).toBeVisible();
+    expect(await screen.findByText("Recurring payments couldn’t load.")).toBeVisible();
     expect(screen.queryByText("No active recurring expenses")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Reload upcoming expenses" }));
+    await user.click(screen.getByRole("button", { name: "Reload recurring payments" }));
 
     expect(await screen.findByText("No active recurring expenses")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Add a schedule" }));
@@ -122,8 +133,8 @@ describe("dashboard upcoming expenses", () => {
 
     act(() => invalidateServerState({ businessProfileId: 1, tags: ["recurring-schedules"] }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Upcoming expenses couldn’t refresh. Showing previously loaded figures."));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Recurring payments couldn’t refresh. Showing previously loaded figures."));
     expect(screen.getByRole("button", { name: "Rent" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Reload upcoming expenses" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reload recurring payments" })).toBeVisible();
   });
 });

@@ -152,12 +152,12 @@ beforeEach(() => {
 describe("available funds provenance", () => {
   it("uses the calculated balance returned with the scenario", async () => {
     renderPage();
-    await userEvent.type(screen.getByPlaceholderText("11000"), "11000");
+    await userEvent.type(screen.getByPlaceholderText("e.g. 11000"), "11000");
 
     expect(await screen.findByText("Recorded available funds")).toBeInTheDocument();
     expect(
       screen.getByText(
-        /Starting PHP 50,000, plus PHP 8,000 sales, less PHP 8,000 expenses/,
+        /Opening balance PHP 50,000, plus PHP 8,000 sales, less PHP 8,000 expenses/,
       ),
     ).toBeInTheDocument();
   });
@@ -209,7 +209,7 @@ describe("reading the description back", () => {
 
     renderPage();
     await userEvent.type(screen.getByPlaceholderText("e.g. Display fridge"), "Display fridge");
-    await userEvent.type(screen.getByPlaceholderText("11000"), "11000");
+    await userEvent.type(screen.getByPlaceholderText("e.g. 11000"), "11000");
     await userEvent.click(screen.getByRole("button", { name: /what am i buying/i }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
@@ -243,7 +243,7 @@ describe("placing the amount against what they have paid before", () => {
   async function openReview() {
     renderPage();
     await userEvent.type(screen.getByPlaceholderText("e.g. Display fridge"), "Display fridge");
-    await userEvent.type(screen.getByPlaceholderText("11000"), "11000");
+    await userEvent.type(screen.getByPlaceholderText("e.g. 11000"), "11000");
     await userEvent.click(screen.getByRole("button", { name: /what am i buying/i }));
     await screen.findByText(/A fridge is bought once and kept/);
   }
@@ -307,7 +307,7 @@ describe("placing the amount against what they have paid before", () => {
 
     renderPage();
     await userEvent.type(screen.getByPlaceholderText("e.g. Display fridge"), "Display fridge");
-    await userEvent.type(screen.getByPlaceholderText("11000"), "11000");
+    await userEvent.type(screen.getByPlaceholderText("e.g. 11000"), "11000");
     await userEvent.click(screen.getByRole("button", { name: /what am i buying/i }));
 
     expect(await screen.findByText("Chest fridge deposit")).toBeInTheDocument();
@@ -345,7 +345,7 @@ describe("carrying the card into a conversation", () => {
   it("opens Ask FinSight primed with the item and what FinSight said about it", async () => {
     renderPage();
     await userEvent.type(screen.getByPlaceholderText("e.g. Display fridge"), "Display fridge");
-    await userEvent.type(screen.getByPlaceholderText("11000"), "11000");
+    await userEvent.type(screen.getByPlaceholderText("e.g. 11000"), "11000");
     await userEvent.click(screen.getByRole("button", { name: /what am i buying/i }));
     await screen.findByText(/A fridge is bought once and kept/);
 
@@ -431,7 +431,7 @@ describe("when the AI cannot answer", () => {
 
     renderPage();
     await userEvent.type(screen.getByPlaceholderText("e.g. Display fridge"), "Display fridge");
-    await userEvent.type(screen.getByPlaceholderText("11000"), "11000");
+    await userEvent.type(screen.getByPlaceholderText("e.g. 11000"), "11000");
     await userEvent.click(screen.getByRole("button", { name: /what am i buying/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/describe this item/i);

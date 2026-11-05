@@ -821,6 +821,16 @@ async function buildOrigin(record: RecordWithOrigin) {
       orderBy: { id: "asc" },
     });
 
+    // The rest of the receipt's lines, so the panel can show the whole receipt with this record's lines marked.
+    const otherLines = await prisma.receiptScanItem.findMany({
+      where: {
+        receiptScanId: record.receiptScan.id,
+        OR: [{ expenseRecordId: null }, { expenseRecordId: { not: record.id } }],
+      },
+      select: { lineNumber: true, name: true, quantity: true, unitPrice: true, amount: true, expenseRecordId: true },
+      orderBy: { lineNumber: "asc" },
+    });
+
     const itemsSubtotal = record.receiptItems.reduce((sum, i) => sum + Math.round(Number(i.amount) * 100), 0) / 100;
 
     return {
@@ -853,6 +863,14 @@ async function buildOrigin(record: RecordWithOrigin) {
        * rather than presenting the total as though the items summed to it.
        */
       itemsSubtotal,
+      otherLines: otherLines.map((l) => ({
+        lineNumber: l.lineNumber,
+        name: l.name,
+        quantity: l.quantity === null ? null : Number(l.quantity),
+        unitPrice: l.unitPrice === null ? null : Number(l.unitPrice),
+        amount: Number(l.amount),
+        recordId: l.expenseRecordId,
+      })),
       siblings: siblings.map((s) => ({
         id: s.id,
         description: s.description,

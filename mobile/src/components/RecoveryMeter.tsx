@@ -85,7 +85,7 @@ export function RecoveryMeter({
         </T>
       ) : null}
 
-      <Bar ratio={monthRatio} color={monthFill} height={12} label="Month-to-date coverage" detail={{ key: data.asOfDate ?? "month", label: "Month-to-date coverage", values: [{ label: "Sales recorded", value: data.salesThisMonth }, { label: "Expense basis", value: needsSetupNow ? null : data.expectedMonthlyExpenses, unavailableLabel: "Needs setup" }, { label: "Coverage", value: needsSetupNow ? null : data.monthCoveragePercent, display: needsSetupNow ? undefined : `${data.monthCoveragePercent.toFixed(1)}%`, unavailableLabel: "Needs setup" }], note: monthStatus.copy }} />
+      <Bar ratio={monthRatio} color={monthFill} height={12} label="Month-to-date coverage" detail={{ key: data.asOfDate ?? "month", label: "Month-to-date coverage", values: [{ label: "Sales recorded", value: data.salesThisMonth }, { label: "Monthly costs", value: needsSetupNow ? null : data.expectedMonthlyExpenses, unavailableLabel: "Needs setup" }, { label: "Coverage", value: needsSetupNow ? null : data.monthCoveragePercent, display: needsSetupNow ? undefined : `${data.monthCoveragePercent.toFixed(1)}%`, unavailableLabel: "Needs setup" }], note: monthStatus.copy }} />
       <T variant="caption" style={{ marginTop: 6 }}>
         <Money value={data.salesThisMonth} size={12} weight="regular" color={ink[500]} /> of{" "}
         <Money value={data.expectedMonthlyExpenses} size={12} weight="regular" color={ink[500]} /> needed this month (

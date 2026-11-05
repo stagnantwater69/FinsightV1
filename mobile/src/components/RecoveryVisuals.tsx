@@ -171,7 +171,7 @@ export function RecoveryNextGoal({ period }: { period: RecoveryReportingPeriod }
           <Ionicons name={reached ? "checkmark-circle-outline" : "locate-outline"} size={30} color={t.brandText} />
           <T style={{ flex: 1, color: t.brandHeading, fontFamily: font.sansSemibold, fontSize: typeScale.title, fontVariant: ["tabular-nums"] }}>{reached ? "Sales coverage target reached" : dailyTarget !== null ? `${formatMoney(dailyTarget)} / day` : period.remainingOperatingDays <= 0 ? "No operating days remaining" : "Daily target unavailable"}</T>
         </View>
-        <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>{reached ? "Recorded sales cover this period's expense basis." : dailyTarget !== null ? `Sales needed per remaining operating day to reach the ${period.kind === "week" ? "weekly" : "monthly"} target.` : "Review your operating schedule and the remaining target below."}</T>
+        <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>{reached ? "Recorded sales cover this period's costs." : dailyTarget !== null ? `Sales needed per remaining operating day to reach the ${period.kind === "week" ? "weekly" : "monthly"} target.` : "Review your operating schedule and the remaining target below."}</T>
       </View>
       {behind ? <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, borderWidth: 1, borderColor: t.statusBorder.warning, backgroundColor: t.statusSurface.warning, borderRadius: radius.md, padding: space.md }}>
         <Ionicons name="alert-circle" size={22} color={t.statusText.warning} />

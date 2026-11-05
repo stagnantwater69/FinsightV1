@@ -40,7 +40,7 @@ export function PairBars({
     <dl className="space-y-1.5">
       {rows.map((row) => (
         <div key={row.label}>
-          <div className="flex items-baseline justify-between gap-2 text-[11px]">
+          <div className="flex items-baseline justify-between gap-2 text-xs">
             <dt className="truncate text-ink-500">{row.label}</dt>
             <dd className="figure shrink-0 font-semibold text-ink-700">{formatMoney(row.value)}</dd>
           </div>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { EXPENSE_RECURRING_PATH } from "../expenseInsight/reviewRequests";
 import { AlertCircle, CalendarClock, CalendarDays, CalendarOff, Clock } from "lucide-react";
 import { Panel } from "../../components/ui";
 import { ArrowLink, IconTile, PanelTitle } from "./DashboardBits";
@@ -14,14 +15,24 @@ export function UpcomingExpenses({ businessProfileId }: { businessProfileId: num
   // Add and edit open as a popup over the dashboard, not a separate page.
   const [form, setForm] = useState<{ schedule: RecurringSchedule | null } | null>(null);
   const priority = { OVERDUE: 0, DUE_SOON: 1, SCHEDULED: 2 };
-  const schedules = state.data?.filter((schedule) => schedule.isActive)
-    .sort((a, b) => priority[a.dueState] - priority[b.dueState] || a.nextDueDate.localeCompare(b.nextDueDate))
-    .slice(0, 3);
+  const active = state.data?.filter((schedule) => schedule.isActive)
+    .sort((a, b) => priority[a.dueState] - priority[b.dueState] || a.nextDueDate.localeCompare(b.nextDueDate));
+  // Two schedules with the same name, amount and due date read as one payment
+  // listed twice, so they share a row that says so instead of repeating.
+  const rows: { schedule: RecurringSchedule; copies: number }[] = [];
+  for (const schedule of active ?? []) {
+    const twin = rows.find(({ schedule: s }) =>
+      s.label === schedule.label && s.expectedAmount === schedule.expectedAmount && s.nextDueDate === schedule.nextDueDate);
+    if (twin) twin.copies += 1;
+    else rows.push({ schedule, copies: 1 });
+  }
+  const schedules = active ? rows.slice(0, 3) : undefined;
+  const overdueCount = active?.filter((schedule) => schedule.dueState === "OVERDUE").length ?? 0;
 
   return (
-    <Panel title={<PanelTitle icon={CalendarClock}>Upcoming expenses</PanelTitle>} className="min-w-0 lg:col-span-5"
+    <Panel title={<PanelTitle icon={CalendarClock}>Recurring payments</PanelTitle>} className="min-w-0"
       action={state.status !== "unavailable" ? (
-        <ArrowLink to="/insights/expense-behavior#expense-recurring">Manage schedules</ArrowLink>
+        <ArrowLink to={EXPENSE_RECURRING_PATH}>Manage schedules</ArrowLink>
       ) : undefined}>
       {state.status === "unavailable" ? (
         <div className="flex h-full flex-col items-center justify-center py-10 text-center">
@@ -29,15 +40,21 @@ export function UpcomingExpenses({ businessProfileId }: { businessProfileId: num
           <p className="mt-3 max-w-[28ch] text-sm text-ink-600">Recurring expense schedules aren’t available for this business.</p>
         </div>
       ) : state.status === "error" && !state.data ? (
-        <FeedNotice label="Upcoming expenses" onRetry={reload} />
+        <FeedNotice label="Recurring payments" onRetry={reload} />
       ) : !schedules ? (
-        <p role="status" className="py-8 text-center text-sm text-ink-500">Loading upcoming expenses…</p>
+        <p role="status" className="py-8 text-center text-sm text-ink-500">Loading recurring payments…</p>
       ) : (
-        <>
-          {state.status === "error" ? <FeedNotice label="Upcoming expenses" onRetry={reload} retained /> : null}
+        // Capped so long names scroll inside the card instead of stretching the row.
+        <div className="scroll-none max-h-72 overflow-y-auto overscroll-contain">
+          {state.status === "error" ? <FeedNotice label="Recurring payments" onRetry={reload} retained /> : null}
+          {overdueCount > 0 ? (
+            <p className="mb-2 text-xs font-semibold text-tone-danger">
+              {overdueCount} overdue, oldest first
+            </p>
+          ) : null}
           {schedules.length ? (
             <ul className="divide-y divide-paper-200">
-              {schedules.map((schedule) => (
+              {schedules.map(({ schedule, copies }) => (
                 <li key={schedule.id} className="flex items-start gap-3 py-3 first:pt-0">
                   <IconTile
                     size="sm"
@@ -55,9 +72,12 @@ export function UpcomingExpenses({ businessProfileId }: { businessProfileId: num
                     <span className="figure whitespace-nowrap text-sm font-semibold text-ink-900">{formatMoney(schedule.expectedAmount)}</span>
                   </div>
                   <p className={`text-xs ${schedule.dueState === "OVERDUE" ? "text-tone-danger" : "text-ink-500"}`}>
-                    {schedule.dueState === "OVERDUE" ? "Past due date" : schedule.dueState === "DUE_SOON" ? "Due soon" : "Scheduled"}
-                    {" · "}{formatDueDate(schedule.nextDueDate)}
+                    {schedule.dueState === "OVERDUE" ? "Overdue since" : schedule.dueState === "DUE_SOON" ? "Due soon" : "Scheduled"}
+                    {schedule.dueState === "OVERDUE" ? " " : " · "}{formatDueDate(schedule.nextDueDate)}
                   </p>
+                  {copies > 1 ? (
+                    <p className="mt-1 text-xs text-ink-500">{copies} schedules with this name and date. Open one to edit or remove it.</p>
+                  ) : null}
                   {schedule.dueState === "OVERDUE" ? <p className="mt-1 text-xs text-ink-500">No matching expense recorded yet.</p> : null}
                   </div>
                 </li>
@@ -76,7 +96,7 @@ export function UpcomingExpenses({ businessProfileId }: { businessProfileId: num
               </button>
             </div>
           )}
-        </>
+        </div>
       )}
       <ScheduleFormModal
         open={form !== null}

@@ -1302,6 +1302,9 @@ describe("a saved record carries where it came from", () => {
     // The Utilities line belongs to the sibling record, not this one.
     expect(origin.items.map((i) => i.name)).toEqual(["Rice 25kg"]);
     expect(origin.itemsSubtotal).toBe(1220);
+    // ...but it is still on the receipt, so the panel can show the whole receipt.
+    const utilities = records.find((r) => r.categoryId === ctx.categories.Utilities)!;
+    expect(origin.otherLines.map((l) => l.recordId)).toEqual([utilities.id]);
   });
 
   it("points at the other records the same receipt produced", async () => {

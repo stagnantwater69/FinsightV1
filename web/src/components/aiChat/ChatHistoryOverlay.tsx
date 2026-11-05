@@ -65,7 +65,7 @@ export function ChatHistoryOverlay({
     */
     <div className="absolute inset-0 z-10 flex animate-slide-in-right flex-col bg-paper-50">
       <div className="flex items-center gap-1 border-b border-paper-200 px-3 py-2">
-        <h3 className="flex-1 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-500">Chat history</h3>
+        <h3 className="flex-1 text-xs font-bold uppercase tracking-[0.13em] text-ink-500">Chat history</h3>
         <button
           type="button"
           onClick={onClose}
@@ -101,7 +101,7 @@ export function ChatHistoryOverlay({
         ) : (
           groups.map((group) => (
             <div key={group.label} className="pb-1">
-              <div className="px-3 pb-1 pt-3 text-[10.5px] font-bold uppercase tracking-[0.13em] text-ink-500">
+              <div className="px-3 pb-1 pt-3 text-xs font-bold uppercase tracking-[0.13em] text-ink-500">
                 {group.label}
               </div>
               <ul>

@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
-import { CircleCheck } from "lucide-react";
+import { CircleCheck, Store, Wallet, type LucideIcon } from "lucide-react";
 import type { BusinessProfileInput } from "../lib/types";
 import { Button } from "./Button";
 import { FormError } from "./Field";
@@ -35,6 +35,8 @@ interface Props {
   /** Independent financial controls and tools shown after the settings form. */
   settingsAside?: ReactNode;
   onDirtyChange?: (dirty: boolean) => void;
+  /** The saved business being edited, so its operating schedule can be checked. */
+  profileId?: number;
 }
 
 /**
@@ -53,21 +55,38 @@ interface Props {
 function Section({
   title,
   description,
+  icon: Icon,
   children,
 }: {
   title: string;
   description?: string;
+  /** Full-page create form only; the compact modal keeps the plain heading. */
+  icon?: LucideIcon;
   children: ReactNode;
 }) {
   return (
     <section className="border-t border-paper-200 pt-5 first:border-t-0 first:pt-0">
-      <h2 className="font-display text-sm font-semibold text-ink-900">
-        {title}
-      </h2>
-      {description ? (
-        <p className="mt-0.5 mb-4 text-sm text-ink-500">{description}</p>
+      {Icon ? (
+        <div className="mb-5 flex items-center gap-3">
+          <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+            <Icon className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="font-display text-lg font-semibold text-ink-900">{title}</h2>
+            {description ? <p className="text-sm text-ink-600">{description}</p> : null}
+          </div>
+        </div>
       ) : (
-        <div className="mb-4" />
+        <>
+          <h2 className="font-display text-sm font-semibold text-ink-900">
+            {title}
+          </h2>
+          {description ? (
+            <p className="mt-0.5 mb-4 text-sm text-ink-500">{description}</p>
+          ) : (
+            <div className="mb-4" />
+          )}
+        </>
       )}
       <div className="space-y-4">{children}</div>
     </section>
@@ -91,6 +110,7 @@ export function BusinessProfileForm({
   compact = false,
   settingsAside,
   onDirtyChange,
+  profileId,
 }: Props) {
   const [draft, setDraft] = useState<BusinessProfileDraft>(() =>
     initialValues ? draftFromProfile(initialValues) : EMPTY_DRAFT,
@@ -176,11 +196,12 @@ export function BusinessProfileForm({
               <section aria-labelledby="business-identity-heading">
                 <SettingsSectionHeading
                   id="business-identity-heading"
+                  icon={Store}
                   title="Business identity"
                   description="The name, type, and logo for this business."
                 />
                 <div className={`mt-6 grid gap-6 ${logo ? "lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)] lg:gap-8 xl:grid-cols-1 xl:gap-6" : ""}`}>
-                  {logo ? <div className="min-w-0">{logo}</div> : null}
+                  {logo ? <div className="min-w-0 rounded-xl bg-paper-50 p-4 ring-1 ring-paper-200">{logo}</div> : null}
                   <div className="min-w-0 space-y-5">
                     <BusinessBasicsFields
                       key={resetVersion}
@@ -199,6 +220,7 @@ export function BusinessProfileForm({
               <section aria-labelledby="starting-figures-heading">
                 <SettingsSectionHeading
                   id="starting-figures-heading"
+                  icon={Wallet}
                   title="Starting figures"
                   description="Your balance and estimates. Calculated figures from confirmed records appear below."
                 />
@@ -208,6 +230,7 @@ export function BusinessProfileForm({
                     errors={fieldErrors}
                     update={update}
                     existingProfile={Boolean(initialValues)}
+                    scheduleProfileId={profileId}
                     settings
                   />
                 </div>
@@ -269,11 +292,8 @@ export function BusinessProfileForm({
     >
       <Section
         title="About your business"
-        description={
-          compact
-            ? undefined
-            : "How FinSight refers to it, and what kind it is."
-        }
+        icon={compact ? undefined : Store}
+        description={compact ? undefined : "Name it and pick the closest fit."}
       >
         {/* The logo belongs with the name and the type: all three are the
             business's identity, and it was previously stranded above the form
@@ -284,23 +304,23 @@ export function BusinessProfileForm({
           errors={fieldErrors}
           update={update}
           compact={compact}
+          brief={!compact}
         />
       </Section>
 
       <Section
         title="Starting figures"
-        description={
-          compact
-            ? undefined
-            : "These initialize your recorded funds and monthly target. FinSight uses confirmed records when enough history is available."
-        }
+        icon={compact ? undefined : Wallet}
+        description={compact ? undefined : "Rough numbers are fine. You can change them later."}
       >
         <BusinessNumbersFields
           draft={draft}
           errors={fieldErrors}
           update={update}
           compact={compact}
+          brief={!compact}
           existingProfile={Boolean(initialValues)}
+          scheduleProfileId={profileId}
         />
       </Section>
 
@@ -347,21 +367,28 @@ function sameDraft(a: BusinessProfileDraft, b: BusinessProfileDraft) {
 
 function SettingsSectionHeading({
   id,
+  icon: Icon,
   title,
   description,
 }: {
   id: string;
+  icon: LucideIcon;
   title: string;
   description: string;
 }) {
   return (
-    <div className="min-w-0">
+    <div className="flex min-w-0 items-start gap-3 border-b border-paper-200 pb-5">
+      <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+        <Icon className="h-5 w-5" />
+      </span>
+      <div className="min-w-0">
       <h2 id={id} className="font-display text-lg font-semibold text-ink-900">
         {title}
       </h2>
-      <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-ink-500">
+      <p className="mt-0.5 max-w-[70ch] text-sm leading-relaxed text-ink-500">
         {description}
       </p>
+      </div>
     </div>
   );
 }

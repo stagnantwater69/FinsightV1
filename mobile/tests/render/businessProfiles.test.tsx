@@ -173,9 +173,9 @@ describe('BusinessProfilesScreen', () => {
 
   it('preserves actual starting details in each business sheet', async () => {
     const screen = await render(tree());
-    expect(screen.queryByText('Starting funds')).toBeNull();
+    expect(screen.queryByText('Opening balance')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: `Starting details: ${active.name}` }));
-    expect(screen.getByText('Starting funds')).toBeTruthy();
+    expect(screen.getByText('Opening balance')).toBeTruthy();
     expect(screen.getByText('PHP 24,500.00')).toBeTruthy();
     expect(screen.getByText('Starting monthly estimate')).toBeTruthy();
     expect(screen.getByText('PHP 8,100.00')).toBeTruthy();
@@ -217,7 +217,7 @@ describe('BusinessProfilesScreen', () => {
         await fireEvent(target, 'requestClose');
       }
     }
-    expect(screen.queryByText('Starting funds')).toBeNull();
+    expect(screen.queryByText('Opening balance')).toBeNull();
     expect(selectProfile).not.toHaveBeenCalled();
     expect(archiveProfile).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: `Details for ${first.name}` })).toBeTruthy();

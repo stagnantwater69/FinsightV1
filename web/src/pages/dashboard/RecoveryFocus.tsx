@@ -44,10 +44,16 @@ export function RecoveryFocus({ summary, needsSetup, action, onAddSale }: {
       ) : null}
     </div>
   );
+  // The month's pace, so "Behind pace" carries its own figure. Target = what is recorded plus what remains.
+  const monthTarget = recovery.salesThisMonth + Math.max(0, recovery.remainingTarget);
+  const showMonthPace =
+    !needsSetup && !incomplete && !covered && recovery.expectedSalesToDate !== undefined && monthTarget > 0;
+  const variance = recovery.paceVarianceAmount ?? recovery.salesThisMonth - (recovery.expectedSalesToDate ?? 0);
+  const share = (value: number) => `${Math.min(Math.max((value / monthTarget) * 100, 0), 100)}%`;
   const todayPercent = hasTodayTarget ? Math.min((recovery.todaysSales / recovery.todaysTarget) * 100, 100) : 0;
 
   return (
-    <section aria-labelledby="dashboard-recovery" data-tour="dashboard-summary" className="flex min-w-0 flex-col rounded-2xl border border-paper-200 bg-paper p-5 shadow-sm lg:col-span-7">
+    <section aria-labelledby="dashboard-recovery" data-tour="dashboard-summary" className="flex min-w-0 flex-col rounded-2xl border border-paper-200 bg-paper p-5 shadow-sm lg:col-span-12">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <IconTile icon={Target} />
@@ -64,7 +70,9 @@ export function RecoveryFocus({ summary, needsSetup, action, onAddSale }: {
           {actions}
         </>
       ) : (
-        <>
+        /* Wide screens: today on the left, the month on the right, so the card
+           is short and the two cards below it can sit side by side. */
+        <div className="grid gap-x-8 lg:grid-cols-2">
           <div className="mt-5 flex items-center justify-between gap-5">
             <div className="min-w-0 flex-1 [container-type:inline-size]">
               {incomplete ? (
@@ -104,40 +112,83 @@ export function RecoveryFocus({ summary, needsSetup, action, onAddSale }: {
                   />
                 </div>
                 <dl className="mt-2 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-                  <div><dt className="text-[11px] text-ink-500">Sales recorded today</dt><dd className="figure mt-0.5 whitespace-nowrap text-sm font-semibold text-ink-900">{formatMoney(recovery.todaysSales)}</dd></div>
-                  <div className="text-right"><dt className="text-[11px] text-ink-500">Today’s sales target</dt><dd className="figure mt-0.5 whitespace-nowrap text-sm font-semibold text-ink-900">{formatMoney(recovery.todaysTarget)}</dd></div>
+                  <div><dt className="text-xs text-ink-500">Sales recorded today</dt><dd className="figure mt-0.5 whitespace-nowrap text-sm font-semibold text-ink-900">{formatMoney(recovery.todaysSales)}</dd></div>
+                  <div className="text-right"><dt className="text-xs text-ink-500">Today’s target</dt><dd className="figure mt-0.5 whitespace-nowrap text-sm font-semibold text-ink-900">{formatMoney(recovery.todaysTarget)}</dd></div>
                 </dl>
               </div>
             </div>
             {!incomplete ? <div className="hidden shrink-0 sm:block">
               <ProgressRing percent={recovery.monthCoveragePercent} size={96} stroke={9} color="rgb(var(--chart-emphasis))" label={`${Math.round(recovery.monthCoveragePercent)}% of this month's target covered`} />
-              <p className="mt-1 text-center text-[11px] text-ink-500">of the month</p>
+              <p className="mt-1 text-center text-xs text-ink-500">of the month</p>
             </div> : null}
           </div>
 
+          <div className="lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:border-l lg:border-paper-200 lg:pl-8">
           {/* Three across once each cell can hold a full "PHP 100,000"; below
               that the cells stack as label/value rows instead of truncating
-              the amount to "PHP 42,…". */}
-          <dl className="mt-5 grid grid-cols-1 divide-y divide-paper-200 rounded-xl bg-paper-50 py-1 ring-1 ring-paper-200 min-[440px]:grid-cols-3 min-[440px]:divide-x min-[440px]:divide-y-0 min-[440px]:py-3">
-            <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0">
-              <dt className="flex items-center gap-1 text-[11px] text-ink-600"><CalendarDays aria-hidden className="h-3 w-3" />This month</dt>
-              <dd className="figure mt-0.5 truncate text-sm font-semibold text-ink-900">{formatMoney(recovery.salesThisMonth)}</dd>
+              the amount to "PHP 42,…". From lg to xl this column is half the
+              card, too narrow for three, so it stacks again there. */}
+          <dl className="mt-5 grid grid-cols-1 divide-y divide-paper-200 rounded-xl bg-paper-50 py-1 ring-1 ring-paper-200 min-[440px]:grid-cols-3 min-[440px]:divide-x min-[440px]:divide-y-0 min-[440px]:py-3 lg:grid-cols-1 lg:divide-x-0 lg:divide-y lg:py-1 xl:grid-cols-3 xl:divide-x xl:divide-y-0 xl:py-3">
+            <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0 lg:flex lg:py-2 xl:block xl:py-0">
+              <dt className="flex items-center gap-1 text-xs text-ink-600"><CalendarDays aria-hidden className="h-3 w-3" />This month</dt>
+              <dd className="figure mt-0.5 shrink-0 truncate text-sm font-semibold text-ink-900">{formatMoney(recovery.salesThisMonth)}</dd>
             </div>
-            <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0">
-              <dt className="flex items-center gap-1 text-[11px] text-ink-600"><Gauge aria-hidden className="h-3 w-3" />Daily target</dt>
-              <dd className="figure mt-0.5 truncate text-sm font-semibold text-tone-accent">{covered ? "Covered" : formatMoney(recovery.adjustedDailyTarget)}</dd>
+            <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0 lg:flex lg:py-2 xl:block xl:py-0">
+              <dt className="flex items-center gap-1 text-xs text-ink-600"><Gauge aria-hidden className="h-3 w-3" />Needed per day from now</dt>
+              <dd className="figure mt-0.5 shrink-0 truncate text-sm font-semibold text-tone-accent">{covered ? "Covered" : formatMoney(recovery.adjustedDailyTarget)}</dd>
             </div>
-            <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0">
-              <dt className="flex items-center gap-1 text-[11px] text-ink-600"><Clock aria-hidden className="h-3 w-3" />Days left</dt>
-              <dd className="figure mt-0.5 truncate text-sm font-semibold text-ink-900">{recovery.remainingOperatingDaysIsApproximated ? "≈ " : ""}{recovery.remainingOperatingDays ?? "—"}</dd>
+            <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0 lg:flex lg:py-2 xl:block xl:py-0">
+              <dt className="flex items-center gap-1 text-xs text-ink-600"><Clock aria-hidden className="h-3 w-3" />Days left</dt>
+              <dd className="figure mt-0.5 shrink-0 truncate text-sm font-semibold text-ink-900">{recovery.remainingOperatingDaysIsApproximated ? "≈ " : ""}{recovery.remainingOperatingDays ?? "—"}</dd>
             </div>
           </dl>
+          {!covered && hasTodayTarget && recovery.adjustedDailyTarget - recovery.todaysTarget >= 1 ? (
+            <p className="mt-2 text-xs text-ink-500">Higher than today’s target because earlier days this month fell short.</p>
+          ) : null}
           {recovery.dataWarnings?.length ? (
             <p className="mt-2 flex items-center gap-1.5 text-xs text-tone-accent"><AlertTriangle aria-hidden className="h-3.5 w-3.5" />Some records still need review.</p>
           ) : null}
 
-          <div className="mt-auto">{actions}</div>
-        </>
+          {showMonthPace ? (
+            <div className="mt-5 border-t border-paper-200 pt-4">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <h3 className="text-sm font-semibold text-ink-900">Month so far</h3>
+                <p className={`figure text-sm font-semibold ${variance < 0 ? "text-tone-danger" : "text-tone-brand"}`}>
+                  {Math.abs(variance) < 1
+                    ? "On pace"
+                    : `${variance < 0 ? "Behind" : "Ahead"} by ${formatMoney(Math.abs(variance))}`}
+                </p>
+              </div>
+              <div
+                role="img"
+                aria-label={`${formatMoney(recovery.salesThisMonth)} recorded of ${formatMoney(monthTarget)} this month. ${formatMoney(recovery.expectedSalesToDate ?? 0)} expected by today.`}
+                className="relative mt-3 h-2 rounded-full bg-paper-200"
+              >
+                <div className="h-full rounded-full bg-brand-600" style={{ width: share(recovery.salesThisMonth) }} />
+                <span
+                  aria-hidden
+                  className="absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded-full bg-ink-800"
+                  style={{ left: share(recovery.expectedSalesToDate ?? 0) }}
+                />
+              </div>
+              <dl className="mt-2 flex flex-wrap items-start justify-between gap-x-4 gap-y-1 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span aria-hidden className="h-3 w-0.5 rounded-full bg-ink-800" />
+                  <dt className="text-ink-500">Expected by today</dt>
+                  <dd className="figure font-semibold text-ink-900">{formatMoney(recovery.expectedSalesToDate ?? 0)}</dd>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <dt className="text-ink-500">Month target</dt>
+                  <dd className="figure font-semibold text-ink-900">{formatMoney(monthTarget)}</dd>
+                </div>
+              </dl>
+            </div>
+          ) : null}
+
+          </div>
+
+          <div className="lg:col-start-1 lg:row-start-2 lg:self-end">{actions}</div>
+        </div>
       )}
     </section>
   );

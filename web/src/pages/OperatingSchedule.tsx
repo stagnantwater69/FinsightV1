@@ -306,7 +306,7 @@ export function OperatingSchedule() {
                       }`}
                     >
                       <span>{w.short}</span>
-                      <span className="mt-0.5 text-[11px] font-normal">
+                      <span className="mt-0.5 text-xs font-normal">
                         {isOpen ? "Open" : "Closed"}
                       </span>
                     </button>

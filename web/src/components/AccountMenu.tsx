@@ -123,7 +123,7 @@ export function AccountMenu() {
             </span>
             <div className="min-w-0">
               <p className="truncate text-[13px] font-semibold text-ink-900">{fullName}</p>
-              <p className="truncate text-[11.5px] text-ink-500">{user?.email}</p>
+              <p className="truncate text-xs text-ink-500">{user?.email}</p>
             </div>
           </div>
 
@@ -144,7 +144,7 @@ export function AccountMenu() {
                   className="ml-auto rounded-full px-1.5 text-[10.5px] font-bold text-white"
                   style={{ backgroundColor: STATUS_TEXT_COLORS.critical }}
                 >
-                  {unreadCount > 9 ? "9+" : unreadCount}
+                  {unreadCount > 99 ? "99+" : unreadCount}
                 </span>
               ) : null}
             </Link>
@@ -156,7 +156,7 @@ export function AccountMenu() {
 
           {/* ---- theme, inline ---- */}
           <div className="mt-1.5 border-t border-paper-200 pt-2">
-            <div className="px-2.5 pb-1.5 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
+            <div className="px-2.5 pb-1.5 text-xs font-bold uppercase tracking-[0.12em] text-ink-500">
               Theme
             </div>
             <div

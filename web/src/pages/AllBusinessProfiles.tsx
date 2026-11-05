@@ -349,7 +349,7 @@ export function AllBusinessProfiles() {
 
                 <dl className="mt-3 space-y-1.5 border-t border-paper-200 pt-3 text-sm">
                   <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
-                    <dt className="text-ink-500">Starting funds</dt>
+                    <dt className="text-ink-500">Opening balance</dt>
                     <dd className="figure font-medium text-ink-900">
                       {formatMoney(p.availableFunds)}
                     </dd>

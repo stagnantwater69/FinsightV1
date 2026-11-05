@@ -120,7 +120,7 @@ function AmountText({ value }: { value: string }) {
 function TypeBadge({ type }: { type: RowRecordType | null }) {
   if (type === null) {
     return (
-      <span className="inline-flex shrink-0 rounded-lg bg-tint-danger px-2 py-0.5 text-[11.5px] font-semibold text-tone-danger ring-1 ring-edge-danger">
+      <span className="inline-flex shrink-0 rounded-lg bg-tint-danger px-2 py-0.5 text-xs font-semibold text-tone-danger ring-1 ring-edge-danger">
         Unknown
       </span>
     );

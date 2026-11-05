@@ -92,7 +92,7 @@ function SortGlyph({ state }: { state: SortDirection | null }) {
   return (
     <span
       aria-hidden
-      className={`ml-1 inline-block text-[10px] leading-none transition-opacity ${
+      className={`ml-1 inline-block text-xs leading-none transition-opacity ${
         state ? "opacity-100" : "opacity-0 group-hover:opacity-40"
       }`}
     >
@@ -116,6 +116,7 @@ export function DataTable<T>({
   paginate = true,
   itemNoun = "records",
   storageKey,
+  defaultPageSize = 10,
   toolbar,
   rowClassName,
 }: {
@@ -154,6 +155,8 @@ export function DataTable<T>({
   itemNoun?: string;
   /** Remembers the chosen page size per table. */
   storageKey?: string;
+  /** Rows per page until the owner picks a size (a saved choice wins). */
+  defaultPageSize?: PageSize;
   /** Search / filter controls, rendered in the table's own header bar. */
   toolbar?: ReactNode;
   /**
@@ -170,7 +173,7 @@ export function DataTable<T>({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = usePersistentState<PageSize>(
     storageKey ? `finsight.pageSize.${storageKey}` : "finsight.pageSize.default",
-    10,
+    defaultPageSize,
     isPageSize,
   );
 

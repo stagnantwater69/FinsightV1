@@ -123,7 +123,7 @@ export function SetupProgress({
           <li key={s.label} className="flex items-start gap-2 text-sm">
             <span
               aria-hidden
-              className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+              className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                 s.done ? "bg-brand-600 text-white" : "bg-brand-200 text-brand-700"
               }`}
             >

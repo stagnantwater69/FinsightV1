@@ -74,8 +74,8 @@ describe("several Modals mounted at once", () => {
     const dialog = openDialog();
     const labelledBy = dialog.getAttribute("aria-labelledby");
     expect(labelledBy).toBeTruthy();
-    expect(document.getElementById(labelledBy!)).toHaveTextContent("Add sales reference");
-    expect(within(dialog).getByRole("heading", { level: 2 })).toHaveTextContent("Add sales reference");
+    expect(document.getElementById(labelledBy!)).toHaveTextContent("Add sale");
+    expect(within(dialog).getByRole("heading", { level: 2 })).toHaveTextContent("Add sale");
   });
 
   it("gives every money-entry control in the open dialog an accessible name", () => {

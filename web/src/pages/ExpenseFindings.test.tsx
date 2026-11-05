@@ -85,7 +85,7 @@ describe("Findings to review subpage", () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByText("Finding number 2");
-    await user.click(screen.getByRole("button", { name: /Expected \/ dismiss\s*— Finding number 2/ }));
+    await user.click(screen.getByRole("button", { name: /This is normal for my business:?\s*Finding number 2/ }));
     await waitFor(() => expect(screen.queryByText("Finding number 2")).not.toBeInTheDocument());
     expect(patches[0]).toEqual({
       url: "/insights/findings/102/review",

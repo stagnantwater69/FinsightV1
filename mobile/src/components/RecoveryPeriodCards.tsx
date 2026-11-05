@@ -140,7 +140,7 @@ export function RecoveryTodayCard({ data }: { data: RecoveryInsight }) {
       </View>
       <T variant="caption" style={{ marginTop: space.xs }}>{`${Math.round(percent)}% of today's target recorded`}</T>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md, marginTop: space.md }}>
-        <Figure label="Sales reference today" value={data.todaysSales} />
+        <Figure label="Sales recorded today" value={data.todaysSales} />
         <Figure label="Today's target" value={data.todaysTarget} />
       </View>
       <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: space.md, paddingTop: space.sm, borderTopWidth: 1, borderTopColor: t.border }}>
@@ -198,8 +198,8 @@ export function RecoveryRemainingPeriodCard({ period }: { period: RecoveryReport
       </T>
       <T variant="caption" style={{ marginBottom: space.md }}>Recalculated across your remaining operating days</T>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
-        <Figure label={period.kind === "month" ? "Monthly expense basis" : "This week's target"} value={period.target} />
-        <Figure label={period.kind === "month" ? "Sales reference so far" : "Sales reference this week"} value={period.sales} />
+        <Figure label={period.kind === "month" ? "Monthly costs" : "This week's target"} value={period.target} />
+        <Figure label={period.kind === "month" ? "Sales recorded so far" : "Sales recorded this week"} value={period.sales} />
         <Figure label="Remaining target" value={period.remainingTarget} />
         <Figure
           label="Remaining operating days"

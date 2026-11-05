@@ -126,8 +126,8 @@ export function RecordCard({
     r.description,
     formatMoney(r.amount, { decimals: true }),
     `${r.date.slice(0, 10)}, ${r.type === "expense" ? `expense, ${categoryName}` : "sales"}`,
-    r.duplicateStatus === "Flagged" ? "possible duplicate" : null,
-    r.reviewStatus === "Needs Review" ? "needs review" : null,
+    r.duplicateStatus === "Flagged" ? "possible repeat" : null,
+    r.reviewStatus === "Needs Review" ? "needs your check" : null,
     r.largeExpenseFlag ? "large expense" : null,
     RECORD_SOURCE_LABELS[r.source as RecordSource] ?? r.source,
   ]

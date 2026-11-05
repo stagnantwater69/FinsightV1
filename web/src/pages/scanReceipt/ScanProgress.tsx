@@ -25,7 +25,7 @@ export function ScanProgress({ stage }: { stage: ScanStage }) {
             <li key={s} className="flex items-center gap-2 text-xs">
               <span
                 aria-hidden
-                className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${
+                className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                   done
                     ? "bg-tint-brand text-tone-brand ring-1 ring-edge-brand"
                     : active

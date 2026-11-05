@@ -44,7 +44,12 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenVerdi
     return error || !data.user ? { error: error ?? { message: "No user for this token" } } : { authUserId: data.user.id, error: null };
   }
 
-  const { data, error } = await supabaseAdmin.auth.getClaims(token);
+  // getClaims returns auth and network errors; it only throws when WebCrypto
+  // rejects the token itself (an alg the published key does not use), which is a refusal.
+  const { data, error } = await supabaseAdmin.auth.getClaims(token).catch(() => ({
+    data: null,
+    error: { message: "Invalid token" },
+  }));
   if (error || !data) return { error: error ?? { message: "Invalid token" } };
 
   // Only a signed-in user's token carries both; API keys and service tokens do not.

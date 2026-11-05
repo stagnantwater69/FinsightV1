@@ -56,7 +56,7 @@ export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
           onKeyDown={onMenuKeys}
           className="scroll-slim absolute right-0 top-full z-50 mt-2 max-h-[calc(100dvh-8rem-env(safe-area-inset-bottom))] w-60 max-w-[calc(100vw-1.5rem)] animate-pop-down overflow-y-auto overscroll-contain rounded-2xl border border-paper-200 bg-paper p-1.5 shadow-lg lg:max-h-[calc(100dvh-5rem)]"
         >
-          <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
+          <div className="px-2.5 pb-1.5 pt-2 text-xs font-bold uppercase tracking-[0.12em] text-ink-500">
             Appearance
           </div>
           {THEMES.map((option) => {
@@ -87,7 +87,7 @@ export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13.5px] font-semibold text-ink-900">{spec.label}</span>
-                  <span className="block truncate text-[11.5px] text-ink-500">{spec.hint}</span>
+                  <span className="block truncate text-xs text-ink-500">{spec.hint}</span>
                 </span>
                 {active ? (
                   <IconCheck aria-hidden className="h-4 w-4 shrink-0 text-brand-600" />

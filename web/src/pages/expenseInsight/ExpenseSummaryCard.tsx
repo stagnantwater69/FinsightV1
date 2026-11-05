@@ -199,7 +199,7 @@ export function ExpenseSummaryCard({
           <button
             type="button"
             onClick={() => onAsk(expandQuestion)}
-            className="tap-inline font-semibold text-accent-200 underline-offset-2 hover:underline"
+            className="tap-inline font-semibold text-brand-200 underline-offset-2 hover:underline"
           >
             Ask FinSight
           </button>

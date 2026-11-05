@@ -66,6 +66,6 @@ describe("GreetingHero", () => {
     expect(screen.getByText("You have 2 records waiting for a second look.")).toBeInTheDocument();
     // The tone has to reach the panel, not just the sentence — an owner reads
     // the amber before they read the words.
-    expect(container.querySelector(".bg-tint-accent")).not.toBeNull();
+    expect(container.querySelector(".bg-tint-neutral")).not.toBeNull();
   });
 });

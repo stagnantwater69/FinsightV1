@@ -211,7 +211,7 @@ function profileLines(profile: BusinessProfile): string[] {
   return [
     "=== BUSINESS PROFILE ===",
     `Name: ${profile.name} (${profile.type})`,
-    `Starting available funds: ${peso(Number(profile.availableFunds))} (baseline date ${utcDateKey(profile.availableFundsBaselineDate)})`,
+    `Opening balance: ${peso(Number(profile.availableFunds))} (baseline date ${utcDateKey(profile.availableFundsBaselineDate)})`,
     `Starting monthly expense estimate: ${peso(Number(profile.expectedMonthlyExpenses))}`,
     `Operating days per month: ${profile.operatingDays}`,
     `Owner's large-expense threshold: ${Number(profile.largeExpenseThresholdPercent)}%`,
@@ -256,7 +256,7 @@ export async function buildFinancialSnapshot(
 
   lines.push(
     `Current recorded funds: ${peso(availableFunds.calculatedAmount)} as of ${availableFunds.asOfDate}`,
-    `Funds calculation: ${peso(availableFunds.baselineAmount)} starting funds + ${peso(availableFunds.confirmedSalesAdded)} confirmed sales - ${peso(availableFunds.confirmedExpensesDeducted)} confirmed expenses.`,
+    `Funds calculation: ${peso(availableFunds.baselineAmount)} opening balance + ${peso(availableFunds.confirmedSalesAdded)} confirmed sales - ${peso(availableFunds.confirmedExpensesDeducted)} confirmed expenses.`,
   );
 
   const totalCurrent = behavior.totals.current;
@@ -306,10 +306,10 @@ export async function buildFinancialSnapshot(
     "",
     "Recovery status (month to date):",
     recovery.monthlyExpenseBasis.source === "previous_complete_month"
-      ? `- Monthly expense basis: ${peso(recovery.monthlyExpenseBasis.amount)} from ${recovery.monthlyExpenseBasis.sourceMonth} confirmed expense records (${recovery.monthlyExpenseBasis.eligibleRecordCount} eligible record(s))`
-      : `- Monthly expense basis: ${peso(recovery.monthlyExpenseBasis.amount)} starting estimate; the preceding month's expense records are not confirmed complete`,
+      ? `- Monthly costs: ${peso(recovery.monthlyExpenseBasis.amount)} from ${recovery.monthlyExpenseBasis.sourceMonth} confirmed expense records (${recovery.monthlyExpenseBasis.eligibleRecordCount} eligible record(s))`
+      : `- Monthly costs: ${peso(recovery.monthlyExpenseBasis.amount)} starting estimate; the preceding month's expense records are not confirmed complete`,
     `- Daily needed target: ${peso(recovery.dailyNeededTarget)} per operating day`,
-    `- Sales reference recorded this month: ${peso(recovery.salesThisMonth)} of ${peso(
+    `- Sales recorded this month: ${peso(recovery.salesThisMonth)} of ${peso(
       recovery.expectedMonthlyExpenses
     )} needed (${recovery.monthCoveragePercent.toFixed(1)}% covered)`,
     `- Remaining target: ${peso(recovery.remainingTarget)} across ${recovery.remainingOperatingDays} remaining operating day(s)`,
@@ -421,7 +421,7 @@ async function recoveryLines(
     "",
     "=== RECOVERY TARGET DETAIL ===",
     `Today's target: ${peso(recovery.todaysTarget)}`,
-    `Today's recorded sales reference: ${peso(recovery.todaysSales)}`,
+    `Sales recorded today: ${peso(recovery.todaysSales)}`,
     `Today's gap: ${peso(Math.abs(recovery.todaysGap))} ${recovery.todaysStatus} target`,
     `Calendar days left in this month: ${recovery.calendarDaysLeftInMonth} of ${recovery.daysInMonth}`,
     "",
@@ -526,7 +526,7 @@ export async function spendingImpactLines(
     `- Planned amount detected: ${peso(impact.plannedAmount)}${scenario.label ? ` (described as "${scenario.label}")` : ""}`,
     `- Available business funds before: ${peso(impact.funds.before)}`,
     `- Available business funds after: ${peso(impact.funds.after)}`,
-    `- Available funds were calculated from ${peso(impact.availableFundsCalculation.baselineAmount)} starting funds, plus ${peso(impact.availableFundsCalculation.confirmedSalesAdded)} confirmed sales, minus ${peso(impact.availableFundsCalculation.confirmedExpensesDeducted)} confirmed expenses`,
+    `- Available funds were calculated from ${peso(impact.availableFundsCalculation.baselineAmount)} opening balance, plus ${peso(impact.availableFundsCalculation.confirmedSalesAdded)} confirmed sales, minus ${peso(impact.availableFundsCalculation.confirmedExpensesDeducted)} confirmed expenses`,
     ...(balanceStateLine ? [balanceStateLine] : []),
     `- Share of available funds used: ${percentText}`,
     thresholdLine,
@@ -635,7 +635,7 @@ async function dashboardLines(userId: number, profile: BusinessProfile, period: 
     "",
     `=== DASHBOARD SUMMARY (${period ? period.label : `last ${summary.periodDays} days`}) ===`,
     `Total recorded expenses: ${peso(summary.overview.totalExpenses)}`,
-    `Total recorded sales reference: ${peso(summary.overview.totalSalesReference)}`,
+    `Total sales recorded: ${peso(summary.overview.totalSalesReference)}`,
     `Records needing review: ${summary.recordsNeedingReview}`,
   ];
   if (summary.alerts.length > 0) {

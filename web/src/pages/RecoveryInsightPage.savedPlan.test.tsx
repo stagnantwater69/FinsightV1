@@ -187,7 +187,7 @@ describe("Recovery Target — saved plan (plan §7.5/§10.7)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Try a scenario" }));
     expect(screen.queryByText(/Save this as a plan/)).not.toBeInTheDocument();
 
-    const input = screen.getByLabelText(/Assumed monthly expense basis/);
+    const input = screen.getByLabelText(/Assumed monthly costs/);
     await userEvent.clear(input);
     await userEvent.type(input, "15000");
     await userEvent.click(screen.getByRole("button", { name: "See hypothetical target" }));
@@ -198,7 +198,7 @@ describe("Recovery Target — saved plan (plan §7.5/§10.7)", () => {
   it("saves the scenario's assumed value as this month's plan and shows the non-mutation confirmation", async () => {
     renderPage();
     await userEvent.click(await screen.findByRole("button", { name: "Try a scenario" }));
-    const input = screen.getByLabelText(/Assumed monthly expense basis/);
+    const input = screen.getByLabelText(/Assumed monthly costs/);
     await userEvent.clear(input);
     await userEvent.type(input, "15000");
     await userEvent.click(screen.getByRole("button", { name: "See hypothetical target" }));
@@ -222,7 +222,7 @@ describe("Recovery Target — saved plan (plan §7.5/§10.7)", () => {
     expect(screen.getAllByText(/PHP\s*769/).length).toBeGreaterThan(0);
 
     await userEvent.click(screen.getByRole("button", { name: "Try a scenario" }));
-    const input = screen.getByLabelText(/Assumed monthly expense basis/);
+    const input = screen.getByLabelText(/Assumed monthly costs/);
     await userEvent.clear(input);
     await userEvent.type(input, "15000");
     await userEvent.click(screen.getByRole("button", { name: "See hypothetical target" }));

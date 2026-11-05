@@ -150,7 +150,7 @@ export const TOUR_STEPS: readonly TourStep[] = [
   },
   {
     id: "sales-reference",
-    title: "Add a sales reference",
+    title: "Add a sale",
     body: "Record a sales figure you want to monitor. It is a note to yourself for tracking, not a receipt issued to a customer.",
     target: "quick-add-sales",
     requiresQuickAdd: true,

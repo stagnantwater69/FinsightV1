@@ -76,7 +76,7 @@ export function ZoneBand({
           ) : null,
         )}
       </div>
-      <div ref={bandRef} className="relative mt-1 h-4 text-[10.5px] font-semibold">
+      <div ref={bandRef} className="relative mt-1 h-4 text-xs font-semibold">
         {labels.map((label, index) => {
           // A zone that starts past the slider's end has nothing to label.
           if (index > 0 && label.at >= 100) return null;
@@ -122,7 +122,7 @@ export function SlipMeter({
       {[noticeableAt, highAt].map((v, i) => (
         <span
           key={i}
-          className={`figure absolute top-0 -translate-x-1/2 text-[10px] font-semibold ${i === 0 ? "text-tone-accent" : "text-tone-danger"}`}
+          className={`figure absolute top-0 -translate-x-1/2 text-xs font-semibold ${i === 0 ? "text-tone-accent" : "text-tone-danger"}`}
           style={{ left: `${tick(v)}%` }}
         >
           {Math.round(v)}%
@@ -184,7 +184,7 @@ export function PriceRangeStrip({
           style={{ left: `calc(${at(typical)}% - 1px)` }}
         />
         <span
-          className="figure absolute -top-6 -translate-x-1/2 whitespace-nowrap text-[10.5px] font-semibold text-ink-600"
+          className="figure absolute -top-6 -translate-x-1/2 whitespace-nowrap text-xs font-semibold text-ink-600"
           style={{ left: `${at(typical)}%` }}
         >
           usual
@@ -199,7 +199,7 @@ export function PriceRangeStrip({
       {/* Each label sits under the point it names, so a purchase far beyond
           the range is visibly far beyond it. A label that would collide with
           the purchase's is dropped; its value is in the sentence below. */}
-      <div className="relative mt-2 h-4 text-[11px] text-ink-500">
+      <div className="relative mt-2 h-4 text-xs text-ink-500">
         <span className="figure absolute whitespace-nowrap" style={{ left: `${at(smallest)}%` }}>
           {formatMoney(smallest)}
         </span>

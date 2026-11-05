@@ -158,7 +158,7 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
             {formatMoney(funds.calculatedAmount)}
           </p>
           <dl className="mt-4 space-y-2 text-sm">
-            <CalculationRow label="Starting funds" amount={funds.baselineAmount} />
+            <CalculationRow label="Opening balance" amount={funds.baselineAmount} />
             <CalculationRow label="Plus confirmed sales" amount={funds.confirmedSalesAdded} />
             <CalculationRow label="Less confirmed expenses" amount={funds.confirmedExpensesDeducted} />
           </dl>
@@ -170,7 +170,7 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
 
         <section className="min-w-0 border-t border-paper-200 pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
           <h3 className="text-sm font-semibold text-ink-700">
-            Monthly expense basis
+            Monthly costs
           </h3>
           <p className="figure mt-2 text-2xl font-semibold tracking-[-0.02em] text-ink-900 [overflow-wrap:anywhere] sm:text-3xl">
             {formatMoney(basis.amount)}

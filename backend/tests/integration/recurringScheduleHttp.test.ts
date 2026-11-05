@@ -34,7 +34,7 @@ vi.mock("../../src/services/anomalyDetection/config", async (importOriginal) => 
 import request from "supertest";
 import { app } from "../../src/app";
 import { prisma } from "../../src/config/prisma";
-import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
+import { businessDayString, disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
 const AUTH = ["Authorization", "Bearer valid-token"] as const;
@@ -118,9 +118,26 @@ describe("recurring schedule HTTP API", () => {
   it("computes dueState server-side, using the detector's 3-day lead", async () => {
     for (const [offset, expected] of [[-1, "OVERDUE"], [0, "DUE_SOON"], [3, "DUE_SOON"], [4, "SCHEDULED"]] as const) {
       const created = await request(app).post(`${BASE}/recurring-schedules`)
-        .set(...AUTH).send(declaration({ nextDueDate: utcDayString(offset) }));
+        .set(...AUTH).send(declaration({ nextDueDate: businessDayString(ctx.profile.timezone, offset) }));
       expect(created.status).toBe(201);
       expect([offset, created.body.dueState]).toEqual([offset, expected]);
+    }
+  });
+
+  it("judges dueState by the business's calendar day, not the server's", async () => {
+    // 04:00 on 11 July in Manila is still 10 July in UTC.
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-07-10T20:00:00Z") });
+    try {
+      const created = await request(app).post(`${BASE}/recurring-schedules`)
+        .set(...AUTH).send(declaration({ nextDueDate: "2026-07-10" }));
+      expect(created.status).toBe(201);
+      expect(created.body.dueState).toBe("OVERDUE");
+
+      const listed = await request(app).get(`${BASE}/recurring-schedules`)
+        .set(...AUTH).query({ businessProfileId: ctx.profile.id });
+      expect(listed.body.map((s: { dueState: string }) => s.dueState)).toEqual(["OVERDUE"]);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

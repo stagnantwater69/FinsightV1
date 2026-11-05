@@ -128,7 +128,7 @@ export const TUTORIALS: Tutorial[] = [
   {
     n: 1,
     title: "Setting up your business",
-    body: "Create your account, add a business profile, and enter starting funds plus a monthly expense estimate. FinSight uses confirmed records to update current funds. Once you confirm a complete past month, its recorded expenses replace the starting estimate as your monthly basis.",
+    body: "Create your account, add a business profile, and enter an opening balance plus a monthly expense estimate. FinSight uses confirmed records to update current funds. Once you confirm a complete past month, its recorded expenses replace the starting estimate as your monthly basis.",
   },
   {
     n: 2,

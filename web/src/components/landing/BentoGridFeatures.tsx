@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { BarChart3, Bell, Check, Download, FileSpreadsheet, FileText, MessageSquare, MonitorSmartphone, TrendingUp, type LucideIcon } from "lucide-react";
+import { ArrowRight, BarChart3, Bell, Check, FileSpreadsheet, FileText, MessageSquare, MonitorSmartphone, TrendingUp, Upload, type LucideIcon } from "lucide-react";
 import { Money } from "../Money";
 import { MEASURE, Rise, SectionHead } from "./grid";
 import { CashflowPreview, CrossDeviceDashboardPreview, ReceiptPreview } from "./LandingPreviews";
@@ -79,10 +79,12 @@ function AskPreview() {
   );
 }
 
-const EXPORTS = [
-  ["sales-oct-2026.csv", "Sales records"],
-  ["expenses-oct-2026.csv", "Expense records"],
-  ["all-records-2026.csv", "All records"],
+// The importer's column-matching step: the owner's own headings on the left,
+// the FinSight field each one fills on the right.
+const IMPORT_COLUMNS = [
+  ["Petsa", "Date"],
+  ["Item", "Description"],
+  ["Total", "Amount"],
 ];
 
 export function BentoGridFeatures() {
@@ -130,20 +132,31 @@ export function BentoGridFeatures() {
             <CrossDeviceDashboardPreview />
             <FeatureNote>Keep your records together</FeatureNote>
           </FeatureCard>
-          <FeatureCard title="Export your records" body="Download your data whenever you need it." icon={FileText} wide>
-            <div className="flex min-h-[220px] flex-1 flex-col justify-center gap-2">
-              {EXPORTS.map(([name, label]) => (
-                <div key={name} className="flex items-center gap-3 rounded-xl border border-landing-mint-light/60 px-3 py-3">
-                  <FileSpreadsheet className="h-8 w-8 shrink-0 text-landing-green" aria-hidden />
-                  <div className="min-w-0 flex-1">
-                    <p className="break-all text-[13px] font-medium text-landing-charcoal">{name}</p>
-                    <p className="mt-1 text-xs text-landing-muted">{label}</p>
-                  </div>
-                  <Download className="h-4 w-4 shrink-0 text-landing-green" aria-hidden />
+          <FeatureCard title="Bring in your spreadsheet" body="Already keep records in Excel? Import the CSV and start with your history." icon={Upload} wide>
+            <div className="flex min-h-[220px] flex-1 flex-col justify-center gap-3">
+              <div className="flex items-center gap-3 rounded-xl border border-landing-mint-light/60 px-3 py-3">
+                <FileSpreadsheet className="h-8 w-8 shrink-0 text-landing-green" aria-hidden />
+                <div className="min-w-0 flex-1">
+                  <p className="break-all text-[13px] font-medium text-landing-charcoal">my-sales-2025.csv</p>
+                  <p className="mt-1 text-xs text-landing-muted">Your existing file</p>
                 </div>
-              ))}
+                <Upload className="h-4 w-4 shrink-0 text-landing-green" aria-hidden />
+              </div>
+              <div className="rounded-xl border border-landing-mint-light/60 px-3 py-2.5">
+                <p className="text-xs text-landing-muted">Your columns, matched for you</p>
+                <ul className="mt-2 space-y-1.5">
+                  {IMPORT_COLUMNS.map(([theirs, ours]) => (
+                    <li key={theirs} className="flex items-center gap-2 text-[13px] text-landing-charcoal">
+                      <span className="w-24 truncate rounded-md bg-landing-cream px-2 py-0.5">{theirs}</span>
+                      <ArrowRight className="h-3.5 w-3.5 shrink-0 text-landing-muted" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate font-medium">{ours}</span>
+                      <Check className="h-4 w-4 shrink-0 text-landing-green" aria-hidden />
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
-            <FeatureNote>Take a copy of your records.</FeatureNote>
+            <FeatureNote>Check a preview before anything is saved.</FeatureNote>
           </FeatureCard>
         </div>
       </div>

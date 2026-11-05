@@ -109,11 +109,13 @@ describe("ink token contrast", () => {
     });
   }
 
-  it("ink-500 is NOT enough on the sunken surfaces — which is why ink-600 exists there", () => {
-    // Light's ink-500 lands at 4.34 on paper-100 and 3.86 on paper-200. If a
-    // future retune fixes that, this test fails and the ink-600-on-sunken rule
-    // in index.css can be relaxed. It should not be relaxed before then.
-    expect(contrast(THEMES.light["ink-500"], THEMES.light["paper-100"])).toBeLessThan(AA);
+  it("Light's ink-500 clears AA on every surface, sunken ones included", () => {
+    // The 2026-11 Light retune darkened ink-500 (it used to land at 4.34 on
+    // paper-100 and 3.86 on paper-200). Keep it there: grey helper text on a
+    // shaded panel is common and should never need a special rule.
+    for (const surface of ["paper", "paper-50", "paper-100", "paper-200"] as const) {
+      expect(contrast(THEMES.light["ink-500"], THEMES.light[surface]), surface).toBeGreaterThanOrEqual(AA);
+    }
   });
 });
 
@@ -313,7 +315,7 @@ describe("fixed brand fills take fixed foregrounds", () => {
       "primary uses a theme-inverting ink token on a fixed amber fill — " +
         "in the Dark theme ink-900 is near-white, giving 1.87:1. Use a fixed " +
         "step such as accent-950.",
-    ).not.toMatch(/text-ink-\d+/);
+    ).not.toMatch(/(?<!disabled:)text-ink-\d+/);
 
     const fg = primary!.match(/text-(accent|brand)-(\d+)/);
     expect(fg, "primary should carry a fixed accent/brand foreground").toBeTruthy();

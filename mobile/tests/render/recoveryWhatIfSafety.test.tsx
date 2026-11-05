@@ -29,9 +29,9 @@ it('removes the prior result while a new assumption is loading and saves only th
   post.mockResolvedValueOnce(scenario(27000)).mockReturnValueOnce(pending);
   put.mockResolvedValue({ id: 1 });
   const screen = await render(tree());
-  await fireEvent.press(screen.getByRole('button', { name: 'Try −10% of your monthly expense basis' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Try −10% of your monthly costs' }));
   expect(await screen.findByRole('button', { name: 'Save as my plan' })).toBeTruthy();
-  await fireEvent.press(screen.getByRole('button', { name: 'Try −20% of your monthly expense basis' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Try −20% of your monthly costs' }));
   expect(screen.queryByRole('button', { name: 'Save as my plan' })).toBeNull();
   expect(put).not.toHaveBeenCalled();
   expect(post.mock.calls[0]?.[2].signal.aborted).toBe(true);
@@ -46,7 +46,7 @@ it('serializes same-frame plan saves and discards completion after the business 
   const pending = new Promise((resolve) => { finish = resolve; });
   post.mockResolvedValue(scenario(27000)); put.mockReturnValue(pending);
   const screen = await render(tree());
-  await fireEvent.press(screen.getByRole('button', { name: 'Try −10% of your monthly expense basis' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Try −10% of your monthly costs' }));
   const button = await screen.findByRole('button', { name: 'Save as my plan' });
   type Fiber = { return?: Fiber; memoizedProps?: { onPress?: () => void } };
   let fiber = (button as unknown as { unstable_fiber: Fiber }).unstable_fiber;

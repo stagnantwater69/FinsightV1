@@ -542,7 +542,7 @@ export function PaymentCalendarPage() {
                 <div
                   key={weekday}
                   role="columnheader"
-                  className="py-2 text-center text-[11px] font-bold uppercase tracking-[0.12em] text-ink-500"
+                  className="py-2 text-center text-xs font-bold uppercase tracking-[0.12em] text-ink-500"
                 >
                   {weekday}
                 </div>
@@ -672,7 +672,7 @@ function MonthSummary({
     <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
       {items.map((item) => (
         <div key={item.label} className="rounded-xl border border-paper-200 bg-paper-50 px-3 py-2">
-          <dt className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-500">
+          <dt className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
             <span aria-hidden className={`h-2 w-2 rounded-full ${item.dot}`} />
             {item.label}
           </dt>
@@ -727,7 +727,7 @@ function DayCell({
             {Number(day.slice(8))}
           </span>
           {closed ? (
-            <span className="hidden text-[10px] font-semibold uppercase tracking-wide text-ink-600 sm:inline">
+            <span className="hidden text-xs font-semibold uppercase tracking-wide text-ink-600 sm:inline">
               Closed
             </span>
           ) : null}
@@ -746,7 +746,7 @@ function DayCell({
           {entries.slice(0, CELL_ENTRY_LIMIT).map((entry) => (
             <span
               key={entry.key}
-              className={`flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+              className={`flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium ${
                 entry.overdue ? OVERDUE_CHIP : KIND_LOOK[entry.kind].chip
               }`}
             >
@@ -755,7 +755,7 @@ function DayCell({
             </span>
           ))}
           {hidden > 0 ? (
-            <span className="px-1 text-[11px] font-semibold text-ink-600">+{hidden} more</span>
+            <span className="px-1 text-xs font-semibold text-ink-600">+{hidden} more</span>
           ) : null}
         </span>
       </button>

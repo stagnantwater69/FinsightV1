@@ -673,9 +673,9 @@ describe.skipIf(!existsSync(WEB_SPENDING_IMPACT))("Spending Impact capability pa
       mobile: /availableFundsCalculation/,
     },
     {
-      capability: "path to edit starting funds",
-      web: /Edit starting funds/,
-      mobile: /Edit starting funds/,
+      capability: "path to edit the opening balance",
+      web: /Edit opening balance/,
+      mobile: /Edit opening balance/,
     },
     {
       capability: "thin-data explanation for an empty comparison window",

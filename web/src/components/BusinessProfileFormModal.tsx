@@ -58,6 +58,7 @@ export function BusinessProfileFormModal({
       ) : null}
       <BusinessProfileForm
         compact
+        profileId={profile?.id}
         submitLabel={profile ? "Save changes" : "Create business"}
         initialValues={
           profile

@@ -416,7 +416,7 @@ describe("ExpenseInsight resilience", () => {
 
     const warning = await screen.findByRole("alert");
     expect(warning).toHaveTextContent(
-      "Recorded balance couldn’t load. Using starting funds.",
+      "Recorded balance couldn’t load. Using the opening balance.",
     );
     expect(
       screen.getByRole("button", { name: "Retry recorded balance" }),
@@ -521,7 +521,6 @@ describe("ExpenseInsight resilience", () => {
     renderPage();
 
     expect(await screen.findByText("Total expenses")).toBeInTheDocument();
-    expect(screen.getByText("Finding details are temporarily unavailable.")).toBeInTheDocument();
     expect(screen.queryByText("No findings to review")).not.toBeInTheDocument();
   });
 
@@ -557,7 +556,7 @@ describe("ExpenseInsight resilience", () => {
     renderPage();
 
     expect(await screen.findByText("Emergency freezer repair")).toBeInTheDocument();
-    expect(await screen.findByText("Repair cost is higher than usual")).toBeInTheDocument();
+    expect(await screen.findByText(/1 open finding about spending patterns/)).toBeInTheDocument();
     expect(await screen.findAllByText("Warehouse rent")).not.toHaveLength(0);
 
     handlers["/records/flagged"] = failing();
@@ -570,10 +569,9 @@ describe("ExpenseInsight resilience", () => {
     });
 
     expect(await screen.findByText(/Showing recently loaded flagged record details/)).toBeInTheDocument();
-    expect(screen.getByText(/Showing recently loaded finding details/)).toBeInTheDocument();
     expect(screen.getByText(/Showing recently loaded recurring expense suggestions/)).toBeInTheDocument();
     expect(screen.getByText("Emergency freezer repair")).toBeInTheDocument();
-    expect(screen.getByText("Repair cost is higher than usual")).toBeInTheDocument();
+    expect(screen.getByText(/1 open finding about spending patterns/)).toBeInTheDocument();
     expect(screen.getAllByText("Warehouse rent")).not.toHaveLength(0);
     expect(screen.queryByText("Nothing flagged")).not.toBeInTheDocument();
     expect(screen.queryByText("No findings to review")).not.toBeInTheDocument();
@@ -719,9 +717,7 @@ describe("ExpenseInsight resilience", () => {
       expect(
         screen.queryByRole("heading", { name: "Unusual expenses" }),
       ).not.toBeInTheDocument();
-      expect(
-        screen.queryByRole("heading", { name: "Findings to review" }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/open findings? about spending patterns/)).not.toBeInTheDocument();
     });
 
     expect(screen.getByText("Summary")).toBeInTheDocument();
@@ -787,9 +783,7 @@ describe("ExpenseInsight resilience", () => {
 
     expect(await screen.findByText("Replacement compressor")).toBeInTheDocument();
     expect(screen.getByText("Rush inventory delivery")).toBeInTheDocument();
-    expect(
-      screen.getByText("Compressor cost is higher than usual"),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/1 open finding about spending patterns/)).toBeInTheDocument();
     // The summary now leads the page body; inside Review, flags and unusual
     // expenses share the two-column row.
     const review = document.getElementById("expense-review")!;
@@ -802,7 +796,7 @@ describe("ExpenseInsight resilience", () => {
     ).toBeInTheDocument();
   });
 
-  it("previews three findings and links to the full list instead of paging", async () => {
+  it("points open findings to the Needs review queue instead of listing them here", async () => {
     const findingsList = Array.from({ length: 7 }, (_, i) => ({
       id: 100 + i,
       expenseRecordId: 200 + i,
@@ -817,36 +811,12 @@ describe("ExpenseInsight resilience", () => {
     handlers["/insights/findings"] = ok({ items: findingsList, nextCursor: null });
     renderPage();
 
-    expect(await screen.findByText("Finding number 1")).toBeInTheDocument();
-    expect(screen.getByText("Finding number 3")).toBeInTheDocument();
-    expect(screen.queryByText("Finding number 4")).not.toBeInTheDocument();
-    expect(screen.queryByRole("navigation", { name: "Pagination" })).not.toBeInTheDocument();
-    expect(screen.getByText("Showing 3 of 7 findings")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /See all 7\s*findings/ })).toHaveAttribute(
+    expect(await screen.findByText(/7 open findings about spending patterns/)).toBeInTheDocument();
+    expect(screen.queryByText("Finding number 1")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Review in Needs review" })).toHaveAttribute(
       "href",
-      "/insights/expense-behavior/findings",
+      "/records/flagged",
     );
-  });
-
-  it("shows no See all link for three or fewer findings", async () => {
-    const findingsList = Array.from({ length: 3 }, (_, i) => ({
-      id: 100 + i,
-      expenseRecordId: 200 + i,
-      type: "AMOUNT_OUTLIER",
-      severity: "MEDIUM",
-      score: 2,
-      title: `Finding number ${i + 1}`,
-      reasons: ["Higher than usual"],
-      status: "OPEN",
-      detectedAt: "2026-01-20T00:00:00.000Z",
-    })) as AnomalyFinding[];
-    handlers["/insights/findings"] = ok({ items: findingsList, nextCursor: null });
-    renderPage();
-
-    expect(await screen.findByText("Finding number 3")).toBeInTheDocument();
-    expect(screen.queryByRole("navigation", { name: "Pagination" })).not.toBeInTheDocument();
-    expect(screen.queryByText(/findings$/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /See all/ })).not.toBeInTheDocument();
   });
 
   it("restores empty supplemental panels when a refresh fails", async () => {
@@ -855,9 +825,6 @@ describe("ExpenseInsight resilience", () => {
     await waitFor(() => {
       expect(
         screen.queryByRole("heading", { name: "Large expense flags" }),
-      ).not.toBeInTheDocument();
-      expect(
-        screen.queryByRole("heading", { name: "Findings to review" }),
       ).not.toBeInTheDocument();
     });
 
@@ -876,13 +843,7 @@ describe("ExpenseInsight resilience", () => {
       await screen.findByText(/Showing recently loaded flagged record details/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Showing recently loaded finding details/),
-    ).toBeInTheDocument();
-    expect(
       screen.getByRole("heading", { name: "Large expense flags" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: "Findings to review" }),
     ).toBeInTheDocument();
   });
 

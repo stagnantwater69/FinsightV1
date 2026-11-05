@@ -91,7 +91,7 @@ export function Register() {
       points={[
         "Create your owner account",
         "Add a business profile and set your available funds",
-        "Start recording expenses and sales reference",
+        "Start recording expenses and sales",
       ]}
       footnote="Your records stay organised per business profile."
       showBack

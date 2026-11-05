@@ -1723,7 +1723,53 @@ export async function listImportBatchesPage(
  * 500 here would take down a page that has a record perfectly capable of
  * rendering without this.
  */
-export async function previewImportBatch(userId: number, batchId: number): Promise<PreviewResult | null> {
+export interface BatchPreviewResult extends PreviewResult {
+  /** 1-based data row number of previewRows[0]; past 1 when the window was moved to the record's row. */
+  firstRowNumber?: number;
+  /** The rows that read as the asked-for record, 1-based. Empty when none could be found. */
+  matchedRowNumbers?: number[];
+  /** The same, for the record it may duplicate, when that came from this file too. */
+  otherRowNumbers?: number[];
+}
+
+/**
+ * The file rows a record came from. Records keep no row number, so a row
+ * matches on what the import copied from it: the description and the amount,
+ * narrowed by an ISO date cell when that still leaves more than one. Every
+ * survivor is returned, so a row that appears twice in the file shows twice.
+ */
+export function locateRecordRows(
+  records: Record<string, string>[],
+  record: { date: string; description: string; amount: number },
+): number[] {
+  const text = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
+  const money = (value: string) => {
+    // Sign and accounting brackets are dropped: an expense may be written as -240 or (240).
+    const cleaned = value.replace(/php|₱|,|\s|[()]/gi, "");
+    const n = Number(cleaned);
+    return cleaned !== "" && Number.isFinite(n) ? Math.abs(n) : null;
+  };
+  const description = text(record.description);
+  const matches: number[] = [];
+  records.forEach((row, index) => {
+    const cells = Object.values(row);
+    if (!cells.some((cell) => text(cell ?? "") === description)) return;
+    if (!cells.some((cell) => { const n = money(cell ?? ""); return n !== null && Math.abs(n - record.amount) < 0.005; })) return;
+    matches.push(index + 1);
+  });
+  if (matches.length < 2) return matches;
+  const sameDay = matches.filter((n) => Object.values(records[n - 1]!).some((cell) => (cell ?? "").trim() === record.date));
+  return sameDay.length > 0 ? sameDay : matches;
+}
+
+export async function previewImportBatch(
+  userId: number,
+  batchId: number,
+  /** An expense from this batch whose row should be found and brought into view. */
+  expenseId?: number,
+  /** The expense it may duplicate; its rows are marked only if they fall in the same window. */
+  otherExpenseId?: number,
+): Promise<BatchPreviewResult | null> {
   const batch = await prisma.cSVImportBatch.findFirst({
     where: {
       id: batchId,
@@ -1737,13 +1783,45 @@ export async function previewImportBatch(userId: number, batchId: number): Promi
   const buffer = await downloadCsvFile(batch.fileReference);
   if (!buffer) return null;
 
+  let prepared: ReturnType<typeof prepareCsvPreview>;
   try {
-    return previewCsv(buffer);
+    prepared = prepareCsvPreview(buffer);
   } catch {
     // A file that no longer parses (corrupted in storage, truncated) is the
     // same "nothing to show" outcome as a missing one, not a 500.
     return null;
   }
+  if (expenseId === undefined) return prepared.result;
+
+  // Scoped to this batch, which the query above already proved is the caller's.
+  const rowsOf = async (id: number | undefined) => {
+    if (id === undefined) return null;
+    const expense = await prisma.expenseRecord.findFirst({
+      where: { id, importBatchId: batchId },
+      select: { date: true, description: true, amount: true },
+    });
+    return expense
+      ? locateRecordRows(prepared.records, {
+          date: utcDateKey(expense.date),
+          description: expense.description,
+          amount: Number(expense.amount),
+        })
+      : null;
+  };
+  const matched = await rowsOf(expenseId);
+  if (!matched) return prepared.result;
+  const other = await rowsOf(otherExpenseId);
+  const first = matched[0];
+  // Keep the file's top in view unless the row is past it; then open a little above the row.
+  const start = first !== undefined && first > PREVIEW_ROW_LIMIT ? Math.max(1, first - 10) : 1;
+  const end = start + PREVIEW_ROW_LIMIT - 1;
+  return {
+    ...prepared.result,
+    previewRows: prepared.records.slice(start - 1, end),
+    firstRowNumber: start,
+    matchedRowNumbers: matched.filter((n) => n >= start && n <= end),
+    ...(other ? { otherRowNumbers: other.filter((n) => n >= start && n <= end && !matched.includes(n)) } : {}),
+  };
 }
 
 /**

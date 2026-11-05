@@ -301,6 +301,14 @@ export function AddExpenseModal({
             onBlur={() => markTouched("date")}
           />
         </Field>
+        <Field label="Amount" required error={shownErrors.amount}>
+          <MoneyInput
+            min={0.01}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value === "" ? "" : Number(e.target.value))}
+            onBlur={() => markTouched("amount")}
+          />
+        </Field>
         {!recovery.pending ? <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting || loading} /> : null}
         <Field label="Description" required error={shownErrors.description}>
           <TextInput
@@ -312,14 +320,6 @@ export function AddExpenseModal({
         </Field>
         <Field label="Vendor" optional>
           <TextInput value={vendor} onChange={(e) => setVendor(e.target.value)} />
-        </Field>
-        <Field label="Amount" required error={shownErrors.amount}>
-          <MoneyInput
-            min={0.01}
-            value={amount}
-            onChange={(e) => setAmount(e.target.value === "" ? "" : Number(e.target.value))}
-            onBlur={() => markTouched("amount")}
-          />
         </Field>
         {/*
           A condensed stand-in for the full-page RecordOriginPanel — this
@@ -340,6 +340,16 @@ export function AddExpenseModal({
               View the full breakdown
             </a>
           </Callout>
+        ) : origin?.kind === "csv_import" ? (
+          <Callout tone="info">
+            From a CSV import, {origin.title}, imported {new Date(origin.uploadDate).toLocaleDateString()}.{" "}
+            <a
+              href={`/records/expenses/${recordId}/edit`}
+              className="tap-inline font-medium underline-offset-2 hover:underline"
+            >
+              See the file rows
+            </a>
+          </Callout>
         ) : null}
         {amountDrifted ? (
           <Callout tone="warn">
@@ -352,6 +362,9 @@ export function AddExpenseModal({
         {error ? <FormError>{error}</FormError> : null}
         <Button type="submit" variant="primary" fullWidth disabled={confirmedSave.current || submitting || recovery.busy || recovery.corrupt || loading || (!editing && recovery.loading) || (!recovery.pending && futureDate !== null)}>
           {submitting ? "Saving…" : editing ? "Save changes" : recovery.pending?.confirmedRecord ? "Finish recovery" : recovery.pending ? "Retry original save" : "Save expense"}
+        </Button>
+        <Button type="button" variant="ghost" fullWidth onClick={handleClose} disabled={submitting}>
+          Cancel
         </Button>
       </form>
     </Modal>

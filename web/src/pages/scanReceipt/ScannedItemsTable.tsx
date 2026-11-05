@@ -118,7 +118,7 @@ export function ScannedItemsTable({
                   value is not something the engine knows.
                 */}
                 {scan.suspectItemId === item.id ? (
-                  <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-tint-accent px-1.5 py-0.5 text-[10px] font-medium text-tone-accent ring-1 ring-edge-accent align-middle">
+                  <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-tint-accent px-1.5 py-0.5 text-xs font-medium text-tone-accent ring-1 ring-edge-accent align-middle">
                     <span aria-hidden>⚠</span>
                     Check this one first
                   </span>
@@ -130,13 +130,13 @@ export function ScannedItemsTable({
                   from one read off text at the moment it is checked.
                 */}
                 {SHOW_AI_PHOTO_EXTRACTION_LABEL && item.extractedByVision ? (
-                  <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-tint-accent px-1.5 py-0.5 text-[10px] font-medium text-tone-accent ring-1 ring-edge-accent align-middle">
+                  <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-tint-accent px-1.5 py-0.5 text-xs font-medium text-tone-accent ring-1 ring-edge-accent align-middle">
                     <span aria-hidden>✦</span>
                     AI read this from the photo
                   </span>
                 ) : null}
                 {item.ownerEditedFields?.length ? (
-                  <span className="ml-1.5 inline-flex rounded-full bg-tint-brand px-1.5 py-0.5 text-[10px] font-medium text-tone-brand ring-1 ring-edge-brand align-middle">
+                  <span className="ml-1.5 inline-flex rounded-full bg-tint-brand px-1.5 py-0.5 text-xs font-medium text-tone-brand ring-1 ring-edge-brand align-middle">
                     Corrected by you
                   </span>
                 ) : null}
@@ -147,7 +147,7 @@ export function ScannedItemsTable({
                   paper for a number.
                 */}
                 {item.evidence ? (
-                  <span className="mt-0.5 block text-[10px] leading-relaxed text-ink-500">
+                  <span className="mt-0.5 block text-xs leading-relaxed text-ink-500">
                     <EvidenceNote evidence={item.evidence} />
                   </span>
                 ) : null}
@@ -232,7 +232,7 @@ export function ScannedItemsTable({
                   visionAssisted: item.extractedByVision,
                 }) !== "clear" && typeof item.amountConfidence === "number" ? (
                   <span
-                    className="mt-0.5 block text-[10px] font-medium text-tone-accent"
+                    className="mt-0.5 block text-xs font-medium text-tone-accent"
                     title={`FinSight's own confidence reading this amount: ${item.amountConfidence}%`}
                   >
                     {BAND_COPY[
@@ -262,7 +262,7 @@ export function ScannedItemsTable({
                   band above uses the same tone).
                 */}
                 {categoryReviewNote(item) ? (
-                  <p className="mt-1.5 text-[11px] leading-relaxed text-tone-accent">
+                  <p className="mt-1.5 text-xs leading-relaxed text-tone-accent">
                     {categoryReviewNote(item)}
                   </p>
                 ) : null}
@@ -278,7 +278,7 @@ export function ScannedItemsTable({
                   is not FinSight's call to make.
                 */}
                 {suggestedNewCategoryFor(item) ? (
-                  <p className="mt-1.5 text-[11px] leading-relaxed text-ink-500">
+                  <p className="mt-1.5 text-xs leading-relaxed text-ink-500">
                     <span aria-hidden className="text-tone-accent">
                       ✦
                     </span>{" "}

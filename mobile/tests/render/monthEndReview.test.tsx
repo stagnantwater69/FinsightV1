@@ -101,7 +101,7 @@ describe('Month-end ring values', () => {
     await q.findByRole('progressbar');
     await tapChart(q, 'Month-end sales coverage');
     const name = chartReadout(q, 'Month-end sales coverage').props.accessibilityLabel;
-    expect(name).toContain('Expense basis: PHP 50,000.25'); expect(name).toContain('Shortfall: PHP 3,800.75');
+    expect(name).toContain('Monthly costs: PHP 50,000.25'); expect(name).toContain('Shortfall: PHP 3,800.75');
     expect(name).toContain('not a measure of profit');
     await fireEvent.press(q.getByRole('button', { name: 'Clear Month-end sales coverage value' }));
     await hoverChart(q, 'Month-end sales coverage', 150);
@@ -167,17 +167,17 @@ describe('MonthEndReviewScreen — reviewable', () => {
     expect(progress.props.accessibilityValue.now).toBe(100);
     expect(progress.props.accessibilityValue.text).toContain('127.3%');
     expect(queries.getByText('PHP 13,650.00')).toBeTruthy();
-    expect(queries.getByText('Above expense basis')).toBeTruthy();
+    expect(queries.getByText('Above monthly costs')).toBeTruthy();
     expect(queries.queryByRole('header', { name: /^profit$/i })).toBeNull();
   });
 
-  it('explains an exact zero difference as a covered expense basis', async () => {
+  it('explains an exact zero difference as covered monthly costs', async () => {
     apiGet.mockResolvedValue({ ...REVIEWABLE, coveragePercent: 100, surplusOrShortfall: 0 });
     const queries = await renderScreen();
-    expect(await queries.findByText('Expense basis covered')).toBeTruthy();
+    expect(await queries.findByText('Monthly costs covered')).toBeTruthy();
     expect(queries.getByText('Covered')).toBeTruthy();
     expect(queries.queryByText('still to cover')).toBeNull();
-    expect(queries.queryByText('Above expense basis')).toBeNull();
+    expect(queries.queryByText('Above monthly costs')).toBeNull();
   });
 
   it('keeps absent open days and a missing final rate explicit without inventing sales', async () => {
@@ -264,11 +264,11 @@ describe('MonthEndReviewScreen — reviewable', () => {
     expect(queries.getByText(/12 eligible expense records from June 2026/i)).toBeTruthy();
   });
 
-  it('frames a surplus as an amount above the expense basis', async () => {
+  it('frames a surplus as an amount above monthly costs', async () => {
     apiGet.mockResolvedValue({ ...REVIEWABLE, surplusOrShortfall: 1500 });
     const queries = await renderScreen();
     const line = await queries.findByText(/PHP 1,500(?:\.00)?$/);
-    expect(queries.getByText('Above expense basis')).toBeTruthy();
+    expect(queries.getByText('Above monthly costs')).toBeTruthy();
     const text = [line.props.children].flat().join('');
     expect(text).not.toMatch(/-/);
   });

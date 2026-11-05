@@ -44,7 +44,7 @@ export function Notifications() {
   }, [visible]);
 
   return (
-    <div className="max-w-5xl">
+    <div>
       <PageHead
         title="Notifications"
         subtitle={
