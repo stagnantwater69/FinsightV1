@@ -71,10 +71,21 @@ for (const width of [320, 1440]) for (const theme of ["classic", "light", "dark"
     expect(importQueries.some((query) => query.search === "March" && !query.cursor)).toBe(true);
     await target(page.getByRole("button", { name: "Next page", exact: true }), "pagination next", measurements);
     if (width >= 640) await target(page.getByRole("button", { name: "Page 2", exact: true }), "pagination number", measurements);
-    const edit = page.getByRole("button", { name: "Edit Synthetic expense 1", exact: true }).filter({ visible: true });
-    await target(edit, "record edit", measurements);
-    await target(page.getByRole("button", { name: "Duplicate Synthetic expense 1", exact: true }).filter({ visible: true }), "record duplicate", measurements);
-    await target(page.getByRole("button", { name: "Delete Synthetic expense 1", exact: true }).filter({ visible: true }), "record delete", measurements);
+    if (width >= 1024) {
+      await target(page.getByRole("button", { name: "Edit Synthetic expense 1", exact: true }).filter({ visible: true }), "record edit", measurements);
+      await target(page.getByRole("button", { name: "Duplicate Synthetic expense 1", exact: true }).filter({ visible: true }), "record duplicate", measurements);
+      await target(page.getByRole("button", { name: "Delete Synthetic expense 1", exact: true }).filter({ visible: true }), "record delete", measurements);
+    } else {
+      // Below lg the rows are cards, and a card keeps Edit, Duplicate and Delete in its ⋯ menu.
+      const more = page.getByRole("button", { name: "Actions for Synthetic expense 1", exact: true }).filter({ visible: true });
+      await target(more, "record actions", measurements);
+      await more.click();
+      const menu = more.locator("xpath=following-sibling::ul");
+      for (const label of ["Edit", "Duplicate", "Delete"]) {
+        await target(menu.getByRole("button", { name: label, exact: true }), `record ${label.toLowerCase()}`, measurements);
+      }
+      await page.keyboard.press("Escape"); await expect(menu).toHaveCount(0);
+    }
     const rowBoxes = measurements.filter((item) => (item as { name: string }).name.startsWith("record ")) as { x: number; y: number; width: number; height: number }[];
     for (let first = 0; first < rowBoxes.length; first++) for (let second = first + 1; second < rowBoxes.length; second++) {
       const a = rowBoxes[first]!; const b = rowBoxes[second]!;

@@ -206,7 +206,13 @@ test("app shell, account menu, records table and undo toast", async ({ page }, t
       await expect(accountMenu).toHaveCount(0);
 
       // The second row: at 1024px and up the table header covers the first one (asserted above).
-      await page.getByRole("button", { name: "Delete Cooking oil", exact: true }).filter({ visible: true }).click();
+      if (width >= 1024) {
+        await page.getByRole("button", { name: "Delete Cooking oil", exact: true }).filter({ visible: true }).click();
+      } else {
+        // Below lg the rows are cards, and a card keeps Delete in its ⋯ menu.
+        await page.getByRole("button", { name: "Actions for Cooking oil", exact: true }).filter({ visible: true }).click();
+        await page.getByRole("button", { name: "Delete", exact: true }).filter({ visible: true }).click();
+      }
       await page.getByRole("dialog", { name: 'Delete "Cooking oil"?' }).getByRole("button", { name: "Delete record" }).click();
       const undo = page.getByRole("button", { name: "Undo", exact: true });
       await expect(undo).toBeVisible();
