@@ -1,9 +1,9 @@
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
-import { CircleCheck, Store, Wallet, type LucideIcon } from "lucide-react";
+import { useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { Pencil, Store, Wallet, type LucideIcon } from "lucide-react";
 import type { BusinessProfileInput } from "../lib/types";
 import { Button } from "./Button";
 import { FormError } from "./Field";
-import { BusinessBasicsFields, BusinessNumbersFields } from "./BusinessFields";
+import { BusinessBasicsFields, BusinessNumbersFields, DetailRow } from "./BusinessFields";
 import { Card } from "./ui";
 import {
   EMPTY_DRAFT,
@@ -16,6 +16,8 @@ import {
   type BusinessProfileDraft,
   type BusinessTextField,
 } from "../lib/businessProfileDraft";
+
+type SettingsSection = "identity" | "figures";
 
 interface Props {
   initialValues?: BusinessProfileInput;
@@ -122,16 +124,37 @@ export function BusinessProfileForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [resetVersion, setResetVersion] = useState(0);
+  // Settings only: which card is open for editing; the rest show saved values.
+  const [editing, setEditing] = useState<SettingsSection | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const identityEditRef = useRef<HTMLButtonElement>(null);
+  const figuresEditRef = useRef<HTMLButtonElement>(null);
+
+  function beginEditing(section: SettingsSection) {
+    setEditing(section);
+    requestAnimationFrame(() =>
+      document.getElementById(section === "identity" ? "name" : "availableFunds")?.focus(),
+    );
+  }
+
+  function finishEditing() {
+    const button = editing === "identity" ? identityEditRef : figuresEditRef;
+    setEditing(null);
+    requestAnimationFrame(() => button.current?.focus());
+  }
+
+  function cancelOnEscape(e: KeyboardEvent) {
+    if (e.key !== "Escape" || submitting) return;
+    e.preventDefault();
+    handleCancel();
+  }
 
   function update(key: BusinessTextField, value: string) {
     const next = applyFieldUpdate(draft, key, value);
     const nextDirty = !sameDraft(next, baseline);
     setDraft(next);
     setDirty(nextDirty);
-    setSaved(false);
     onDirtyChange?.(nextDirty);
     // Clearing on edit rather than revalidating on every keystroke: an error
     // that disappears the moment you start fixing it is encouraging, whereas
@@ -159,7 +182,7 @@ export function BusinessProfileForm({
       await onSubmit(toBusinessProfileInput(draft));
       setBaseline(draft);
       setDirty(false);
-      setSaved(true);
+      if (editing) finishEditing();
       onDirtyChange?.(false);
     } catch (err) {
       setError(
@@ -177,31 +200,64 @@ export function BusinessProfileForm({
     setFieldErrors({});
     setError(null);
     setDirty(false);
-    setSaved(false);
     setResetVersion((version) => version + 1);
+    if (editing) finishEditing();
     onDirtyChange?.(false);
     onCancel?.();
   }
 
   if (settingsAside) {
+    const identityEditing = editing === "identity";
+    const figuresEditing = editing === "figures";
+    const actions = (
+      <div className="mt-6 flex flex-col-reverse gap-3 border-t border-paper-200 pt-5 sm:flex-row sm:items-center sm:justify-end">
+        <p className="text-sm text-ink-500 sm:mr-auto" aria-live="polite">
+          {dirty ? "Unsaved changes" : ""}
+        </p>
+        <Button type="button" variant="secondary" disabled={submitting} onClick={handleCancel} className="w-full sm:w-auto sm:min-w-28">
+          Cancel
+        </Button>
+        <Button type="submit" variant="primary" disabled={submitting || !dirty} className="w-full sm:w-auto sm:min-w-36">
+          {submitting ? "Saving…" : submitLabel}
+        </Button>
+      </div>
+    );
+    const editButton = (section: SettingsSection, label: string) =>
+      editing === section ? null : (
+        <Button
+          ref={section === "identity" ? identityEditRef : figuresEditRef}
+          type="button"
+          variant="secondary"
+          size="sm"
+          // One card at a time, so Save never sends half-finished edits from the other card.
+          disabled={editing !== null}
+          aria-label={label}
+          onClick={() => beginEditing(section)}
+        >
+          <Pencil size={16} aria-hidden />
+          Edit
+        </Button>
+      );
+
     return (
       <>
-        <form ref={formRef} onSubmit={handleSubmit} noValidate>
-          {/* Two cards, side by side once there is room for both: identity and
-              money are edited for different reasons, so they read as separate
-              groups. The logo sits beside the fields only while the identity
-              card spans the full width; in the half-width column it stacks. */}
-          <div className="grid gap-4 xl:grid-cols-2">
-            <Card className="p-5 shadow-none sm:p-7">
-              <section aria-labelledby="business-identity-heading">
-                <SettingsSectionHeading
-                  id="business-identity-heading"
-                  icon={Store}
-                  title="Business identity"
-                  description="The name, type, and logo for this business."
-                />
-                <div className={`mt-6 grid gap-6 ${logo ? "lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)] lg:gap-8 xl:grid-cols-1 xl:gap-6" : ""}`}>
-                  {logo ? <div className="min-w-0 rounded-xl bg-paper-50 p-4 ring-1 ring-paper-200">{logo}</div> : null}
+        {/* Two cards, side by side once there is room for both: identity and
+            money are edited for different reasons, so they read as separate
+            groups. Each shows saved values until its own Edit is pressed, the
+            same view-then-edit pattern as My profile. */}
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Card className="p-5 shadow-none sm:p-7">
+            <section aria-labelledby="business-identity-heading">
+              <SettingsSectionHeading
+                id="business-identity-heading"
+                icon={Store}
+                title="Business identity"
+                description="Name, type, and logo."
+                action={editButton("identity", "Edit business identity")}
+              />
+              {logo ? <div className="mt-6 min-w-0 rounded-xl bg-paper-50 p-4 ring-1 ring-paper-200">{logo}</div> : null}
+              {identityEditing ? (
+                <form ref={formRef} onSubmit={handleSubmit} onKeyDown={cancelOnEscape} noValidate className="mt-6">
                   <div className="min-w-0 space-y-5">
                     <BusinessBasicsFields
                       key={resetVersion}
@@ -212,19 +268,29 @@ export function BusinessProfileForm({
                       settings
                     />
                   </div>
-                </div>
-              </section>
-            </Card>
+                  {error ? <div className="mt-4"><FormError>{error}</FormError></div> : null}
+                  {actions}
+                </form>
+              ) : (
+                <dl className="mt-2">
+                  <DetailRow label="Business name">{draft.name}</DetailRow>
+                  <DetailRow label="Business type">{draft.type}</DetailRow>
+                </dl>
+              )}
+            </section>
+          </Card>
 
-            <Card className="p-5 shadow-none sm:p-7">
-              <section aria-labelledby="starting-figures-heading">
-                <SettingsSectionHeading
-                  id="starting-figures-heading"
-                  icon={Wallet}
-                  title="Starting figures"
-                  description="Your balance and estimates. Calculated figures from confirmed records appear below."
-                />
-                <div className="mt-6 space-y-5">
+          <Card className="p-5 shadow-none sm:p-7">
+            <section aria-labelledby="starting-figures-heading">
+              <SettingsSectionHeading
+                id="starting-figures-heading"
+                icon={Wallet}
+                title="Starting figures"
+                description="Your balance and monthly estimates."
+                action={editButton("figures", "Edit starting figures")}
+              />
+              {figuresEditing ? (
+                <form ref={formRef} onSubmit={handleSubmit} onKeyDown={cancelOnEscape} noValidate className="mt-6 space-y-5">
                   <BusinessNumbersFields
                     draft={draft}
                     errors={fieldErrors}
@@ -233,50 +299,24 @@ export function BusinessProfileForm({
                     scheduleProfileId={profileId}
                     settings
                   />
-                </div>
-              </section>
-            </Card>
-          </div>
-
-          {error ? <div className="mt-4"><FormError>{error}</FormError></div> : null}
-
-          <div className="z-20 mt-4 flex flex-col gap-3 rounded-xl border border-paper-200 bg-paper px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <p
-              className={`flex min-h-6 items-center gap-2 text-sm ${dirty ? "text-tone-accent" : "text-ink-500"}`}
-              aria-live="polite"
-            >
-              {dirty ? (
-                <span aria-hidden className="size-2 shrink-0 rounded-full bg-accent-500" />
+                  {error ? <FormError>{error}</FormError> : null}
+                  {actions}
+                </form>
               ) : (
-                <CircleCheck aria-hidden className="size-4 shrink-0 text-tone-brand" />
+                <div className="mt-2 space-y-5">
+                  <BusinessNumbersFields
+                    draft={draft}
+                    errors={fieldErrors}
+                    update={update}
+                    scheduleProfileId={profileId}
+                    settings
+                    readOnly
+                  />
+                </div>
               )}
-              {dirty
-                ? "You have unsaved changes"
-                : saved
-                  ? "Changes saved"
-                  : "Everything is up to date"}
-            </p>
-            <div className="flex flex-col-reverse gap-3 sm:flex-row">
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={submitting || !dirty}
-                onClick={handleCancel}
-                className="w-full sm:min-w-28"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                disabled={submitting || !dirty}
-                className="w-full sm:min-w-36"
-              >
-                {submitting ? "Saving…" : submitLabel}
-              </Button>
-            </div>
-          </div>
-        </form>
+            </section>
+          </Card>
+        </div>
 
         <div className="mt-8 min-w-0 space-y-6">{settingsAside}</div>
       </>
@@ -370,18 +410,20 @@ function SettingsSectionHeading({
   icon: Icon,
   title,
   description,
+  action,
 }: {
   id: string;
   icon: LucideIcon;
   title: string;
   description: string;
+  action?: ReactNode;
 }) {
   return (
     <div className="flex min-w-0 items-start gap-3 border-b border-paper-200 pb-5">
       <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
         <Icon className="h-5 w-5" />
       </span>
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
       <h2 id={id} className="font-display text-lg font-semibold text-ink-900">
         {title}
       </h2>
@@ -389,6 +431,7 @@ function SettingsSectionHeading({
         {description}
       </p>
       </div>
+      {action ? <div className="shrink-0">{action}</div> : null}
     </div>
   );
 }

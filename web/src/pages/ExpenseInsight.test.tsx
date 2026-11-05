@@ -144,6 +144,7 @@ function financialPosition(
       recordsCompleteThroughMonth: null,
       recordsCompleteThroughConfirmedAt: null,
     },
+    previousMonth: { month: "2026-09", recordedAmount: 0, recordCount: 0, awaitingReviewCount: 0 },
   };
 }
 

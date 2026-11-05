@@ -131,10 +131,19 @@ export interface MonthlyExpenseBasis {
   recordsCompleteThroughConfirmedAt: string | null;
 }
 
+/** The month before this one, so the owner can judge it before marking it complete. */
+export interface PreviousMonthExpenses {
+  month: string;
+  recordedAmount: number;
+  recordCount: number;
+  awaitingReviewCount: number;
+}
+
 export interface FinancialPosition {
   asOfDate: string;
   availableFunds: AvailableFundsCalculation;
   monthlyExpenseBasis: MonthlyExpenseBasis;
+  previousMonth: PreviousMonthExpenses;
 }
 
 /**

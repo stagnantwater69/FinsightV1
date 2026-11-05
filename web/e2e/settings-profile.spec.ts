@@ -84,37 +84,40 @@ test("business profile exposes dirty, cancel, and saved states", async ({
   await expect(
     page.getByRole("heading", { name: "Recorded financial position" }),
   ).toBeVisible();
-  await expect(page.getByText("Used to calculate Recovery Target for this business.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Used for your Recovery Target.", { exact: true })).toBeVisible();
   await expect(page.locator("button", { hasText: "Change logo" })).toBeVisible();
   await expect(page.getByRole("link", { name: /Manage schedule/ })).toBeVisible();
   await expect(
     page.getByRole("link", { name: /Manage notifications/ }),
   ).toBeVisible();
 
+  const editIdentity = page.getByRole("button", { name: "Edit business identity" });
   const businessName = page.getByLabel("Business name");
   const cancel = page.getByRole("button", { name: "Cancel", exact: true });
   const save = page.getByRole("button", { name: "Save changes" });
-  await expect(cancel).toBeDisabled();
-  await expect(save).toBeDisabled();
-  await expect(page.getByText("Everything is up to date")).toBeVisible();
+  await expect(businessName).toHaveCount(0);
+  await expect(save).toHaveCount(0);
 
+  await editIdentity.click();
+  await expect(businessName).toBeFocused();
+  await expect(save).toBeDisabled();
+  await capture(page, "business-editing-identity");
   await businessName.fill("Ana's Corner Store");
-  await expect(page.getByText("You have unsaved changes")).toBeVisible();
-  await expect(cancel).toBeEnabled();
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
   await expect(save).toBeEnabled();
 
   await cancel.click();
-  await expect(businessName).toHaveValue(TEST_BUSINESS_PROFILE.name);
-  await expect(page.getByText("Everything is up to date")).toBeVisible();
+  await expect(businessName).toHaveCount(0);
+  await expect(page.getByText(TEST_BUSINESS_PROFILE.name, { exact: true }).first()).toBeVisible();
   expect(patches).toHaveLength(0);
 
+  await editIdentity.click();
   await businessName.fill("Ana's Corner Store");
   await save.click();
-  await expect(page.getByText("Changes saved")).toBeVisible();
   await expect(page.getByText("Business profile updated")).toBeVisible();
+  await expect(businessName).toHaveCount(0);
   expect(patches).toHaveLength(1);
   expect(patches[0]).toMatchObject({ name: "Ana's Corner Store" });
-  await expect(save).toBeDisabled();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -131,7 +134,7 @@ test("business and personal profile layouts reflow in light and dark themes", as
           page.locator("button", { hasText: "Change logo" }),
         ).toBeVisible();
         await expect(
-          page.getByRole("button", { name: "Save changes" }),
+          page.getByRole("button", { name: "Edit starting figures" }),
         ).toBeVisible();
       },
     },

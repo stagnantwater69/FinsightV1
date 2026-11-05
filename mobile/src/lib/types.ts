@@ -144,11 +144,20 @@ export interface MonthlyExpenseBasis {
   eligibleRecordCount: number;
 }
 
+/** The month before this one, so the owner can judge it before marking it complete. */
+export interface PreviousMonthExpenses {
+  month: string;
+  recordedAmount: number;
+  recordCount: number;
+  awaitingReviewCount: number;
+}
+
 /** Server-owned financial position derived from starting values and confirmed records. */
 export interface FinancialPosition {
   asOfDate: string;
   availableFunds: AvailableFundsCalculation;
   monthlyExpenseBasis: MonthlyExpenseBasis;
+  previousMonth: PreviousMonthExpenses;
 }
 
 /**
