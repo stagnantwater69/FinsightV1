@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BusinessProfiles } from "./BusinessProfiles";
@@ -62,6 +62,12 @@ const financialPosition: FinancialPosition = {
     recordsCompleteThroughMonth: null,
     recordsCompleteThroughConfirmedAt: null,
   },
+  previousMonth: {
+    month: "2026-09",
+    recordedAmount: 154_000,
+    recordCount: 18,
+    awaitingReviewCount: 0,
+  },
 };
 
 let businessContext: {
@@ -85,6 +91,10 @@ vi.mock("../context/BusinessProfileContext", () => ({
 vi.mock("../components/Toast", () => ({
   useToast: () => toast,
 }));
+
+function editCard(name: "Edit business identity" | "Edit starting figures") {
+  fireEvent.click(screen.getByRole("button", { name }));
+}
 
 function renderPage() {
   return render(
@@ -122,8 +132,13 @@ describe("BusinessProfiles settings", () => {
   it("shows the selected business values and scopes management links to it", () => {
     renderPage();
 
-    expect(screen.getByLabelText(/^Business name/)).toHaveValue("Harbor Cafe");
-    expect(screen.getByLabelText(/^Business type/)).toHaveValue("Food business");
+    // Saved values read as text until a card's Edit is pressed.
+    expect(screen.getByText("Harbor Cafe")).toBeVisible();
+    expect(screen.getByText("Food business")).toBeVisible();
+    expect(screen.queryByLabelText(/^Business name/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+
+    editCard("Edit starting figures");
     expect(screen.getByLabelText(/^Opening balance/)).toHaveValue(60_000);
     expect(screen.getByLabelText(/^Starting monthly expense estimate/)).toHaveValue(200_000);
     expect(screen.getByLabelText(/^Operating days per month/)).toHaveValue(26);
@@ -136,26 +151,24 @@ describe("BusinessProfiles settings", () => {
       screen.getByRole("link", { name: /manage notifications/i }),
     ).toHaveAttribute("href", "/business-profiles/41/recovery-notifications");
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
-    expect(screen.getByText("Everything is up to date")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Edit business identity" })).toBeDisabled();
   });
 
   it("saves the edited values against the selected profile id", async () => {
     const user = userEvent.setup();
     renderPage();
 
-    fireEvent.change(screen.getByLabelText(/^Business name/), {
-      target: { value: "Harbor Cafe and Bakery" },
-    });
+    editCard("Edit starting figures");
     fireEvent.change(screen.getByLabelText(/^Opening balance/), {
       target: { value: "72500" },
     });
 
-    expect(screen.getByText("You have unsaved changes")).toBeVisible();
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => expect(updateProfile).toHaveBeenCalledTimes(1));
     expect(updateProfile).toHaveBeenCalledWith(41, {
-      name: "Harbor Cafe and Bakery",
+      name: "Harbor Cafe",
       type: "Food business",
       availableFunds: 72_500,
       expectedMonthlyExpenses: 200_000,
@@ -163,8 +176,8 @@ describe("BusinessProfiles settings", () => {
       largeExpenseThresholdPercent: 20,
     });
     expect(toast).toHaveBeenCalledWith("Business profile updated");
-    expect(screen.getByText("Changes saved")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(within(screen.getByRole("region", { name: "Starting figures" })).getByText("PHP 72,500")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
   });
 
   it("shows the calculated funds and the active monthly-expense source", async () => {
@@ -172,9 +185,9 @@ describe("BusinessProfiles settings", () => {
 
     expect(await screen.findByText("Recorded available funds")).toBeVisible();
     expect(screen.getByText("PHP 72,500")).toBeVisible();
-    expect(
-      screen.getByText(/Using your starting estimate because the previous month is not confirmed complete/),
-    ).toBeVisible();
+    expect(screen.getByText("Your starting estimate.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Is September 2026 complete?" })).toBeVisible();
+    expect(screen.getByText("PHP 200,000 → PHP 154,000")).toBeVisible();
     expect(getFinancialPosition).toHaveBeenCalledWith(41, expect.any(AbortSignal));
   });
 
@@ -237,15 +250,11 @@ describe("BusinessProfiles settings", () => {
     });
     renderPage();
 
-    fireEvent.change(
-      await screen.findByLabelText("Expense records complete through"),
-      { target: { value: "2026-09" } },
-    );
-    await user.click(screen.getByRole("button", { name: "Save complete month" }));
+    await user.click(await screen.findByRole("button", { name: "Mark September 2026 complete" }));
 
     expect(
       await screen.findByText(
-        /From 18 confirmed expense records in September 2026/,
+        /Actual costs for September 2026, from 18 reviewed expenses/,
       ),
     ).toBeVisible();
     expect(getFinancialPosition).toHaveBeenCalledTimes(1);
@@ -268,17 +277,16 @@ describe("BusinessProfiles settings", () => {
     setExpenseRecordsCompleteThroughMonth.mockResolvedValue(septemberPosition);
     renderPage();
 
-    const month = await screen.findByLabelText("Expense records complete through");
-    fireEvent.change(month, { target: { value: "2026-09" } });
-    await user.click(screen.getByRole("button", { name: "Save complete month" }));
+    await user.click(await screen.findByRole("button", { name: "Mark September 2026 complete" }));
 
     await waitFor(() =>
       expect(setExpenseRecordsCompleteThroughMonth).toHaveBeenCalledWith(41, "2026-09"),
     );
-    expect(screen.getByText(/From 18 confirmed expense records in September 2026/)).toBeVisible();
+    expect(screen.getByText(/Actual costs for September 2026, from 18 reviewed expenses/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "September 2026 is marked complete" })).toBeVisible();
 
     setExpenseRecordsCompleteThroughMonth.mockResolvedValue(financialPosition);
-    await user.click(screen.getByRole("button", { name: "Clear confirmation" }));
+    await user.click(screen.getByRole("button", { name: "Undo" }));
     await waitFor(() =>
       expect(setExpenseRecordsCompleteThroughMonth).toHaveBeenLastCalledWith(41, null),
     );
@@ -288,57 +296,70 @@ describe("BusinessProfiles settings", () => {
     const user = userEvent.setup();
     renderPage();
 
+    editCard("Edit business identity");
     fireEvent.change(screen.getByLabelText(/^Business name/), {
       target: { value: "Temporary name" },
     });
     await user.selectOptions(screen.getByLabelText(/^Business type/), "Retail store");
 
-    expect(screen.getByText("You have unsaved changes")).toBeVisible();
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(screen.getByLabelText(/^Business name/)).toHaveValue("Harbor Cafe");
-    expect(screen.getByLabelText(/^Business type/)).toHaveValue("Food business");
-    expect(screen.getByText("Everything is up to date")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(screen.getByText("Harbor Cafe")).toBeVisible();
+    expect(screen.getByText("Food business")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Edit business identity" })).toHaveFocus());
     expect(updateProfile).not.toHaveBeenCalled();
   });
 
-  it("saves record coverage with Enter without submitting unsaved profile edits", async () => {
+  it("marks last month complete without submitting unsaved profile edits", async () => {
     const user = userEvent.setup();
     renderPage();
 
+    editCard("Edit business identity");
     fireEvent.change(screen.getByLabelText(/^Business name/), {
       target: { value: "Unsaved cafe name" },
     });
-    const month = await screen.findByLabelText("Expense records complete through");
-    fireEvent.change(month, { target: { value: "2026-09" } });
-    month.focus();
-    await user.keyboard("{Enter}");
+    await user.click(await screen.findByRole("button", { name: "Mark September 2026 complete" }));
 
     await waitFor(() =>
       expect(setExpenseRecordsCompleteThroughMonth).toHaveBeenCalledWith(41, "2026-09"),
     );
     expect(updateProfile).not.toHaveBeenCalled();
     expect(screen.getByLabelText(/^Business name/)).toHaveValue("Unsaved cafe name");
-    expect(screen.getByText("You have unsaved changes")).toBeVisible();
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
   });
 
-  it("rejects the current month for record coverage without writing or saving the profile", async () => {
-    const user = userEvent.setup();
+  it("will not mark last month complete while its expenses await review", async () => {
+    getFinancialPosition.mockResolvedValue({
+      ...financialPosition,
+      previousMonth: { ...financialPosition.previousMonth, awaitingReviewCount: 2 },
+    });
     renderPage();
 
-    const month = await screen.findByLabelText("Expense records complete through");
-    fireEvent.change(month, { target: { value: "2026-10" } });
-    expect(month).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "Save complete month" })).toBeDisabled();
-    month.focus();
-    await user.keyboard("{Enter}");
-
+    expect(await screen.findByText(/2 September 2026 expenses still need review/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Review now" })).toHaveAttribute("href", "/records/flagged");
+    expect(screen.getByRole("button", { name: "Mark September 2026 complete" })).toBeDisabled();
     expect(setExpenseRecordsCompleteThroughMonth).not.toHaveBeenCalled();
-    expect(updateProfile).not.toHaveBeenCalled();
+  });
+
+  it("treats a mark on an older month as not covering last month", async () => {
+    getFinancialPosition.mockResolvedValue({
+      ...financialPosition,
+      monthlyExpenseBasis: {
+        ...financialPosition.monthlyExpenseBasis,
+        recordsCompleteThroughMonth: "2026-07",
+        recordsCompleteThroughConfirmedAt: "2026-08-01T03:00:00.000Z",
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Is September 2026 complete?" })).toBeVisible();
+    expect(screen.getByText("Last marked complete: July 2026.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Mark September 2026 complete" })).toBeEnabled();
   });
 
   it("retries a failed financial-position load without losing profile edits", async () => {
@@ -349,6 +370,7 @@ describe("BusinessProfiles settings", () => {
     renderPage();
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Financial position unavailable");
+    editCard("Edit business identity");
     fireEvent.change(screen.getByLabelText(/^Business name/), {
       target: { value: "Unsaved cafe name" },
     });
@@ -357,13 +379,14 @@ describe("BusinessProfiles settings", () => {
     expect(await screen.findByText("PHP 72,500")).toBeVisible();
     expect(getFinancialPosition).toHaveBeenCalledTimes(2);
     expect(screen.getByLabelText(/^Business name/)).toHaveValue("Unsaved cafe name");
-    expect(screen.getByText("You have unsaved changes")).toBeVisible();
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
     expect(updateProfile).not.toHaveBeenCalled();
   });
 
   it("uploads the logo immediately without committing or clearing unsaved profile edits", async () => {
     const user = userEvent.setup();
     const { container } = renderPage();
+    editCard("Edit business identity");
     fireEvent.change(screen.getByLabelText(/^Business name/), {
       target: { value: "Unsaved cafe name" },
     });
@@ -376,7 +399,7 @@ describe("BusinessProfiles settings", () => {
     expect(toast).toHaveBeenCalledWith("Logo updated");
     expect(updateProfile).not.toHaveBeenCalled();
     expect(screen.getByLabelText(/^Business name/)).toHaveValue("Unsaved cafe name");
-    expect(screen.getByText("You have unsaved changes")).toBeVisible();
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
   });
 
   it("aborts the previous business financial load and ignores its late response after a switch", async () => {
@@ -410,7 +433,7 @@ describe("BusinessProfiles settings", () => {
     expect(await screen.findByText("PHP 12,345")).toBeVisible();
     await act(async () => resolvePrevious(financialPosition));
     expect(screen.queryByText("PHP 72,500")).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/^Business name/)).toHaveValue("Other business");
+    expect(screen.getByText("Other business")).toBeVisible();
     expect(getFinancialPosition).toHaveBeenLastCalledWith(99, expect.any(AbortSignal));
   });
 
@@ -418,6 +441,7 @@ describe("BusinessProfiles settings", () => {
     const user = userEvent.setup();
     renderPage();
 
+    editCard("Edit business identity");
     fireEvent.change(screen.getByLabelText(/^Business name/), {
       target: { value: "" },
     });
@@ -438,9 +462,10 @@ describe("BusinessProfiles settings", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderPage();
 
+    editCard("Edit business identity");
     await user.clear(screen.getByLabelText(/^Business name/));
     await user.type(screen.getByLabelText(/^Business name/), "Unsaved cafe");
-    expect(screen.getByText("You have unsaved changes")).toBeVisible();
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
 
     const switchEvent = new Event(BEFORE_BUSINESS_PROFILE_SWITCH, {
       cancelable: true,

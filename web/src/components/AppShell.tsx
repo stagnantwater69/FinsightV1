@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { usePersistentState } from "../lib/hooks";
 import { BusinessSwitcher } from "./BusinessSwitcher";
@@ -8,7 +7,7 @@ import { GlobalSearch } from "./GlobalSearch";
 import { NotificationBell } from "./NotificationBell";
 import { SetupPrompt } from "./SetupPrompt";
 import { ThemeSwitcher } from "./ThemeSwitcher";
-import { AccountMenu, initials } from "./AccountMenu";
+import { AccountMenu } from "./AccountMenu";
 import { PrefetchLink as Link } from "./PrefetchLink";
 import { prefetchPrimaryRoutes } from "../lib/routeLoaders";
 import {
@@ -246,7 +245,6 @@ function SidebarLink({
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { profile: user } = useAuth();
   const { selected } = useBusinessProfiles();
   const location = useLocation();
 
@@ -561,47 +559,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           ))}
         </nav>
-
-        {/* ---- account footer ---- */}
-        <div className="mt-auto border-t border-sidebar-fg/10 pt-3">
-          {railCollapsed ? (
-            <div className="group relative">
-              <Link
-                to="/profile"
-                className="tap h-11 w-full min-h-0 min-w-0 rounded-xl transition hover:bg-sidebar-fg/10"
-                aria-label="My profile"
-              >
-                <span
-                  aria-hidden
-                  className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-[12px] font-bold text-white"
-                >
-                  {initials(user?.firstName, user?.lastName)}
-                </span>
-              </Link>
-              <RailTip>
-                {[user?.firstName, user?.lastName].filter(Boolean).join(" ") || "My profile"}
-              </RailTip>
-            </div>
-          ) : (
-            <Link
-              to="/profile"
-              className="flex min-h-tap items-center gap-2.5 rounded-xl px-2.5 transition hover:bg-sidebar-fg/10"
-            >
-              <span
-                aria-hidden
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-600 text-sm font-bold text-white"
-              >
-                {initials(user?.firstName, user?.lastName)}
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate text-[13px] font-semibold text-sidebar-ink">
-                  {[user?.firstName, user?.lastName].filter(Boolean).join(" ") || "Account"}
-                </span>
-                <span className="block truncate text-xs text-sidebar-accent">{user?.email}</span>
-              </span>
-            </Link>
-          )}
-        </div>
       </aside>
 
       {/* ============================= MAIN ============================== */}

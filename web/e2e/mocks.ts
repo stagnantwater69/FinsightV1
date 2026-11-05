@@ -210,6 +210,7 @@ export async function mockBackendSession(
           recordsCompleteThroughConfirmedAt:
             business.expenseRecordsCompleteThroughConfirmedAt ?? null,
         },
+        previousMonth: { month: "2026-09", recordedAmount: 0, recordCount: 0, awaitingReviewCount: 0 },
       }),
     });
   });

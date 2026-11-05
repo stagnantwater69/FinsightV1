@@ -62,10 +62,19 @@ export type MonthlyExpenseBasis = {
   eligibleRecordCount: number;
 };
 
+/** What the month before this one holds, so the owner can judge it before marking it complete. */
+export interface PreviousMonthExpenses {
+  month: string;
+  recordedAmount: number;
+  recordCount: number;
+  awaitingReviewCount: number;
+}
+
 export interface FinancialPosition {
   asOfDate: string;
   availableFunds: AvailableFundsCalculation;
   monthlyExpenseBasis: MonthlyExpenseBasis;
+  previousMonth: PreviousMonthExpenses;
 }
 
 /** The rows recorded on the baseline day that count: their explicit anchor classification, or the legacy fallback. */
@@ -281,15 +290,34 @@ export async function getFinancialPositionForOwnedBusiness(
 ): Promise<FinancialPosition> {
   const asOfDate = resolveBusinessToday(context.profile.timezone, now);
   const targetMonth = utcStartOfMonth(asOfDate);
-  const [availableFunds, monthlyExpenseBasis] = await Promise.all([
+  const sourceMonth = previousMonthStart(targetMonth);
+  const monthWindow = {
+    businessProfileId: context.profile.id,
+    date: { gte: sourceMonth, lt: targetMonth },
+  };
+  const [availableFunds, monthlyExpenseBasis, recorded, awaitingReviewCount] = await Promise.all([
     calculateAvailableFundsForOwnedBusiness(context, asOfDate, db),
     resolveMonthlyExpenseBasisForOwnedBusiness(context, targetMonth, db),
+    db.expenseRecord.aggregate({
+      where: { ...monthWindow, ...COUNTED_EXPENSE },
+      _sum: { amount: true },
+      _count: { _all: true },
+    }),
+    db.expenseRecord.count({
+      where: { ...monthWindow, reviewStatus: { not: "Reviewed" }, duplicateOfRecordId: null },
+    }),
   ]);
 
   return {
     asOfDate: utcDateKey(asOfDate),
     availableFunds,
     monthlyExpenseBasis,
+    previousMonth: {
+      month: monthKey(sourceMonth),
+      recordedAmount: Number(recorded._sum.amount ?? 0),
+      recordCount: recorded._count._all,
+      awaitingReviewCount,
+    },
   };
 }
 

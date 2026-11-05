@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { getErrorMessage } from "../lib/errors";
 import { monthLabel } from "../lib/reportingPeriod";
 import type { BusinessProfile, FinancialPosition } from "../lib/types";
 import { useServerStateRefresh } from "../lib/useServerStateRefresh";
 import { Button } from "./Button";
-import { Field, FormError, TextInput } from "./Field";
+import { FormError } from "./Field";
 import { formatMoney } from "./Money";
 import { useToast } from "./Toast";
 import { Card } from "./ui";
@@ -19,11 +20,6 @@ function dateLabel(dateKey: string): string {
   });
 }
 
-function previousMonthKey(dateKey: string): string {
-  const [year, month] = dateKey.split("-").map(Number);
-  return new Date(Date.UTC(year!, month! - 2, 1)).toISOString().slice(0, 7);
-}
-
 export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }) {
   const {
     getFinancialPosition,
@@ -31,7 +27,6 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
   } = useBusinessProfiles();
   const toast = useToast();
   const [position, setPosition] = useState<FinancialPosition | null>(null);
-  const [completeThroughMonth, setCompleteThroughMonth] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,9 +41,6 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
       .then((next) => {
         if (controller.signal.aborted) return;
         setPosition(next);
-        setCompleteThroughMonth(
-          next.monthlyExpenseBasis.recordsCompleteThroughMonth ?? "",
-        );
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
@@ -86,10 +78,7 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
         month,
       );
       setPosition(next);
-      setCompleteThroughMonth(
-        next.monthlyExpenseBasis.recordsCompleteThroughMonth ?? "",
-      );
-      toast(month ? "Expense record coverage updated" : "Expense record coverage cleared");
+      toast(month ? `${monthLabel(month)} marked complete` : "Complete mark removed");
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -135,15 +124,12 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
 
   const funds = position.availableFunds;
   const basis = position.monthlyExpenseBasis;
-  const maximumMonth = previousMonthKey(position.asOfDate);
-  const savedMonth = basis.recordsCompleteThroughMonth ?? "";
-  const monthIsValid =
-    completeThroughMonth !== "" && completeThroughMonth <= maximumMonth;
-  const monthChanged = completeThroughMonth !== savedMonth;
-  const monthError =
-    completeThroughMonth && completeThroughMonth > maximumMonth
-      ? `Choose a completed month, no later than ${monthLabel(maximumMonth)}.`
-      : undefined;
+  const last = position.previousMonth;
+  const lastLabel = monthLabel(last.month);
+  const savedMonth = basis.recordsCompleteThroughMonth;
+  // Only the month right before this one feeds Monthly costs, so an older mark no longer counts.
+  const lastMarked = savedMonth !== null && savedMonth >= last.month;
+  const usingRecords = basis.source === "previous_complete_month";
 
   return (
     <Card className="p-5 shadow-none sm:p-7">
@@ -159,12 +145,12 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
           </p>
           <dl className="mt-4 space-y-2 text-sm">
             <CalculationRow label="Opening balance" amount={funds.baselineAmount} />
-            <CalculationRow label="Plus confirmed sales" amount={funds.confirmedSalesAdded} />
-            <CalculationRow label="Less confirmed expenses" amount={funds.confirmedExpensesDeducted} />
+            <CalculationRow label="Plus reviewed sales" amount={funds.confirmedSalesAdded} />
+            <CalculationRow label="Less reviewed expenses" amount={funds.confirmedExpensesDeducted} />
           </dl>
           <p className="mt-4 max-w-[70ch] text-xs leading-relaxed text-ink-500">
-            From records saved after {dateLabel(funds.baselineDate)}. Calculated
-            through {dateLabel(funds.asOfDate)}.
+            Records dated {dateLabel(funds.baselineDate)} to {dateLabel(funds.asOfDate)}.
+            Records waiting for review are not counted.
           </p>
         </section>
 
@@ -176,80 +162,86 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
             {formatMoney(basis.amount)}
           </p>
           <p className="mt-4 max-w-[60ch] text-sm leading-relaxed text-ink-600">
-            {basis.source === "previous_complete_month" && basis.sourceMonth
-              ? `From ${basis.eligibleRecordCount} confirmed expense ${basis.eligibleRecordCount === 1 ? "record" : "records"} in ${monthLabel(basis.sourceMonth)}.`
-              : "Using your starting estimate because the previous month is not confirmed complete."}
+            {usingRecords && basis.sourceMonth
+              ? `Actual costs for ${monthLabel(basis.sourceMonth)}, from ${basis.eligibleRecordCount} reviewed ${basis.eligibleRecordCount === 1 ? "expense" : "expenses"}.`
+              : "Your starting estimate."}
           </p>
           <p className="mt-2 max-w-[60ch] text-xs leading-relaxed text-ink-500">
-            Used to calculate Recovery Target for this business.
+            Used for your Recovery Target.
           </p>
         </section>
       </div>
 
-      <section className="mt-7 grid gap-5 border-t border-paper-200 pt-6 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:gap-8">
-        <div className="min-w-0">
-          <h3 className="font-display text-base font-semibold text-ink-900">
-            Record coverage
-          </h3>
-          <p className="mt-2 max-w-[60ch] text-sm leading-relaxed text-ink-600">
-            Confirm only a month whose expense records are fully entered
-            and reviewed. FinSight can then use records instead of your
-            starting estimate.
+      <section
+        aria-labelledby={`last-month-${profile.id}`}
+        className="mt-7 border-t border-paper-200 pt-6"
+      >
+        <h3 id={`last-month-${profile.id}`} className="font-display text-base font-semibold text-ink-900">
+          {lastMarked ? `${lastLabel} is marked complete` : `Is ${lastLabel} complete?`}
+        </h3>
+
+        {lastMarked ? (
+          <p className="mt-2 max-w-[70ch] text-sm leading-relaxed text-ink-600">
+            Monthly costs use its actual total. Next month, mark this month complete the same way.
           </p>
-          <p className="mt-2 text-xs leading-relaxed text-ink-500">
-            Coverage confirmation saves separately from your profile changes.
-          </p>
-        </div>
+        ) : (
+          <>
+            <p className="mt-2 max-w-[70ch] text-sm leading-relaxed text-ink-600">
+              Mark it complete once every {lastLabel} expense is entered and
+              reviewed. Monthly costs then use its actual total instead of your estimate.
+            </p>
+            <dl className="mt-4 max-w-md space-y-2 text-sm">
+              <CalculationRow label={`Reviewed expenses in ${lastLabel}`} amount={last.recordedAmount} />
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,auto)] items-baseline gap-4">
+                <dt className="text-ink-500">Monthly costs would change</dt>
+                <dd className="figure text-right font-medium text-ink-700">
+                  {formatMoney(basis.amount)} → {formatMoney(last.recordedAmount)}
+                </dd>
+              </div>
+            </dl>
+            {last.awaitingReviewCount > 0 ? (
+              <p className="mt-3 text-sm text-tone-accent">
+                {last.awaitingReviewCount} {lastLabel}{" "}
+                {last.awaitingReviewCount === 1 ? "expense still needs" : "expenses still need"} review.{" "}
+                <Link to="/records/flagged" className="tap-inline font-semibold link-action">
+                  Review now
+                </Link>
+              </p>
+            ) : last.recordCount === 0 ? (
+              <p className="mt-3 text-sm text-ink-500">No {lastLabel} expenses are recorded yet.</p>
+            ) : null}
+            {savedMonth ? (
+              <p className="mt-2 text-xs text-ink-500">
+                Last marked complete: {monthLabel(savedMonth)}.
+              </p>
+            ) : null}
+          </>
+        )}
 
-        <div className="min-w-0">
-          <Field
-            label="Expense records complete through"
-            htmlFor={`expense-records-complete-through-${profile.id}`}
-            hint={`Choose ${monthLabel(maximumMonth)} or an earlier month.`}
-            error={monthError}
-          >
-            <TextInput
-              type="month"
-              max={maximumMonth}
-              value={completeThroughMonth}
-              onChange={(event) => {
-                setCompleteThroughMonth(event.target.value);
-                setError(null);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                if (!saving && monthChanged && monthIsValid) {
-                  void saveCompleteThrough(completeThroughMonth);
-                }
-              }}
-            />
-          </Field>
+        {error ? <div className="mt-3"><FormError>{error}</FormError></div> : null}
 
-          {error ? <div className="mt-3"><FormError>{error}</FormError></div> : null}
-
-          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+        <div className="mt-4">
+          {lastMarked ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={saving}
+              onClick={() => void saveCompleteThrough(null)}
+            >
+              {saving ? "Saving…" : "Undo"}
+            </Button>
+          ) : (
             <Button
               type="button"
               variant="brand"
               size="sm"
-              disabled={saving || !monthChanged || !monthIsValid}
-              onClick={() => void saveCompleteThrough(completeThroughMonth)}
+              disabled={saving || last.awaitingReviewCount > 0}
+              onClick={() => void saveCompleteThrough(last.month)}
             >
-              {saving ? "Saving…" : "Save complete month"}
+              {saving ? "Saving…" : `Mark ${lastLabel} complete`}
             </Button>
-            {savedMonth ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                disabled={saving}
-                onClick={() => void saveCompleteThrough(null)}
-              >
-                Clear confirmation
-              </Button>
-            ) : null}
-          </div>
+          )}
         </div>
       </section>
     </Card>
@@ -263,7 +255,7 @@ function PanelHeading() {
         Recorded financial position
       </h2>
       <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-ink-500">
-        Calculated from your starting values and confirmed records.
+        Your starting figures plus reviewed records.
       </p>
     </div>
   );

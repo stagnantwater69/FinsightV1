@@ -536,6 +536,27 @@ describe("expense-record completeness", () => {
     expect(response.body.monthlyExpenseBasis.recordsCompleteThroughConfirmedAt).toEqual(expect.any(String));
   });
 
+  it("previews last month's counted total and unreviewed count before it is confirmed", async () => {
+    await expense({ amount: 1_100, date: new Date("2026-09-03T00:00:00.000Z") });
+    await expense({ amount: 300, date: new Date("2026-09-30T00:00:00.000Z") });
+    await expense({ amount: 700, date: new Date("2026-09-04T00:00:00.000Z"), reviewStatus: "Needs Review" });
+    await expense({ amount: 900, date: new Date("2026-08-31T00:00:00.000Z") });
+    await expense({ amount: 500, date: new Date("2026-10-01T00:00:00.000Z") });
+
+    const response = await request(app)
+      .get(`${ENDPOINT}/${ctx.profile.id}/financial-position`)
+      .set(...AUTH);
+
+    expect(response.status).toBe(200);
+    expect(response.body.monthlyExpenseBasis.source).toBe("owner_estimate");
+    expect(response.body.previousMonth).toEqual({
+      month: "2026-09",
+      recordedAmount: 1_400,
+      recordCount: 2,
+      awaitingReviewCount: 1,
+    });
+  });
+
   it("treats a confirmed month with no eligible expenses as a valid zero basis", async () => {
     const response = await request(app)
       .put(`${ENDPOINT}/${ctx.profile.id}/expense-records-completeness`)

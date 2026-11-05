@@ -7,7 +7,7 @@
  * reworded in one place and not the other is how an owner ends up being told
  * two different stories about the same number.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { CalendarDays, Divide, Equal, Target, Wallet } from "lucide-react";
 import { api } from "../lib/api";
@@ -46,6 +46,22 @@ interface NumbersGroupProps extends GroupProps {
   /** The saved business being edited. Once it has an operating schedule, the
    * schedule decides the open days and the per-month field no longer applies. */
   scheduleProfileId?: number;
+  /** Settings view mode: the saved values as text, not inputs. */
+  readOnly?: boolean;
+}
+
+/** One saved value in a settings card's view mode; the same row My profile uses. */
+export function DetailRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="border-b border-paper-200 py-4">
+      <dt className="text-xs font-semibold text-ink-500">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-medium text-ink-900">{children}</dd>
+    </div>
+  );
+}
+
+function money(value: string) {
+  return <span className="figure">{value.trim() === "" ? "Not set" : formatMoney(Number(value))}</span>;
 }
 
 /** True once the business has a saved weekly schedule (all seven weekdays exist after setup). */
@@ -298,14 +314,40 @@ export function BusinessNumbersFields({
   settings = false,
   brief = false,
   scheduleProfileId,
+  readOnly = false,
 }: NumbersGroupProps) {
   const scheduled = useHasOperatingSchedule(scheduleProfileId);
   const openDays = useOpenDaysThisMonth(scheduleProfileId, scheduled);
   const scheduleHref = `/business-profiles/${scheduleProfileId}/operating-schedule`;
+  if (readOnly) {
+    return (
+      <>
+        <dl className="grid gap-x-8 sm:grid-cols-2 xl:grid-cols-1">
+          <DetailRow label="Opening balance">{money(draft.availableFunds)}</DetailRow>
+          <DetailRow label="Monthly expense estimate">{money(draft.expectedMonthlyExpenses)}</DetailRow>
+          <DetailRow label="Operating days">
+            {scheduled ? (
+              <>
+                {openDays ? `${openDays.days} days open in ${monthLabel(openDays.month)}` : "From your weekly schedule"}
+                {" · "}
+                <Link to={scheduleHref} className="tap-inline font-semibold link-action">
+                  Edit schedule
+                </Link>
+              </>
+            ) : (
+              `${draft.operatingDays} days a month`
+            )}
+          </DetailRow>
+          <DetailRow label="Flag single expenses over">{money(thresholdDisplayValue(draft))}</DetailRow>
+        </dl>
+        {scheduled ? null : <DailyTargetNote draft={draft} compact={compact} />}
+      </>
+    );
+  }
   return (
     <>
       {/* These values are starting inputs; records can replace them in active figures. */}
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className={`grid gap-3 sm:grid-cols-2 ${settings ? "xl:grid-cols-1 2xl:grid-cols-2" : ""}`}>
         <Field
           label="Opening balance"
           fillRow
@@ -318,7 +360,7 @@ export function BusinessNumbersFields({
               : compact
               ? undefined
               : existingProfile
-                ? "Enter the amount available now. Saving a different amount starts a new balance from the day you save it."
+                ? "Cash on hand now. Changing it starts a new balance today."
                 : "Enter the amount the business has available now. FinSight uses this as the starting point for confirmed sales and expenses."
           }
         >
@@ -342,7 +384,7 @@ export function BusinessNumbersFields({
               : compact
               ? undefined
               : settings
-                ? "Used until the previous month’s expense records are confirmed complete."
+                ? "Used until last month’s expenses are confirmed."
                 : "Enter your best estimate for a normal month. FinSight uses it until the previous month's expense records are confirmed complete."
           }
         >
@@ -356,17 +398,17 @@ export function BusinessNumbersFields({
         </Field>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className={`grid gap-3 sm:grid-cols-2 ${settings ? "xl:grid-cols-1 2xl:grid-cols-2" : ""}`}>
         {scheduled ? (
           // Laid out like the field beside it (label, hint, box) so the two rows line up.
           <div className="flex flex-col">
             <p className="text-sm font-medium text-ink-800">Operating days</p>
             <p className="mt-1 text-xs leading-relaxed text-ink-500">
-              Set by your operating schedule.{" "}
+              From your schedule.{" "}
               <Link to={scheduleHref} className="tap-inline font-semibold link-action">
                 Edit schedule
               </Link>
-              {compact ? null : <> Your daily sales target is spread across these days.</>}
+              {compact || settings ? null : <> Your daily sales target is spread across these days.</>}
             </p>
             <p className="mt-2 flex min-h-10 items-center rounded-xl bg-paper-50 px-3.5 py-2 text-sm text-ink-700 ring-1 ring-paper-200 sm:mt-auto">
               {openDays ? (
@@ -392,7 +434,7 @@ export function BusinessNumbersFields({
                 : compact
                 ? undefined
                 : settings
-                  ? "Open days in a normal month. Your daily target is spread across these days."
+                  ? "Open days in a normal month."
                   : "How many days a month the business is actually open. Used to spread your target across the days you can actually sell."
             }
           >
@@ -431,7 +473,7 @@ export function BusinessNumbersFields({
               : compact
               ? undefined
               : settings
-                ? "Larger expenses are flagged for review. The suggested amount comes from your monthly estimate."
+                ? "Bigger expenses get flagged for review."
                 : "Expenses this big get set aside for review. FinSight suggests an amount from your starting monthly estimate, and you can change it anytime."
           }
         >
