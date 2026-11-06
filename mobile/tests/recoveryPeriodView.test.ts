@@ -86,7 +86,7 @@ const week = {
 describe("recovery period view", () => {
   it("states the summary the way web does", () => {
     expect(recoverySummaryText(week)).toBe(
-      "Recorded sales this week are PHP 300 against a PHP 1,000 target. Behind pace. The remaining target is PHP 700, or about PHP 175 per remaining operating day.",
+      "Recorded sales this week are PHP 300 against a PHP 1,000 target. Behind. The remaining target is PHP 700, or about PHP 175 per open day left.",
     );
     expect(recoverySummaryText({ ...week, isComplete: true, status: "on_pace" })).toBe(
       "Recorded sales this week are PHP 300 against a PHP 1,000 target. Finished on target.",

@@ -159,17 +159,17 @@ export type SignalStrength = (typeof SIGNAL_STRENGTHS)[number];
 
 export const SIGNAL_COPY: Record<SignalStrength, { label: string; detail: string; tone: "info" | "warn" | "danger" }> = {
   weak: {
-    label: "Low confidence",
+    label: "Not very sure",
     detail: "A soft signal. Worth a glance, and easy to dismiss if it's normal for you.",
     tone: "info",
   },
   moderate: {
-    label: "Fairly confident",
+    label: "Fairly sure",
     detail: "This stood out clearly against your own history.",
     tone: "warn",
   },
   strong: {
-    label: "High confidence",
+    label: "Very sure",
     detail: "This is well outside what your records usually look like.",
     tone: "danger",
   },

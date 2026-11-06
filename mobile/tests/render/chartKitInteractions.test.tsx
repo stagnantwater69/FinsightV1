@@ -37,8 +37,8 @@ describe('Chart kit value exploration', () => {
   });
   it('maps coverage columns to equal bands and names sales plus target', async () => {
     const q = await mount(<charts.CoverageColumns data={chartDays.map((row) => ({ date: row.date, amount: row.total }))} target={200.10} />);
-    await tapChart(q, 'Daily coverage', 110);
-    expect(chartReadout(q, 'Daily coverage').props.accessibilityLabel).toContain('Sales: PHP 0.00. Target: PHP 200.10');
+    await tapChart(q, "Each day's sales", 110);
+    expect(chartReadout(q, "Each day's sales").props.accessibilityLabel).toContain('Sales: PHP 0.00. Target: PHP 200.10');
     expect(q.getByRole('image').props.accessibilityLabel).toContain('1 of 3 days met it');
   });
   it('maps a donut segment and keeps the total summary outside the interactive controls', async () => {

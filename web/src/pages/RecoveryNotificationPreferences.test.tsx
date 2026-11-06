@@ -74,7 +74,7 @@ describe("RecoveryNotificationPreferences", () => {
   it("renders the backend's own defaults without any setup step", async () => {
     renderPage();
     expect(await screen.findByLabelText(/Target increased beyond a threshold/)).toBeChecked();
-    expect(screen.getByLabelText(/Behind pace for three days/)).toBeChecked();
+    expect(screen.getByLabelText(/Behind for three days/)).toBeChecked();
     expect(screen.getByLabelText(/Monthly target reached/)).toBeChecked();
     expect(screen.getByLabelText("Threshold")).toHaveValue(15);
     expect(screen.getByLabelText("Minimum hours between notifications")).toHaveValue(24);
@@ -91,7 +91,7 @@ describe("RecoveryNotificationPreferences", () => {
     renderPage();
     await screen.findByLabelText(/Target increased beyond a threshold/);
 
-    await userEvent.click(screen.getByLabelText(/Behind pace for three days/));
+    await userEvent.click(screen.getByLabelText(/Behind for three days/));
     await userEvent.click(screen.getByRole("button", { name: /Save preferences/ }));
 
     await waitFor(() => expect(putCalls).toHaveLength(1));

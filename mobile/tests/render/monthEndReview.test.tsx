@@ -99,13 +99,13 @@ describe('Month-end ring values', () => {
     apiGet.mockResolvedValue({ ...REVIEWABLE, monthlyExpenseBasis: { ...REVIEWABLE.monthlyExpenseBasis!, amount: 50000.25 }, surplusOrShortfall: -3800.75 });
     const q = await renderScreen();
     await q.findByRole('progressbar');
-    await tapChart(q, 'Month-end sales coverage');
-    const name = chartReadout(q, 'Month-end sales coverage').props.accessibilityLabel;
+    await tapChart(q, 'Costs paid by sales this month');
+    const name = chartReadout(q, 'Costs paid by sales this month').props.accessibilityLabel;
     expect(name).toContain('Monthly costs: PHP 50,000.25'); expect(name).toContain('Shortfall: PHP 3,800.75');
     expect(name).toContain('not a measure of profit');
-    await fireEvent.press(q.getByRole('button', { name: 'Clear Month-end sales coverage value' }));
-    await hoverChart(q, 'Month-end sales coverage', 150);
-    expect(chartReadout(q, 'Month-end sales coverage').props.accessibilityLabel).toContain('92.4%');
+    await fireEvent.press(q.getByRole('button', { name: 'Clear Costs paid by sales this month value' }));
+    await hoverChart(q, 'Costs paid by sales this month', 150);
+    expect(chartReadout(q, 'Costs paid by sales this month').props.accessibilityLabel).toContain('92.4%');
   });
 });
 
@@ -143,7 +143,7 @@ describe('MonthEndReviewScreen — reviewable', () => {
   it('keeps sales coverage at its supplied percentage with a centered SVG rotation', async () => {
     apiGet.mockResolvedValue(REVIEWABLE);
     const queries = await renderScreen();
-    const progress = await queries.findByRole('progressbar', { name: 'Sales coverage for July 2026: 92.4% covered' });
+    const progress = await queries.findByRole('progressbar', { name: 'Costs paid by sales for July 2026: 92.4% covered' });
     const svg = progress.children.find((child) => typeof child !== 'string' && child.props.viewBox === '0 0 116 116');
     expect(svg).toBeTruthy();
     if (!svg || typeof svg === 'string') throw new Error('Sales coverage SVG is absent');
@@ -163,7 +163,7 @@ describe('MonthEndReviewScreen — reviewable', () => {
     apiGet.mockResolvedValue({ ...REVIEWABLE, coveragePercent: 127.3, surplusOrShortfall: 13650 });
     const queries = await renderScreen();
     expect(await queries.findByText('127.3%')).toBeTruthy();
-    const progress = queries.getByRole('progressbar', { name: 'Sales coverage for July 2026: 127.3% covered' });
+    const progress = queries.getByRole('progressbar', { name: 'Costs paid by sales for July 2026: 127.3% covered' });
     expect(progress.props.accessibilityValue.now).toBe(100);
     expect(progress.props.accessibilityValue.text).toContain('127.3%');
     expect(queries.getByText('PHP 13,650.00')).toBeTruthy();
@@ -183,7 +183,7 @@ describe('MonthEndReviewScreen — reviewable', () => {
   it('keeps absent open days and a missing final rate explicit without inventing sales', async () => {
     apiGet.mockResolvedValue({ ...REVIEWABLE, strongestOpenDay: null, weakestOpenDay: null, openDayCount: 0, missingOrProvisionalDayCount: 0, finalAdjustedDailyTarget: null });
     const queries = await renderScreen();
-    await queries.findByText('Sales coverage');
+    await queries.findByText('Costs paid by sales');
     expect(queries.getAllByText('No open days this month').length).toBeGreaterThanOrEqual(2);
     expect(queries.queryByText('PHP 5,200.00')).toBeNull();
     expect(queries.queryByText('PHP 400.00')).toBeNull();
@@ -211,20 +211,20 @@ describe('MonthEndReviewScreen — reviewable', () => {
     });
 
     const queries = await renderScreen();
-    expect(await queries.findByText('Sales coverage')).toBeTruthy();
+    expect(await queries.findByText('Costs paid by sales')).toBeTruthy();
     expect(queries.getByText('Updated just now')).toBeTruthy();
 
     failRefresh = true;
     invalidateServerState({ pathPrefixes: ['/insights/recovery/month-end-review'] });
 
     expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
-    expect(queries.getByText('Sales coverage')).toBeTruthy();
+    expect(queries.getByText('Costs paid by sales')).toBeTruthy();
     expect(queries.getByText(/Could not refresh this month-end review/)).toBeTruthy();
 
     failRefresh = false;
     fireEvent.press(queries.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(queries.queryByText("Couldn't refresh")).toBeNull());
-    expect(queries.getByText('Sales coverage')).toBeTruthy();
+    expect(queries.getByText('Costs paid by sales')).toBeTruthy();
   });
 
   it('frames a shortfall as a positive peso amount still to cover', async () => {
@@ -295,7 +295,7 @@ describe('MonthEndReviewScreen — reviewable', () => {
   it('does not show the baseline callout when false', async () => {
     apiGet.mockResolvedValue(REVIEWABLE);
     const queries = await renderScreen();
-    await queries.findByText('Sales coverage');
+    await queries.findByText('Costs paid by sales');
     expect(queries.queryByText(/may not match the sales pattern/i)).toBeNull();
   });
 
@@ -344,7 +344,7 @@ describe('MonthEndReviewScreen — month picker', () => {
   it('defaults to last month and refetches with a new month when the picker is moved', async () => {
     apiGet.mockResolvedValue(REVIEWABLE);
     const queries = await renderScreen();
-    await queries.findByText('Sales coverage');
+    await queries.findByText('Costs paid by sales');
 
     const [, firstQuery] = apiGet.mock.calls[0];
     const firstMonth = (firstQuery as { month: string }).month;

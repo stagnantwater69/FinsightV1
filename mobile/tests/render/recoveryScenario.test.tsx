@@ -322,7 +322,7 @@ describe('Recovery Target — hypothetical scenario', () => {
     await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await queries.findByText('Hypothetical recovery target');
 
-    await fireEvent.press(queries.getByLabelText('Close hypothetical recovery scenario'));
+    await fireEvent.press(queries.getByLabelText('Close "what if" check'));
 
     await waitFor(() => expect(queries.queryByText('Hypothetical recovery target')).toBeNull());
     expect(apiPost).not.toHaveBeenCalled();
@@ -468,7 +468,7 @@ describe('Recovery Target — "Save this as a plan"', () => {
 
     await fireEvent.press(queries.getByRole('button', { name: 'Save this as a plan' }));
     await fireEvent.changeText(queries.getByLabelText('Deadline (optional)'), '2026-08-31');
-    await fireEvent.changeText(queries.getByLabelText('Buffer percent (optional)'), '10');
+    await fireEvent.changeText(queries.getByLabelText('Extra cushion, % (optional)'), '10');
     await fireEvent.press(queries.getByRole('button', { name: 'Save plan' }));
 
     await waitFor(() => expect(apiPut).toHaveBeenCalled());
@@ -489,7 +489,7 @@ describe('Recovery Target — "Save this as a plan"', () => {
     await queries.findByText('Hypothetical result. Your real target and profile are unchanged.');
 
     await fireEvent.press(queries.getByRole('button', { name: 'Save this as a plan' }));
-    await fireEvent.changeText(queries.getByLabelText('Buffer percent (optional)'), '150');
+    await fireEvent.changeText(queries.getByLabelText('Extra cushion, % (optional)'), '150');
     await fireEvent.press(queries.getByRole('button', { name: 'Save plan' }));
 
     expect(await queries.findByText('Enter a percentage between 0 and 100.')).toBeTruthy();

@@ -72,6 +72,7 @@ import {
 } from "./src/screens/HelpScreens";
 import {
   ExpenseBehaviorScreen,
+  PaymentCalendarScreen,
   RecoveryTargetScreen,
   SpendingImpactScreen,
 } from "./src/screens/InsightsScreens";
@@ -294,6 +295,7 @@ function InsightsStack() {
       <InsightsNav.Screen name="ExpenseBehavior" component={ExpenseBehaviorScreen} />
       <InsightsNav.Screen name="SpendingImpact" component={SpendingImpactScreen} />
       <InsightsNav.Screen name="RecoveryTarget" component={RecoveryTargetScreen} />
+      <InsightsNav.Screen name="PaymentCalendar" component={PaymentCalendarScreen} />
       {/*
         The one screen in this stack that IS pushed onto something, so it is
         the one that keeps a header: it has a parent to go back to (the

@@ -133,7 +133,7 @@ describe('RecoveryNotificationPreferencesScreen — defaults', () => {
 
     expect(queries.getAllByRole('switch')).toHaveLength(3);
     expect(queries.getByRole('switch', { name: /Daily target increase/ }).props.accessibilityState.checked).toBe(true);
-    expect(queries.getByRole('switch', { name: /Behind pace for three days/ }).props.accessibilityState.checked).toBe(true);
+    expect(queries.getByRole('switch', { name: /Behind for three days/ }).props.accessibilityState.checked).toBe(true);
     expect(queries.getByRole('switch', { name: /Monthly target reached/ }).props.accessibilityState.checked).toBe(true);
 
     expect(queries.getByLabelText('Increase threshold (%)')).toHaveProp('value', '15');
@@ -164,7 +164,7 @@ describe('RecoveryNotificationPreferencesScreen — save', () => {
     const queries = await renderScreen();
     await queries.findByLabelText('Increase threshold (%)');
 
-    await fireEvent.press(queries.getByRole('switch', { name: /Behind pace for three days/ }));
+    await fireEvent.press(queries.getByRole('switch', { name: /Behind for three days/ }));
     await fireEvent.changeText(queries.getByLabelText('Increase threshold (%)'), '25');
     await fireEvent.press(queries.getByRole('button', { name: 'Save preferences' }));
 

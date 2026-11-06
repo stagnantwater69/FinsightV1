@@ -260,7 +260,7 @@ function RecoveryTargetContent({ navigation }: InsightsScreenProps<"RecoveryTarg
 
             <View onLayout={(e) => (daysY.current = e.nativeEvent.layout.y)}>
               <Card>
-                <SectionTitle eyebrow="Daily coverage" question="How did each day go?" icon="calendar-outline" />
+                <SectionTitle eyebrow="Each day's sales" question="How did each day go?" icon="calendar-outline" />
                 <DayCalendar period={period} rows={data.dailyCoverage} />
                 <DayScore rows={data.dailyCoverage} />
                 <View style={{ borderTopWidth: 1, borderTopColor: t.border, marginTop: space.md }}>
@@ -923,7 +923,7 @@ function SavedPlanCard({
         />
         <DateField label="Deadline (optional)" value={deadline} onChange={setDeadline} allowFuture optional onClear={() => setDeadline("")} />
         <Field
-          label="Buffer percent (optional)"
+          label="Extra cushion, % (optional)"
           value={bufferRaw}
           onChangeText={(v) => {
             setBufferRaw(v);

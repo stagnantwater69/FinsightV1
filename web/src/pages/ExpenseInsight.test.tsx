@@ -945,7 +945,7 @@ describe("ExpenseInsight reduction opportunities", () => {
     renderPage();
 
     expect(await screen.findByText("High priority")).toBeInTheDocument();
-    expect(screen.getByText("Limited confidence")).toBeInTheDocument();
+    expect(screen.getByText("Not very sure")).toBeInTheDocument();
   });
 
   it("renders evidence figures through the shared money formatter", async () => {

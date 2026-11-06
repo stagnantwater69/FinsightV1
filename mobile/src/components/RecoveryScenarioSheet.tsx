@@ -107,7 +107,7 @@ export function RecoveryScenarioSheet({
       <Pressable
         onPress={close}
         accessibilityRole="button"
-        accessibilityLabel="Close hypothetical recovery scenario"
+        accessibilityLabel='Close "what if" check'
         style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end" }}
       >
         {/* Swallows touches — see OptionSheet's own note in ui.tsx for why this is a View, not a Pressable. */}
@@ -281,7 +281,7 @@ function RecoveryScenarioResult({ result }: { result: RecoveryScenario }) {
         hypothetical={result.hypothetical.dailyNeededTarget}
       />
       <ScenarioRow
-        label="Adjusted daily target (remaining days)"
+        label="New daily goal (open days left)"
         current={result.current.adjustedDailyTarget}
         hypothetical={result.hypothetical.adjustedDailyTarget}
         delta={result.delta?.adjustedDailyTarget}
@@ -405,7 +405,7 @@ function SaveAsPlanAction({
         <>
           <DateField label="Deadline (optional)" value={deadline} onChange={setDeadline} allowFuture optional onClear={() => setDeadline("")} />
           <Field
-            label="Buffer percent (optional)"
+            label="Extra cushion, % (optional)"
             value={bufferRaw}
             onChangeText={(v) => {
               setBufferRaw(v);

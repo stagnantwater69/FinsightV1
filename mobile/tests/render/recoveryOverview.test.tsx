@@ -45,7 +45,7 @@ describe('Recovery overview', () => {
       <RecoveryNextGoal period={period} />
     </>));
     expect(q.getByText('47% reached')).toBeTruthy();
-    const progress = q.getByRole('progressbar', { name: "Sales coverage: PHP 18,000 recorded against PHP 40,000 target. Today's pace: PHP 24,000" });
+    const progress = q.getByRole('progressbar', { name: "Costs paid by sales: PHP 18,000 recorded against PHP 40,000 target. Today's pace: PHP 24,000" });
     expect(progress.props.accessibilityValue.now).toBe(47);
     expect(q.getByText("Today's pace · PHP 24,000")).toBeTruthy();
     expect(q.getByText('PHP 2,200 / day')).toBeTruthy();
@@ -64,7 +64,7 @@ describe('Recovery overview', () => {
 
   it.each([
     { overrides: { status: 'needs_setup' as const }, label: "Recovery Target isn't ready yet" },
-    { overrides: { target: 0 }, label: 'Behind pace' },
+    { overrides: { target: 0 }, label: 'Behind' },
   ])('does not draw an undefined target when $label', async ({ overrides }) => {
     const period = { ...basePeriod, ...overrides };
     const q = await render(themed(<>
@@ -86,8 +86,8 @@ describe('Recovery overview', () => {
   });
 
   it.each([
-    { status: 'ahead' as const, label: 'Ahead of pace' },
-    { status: 'behind' as const, label: 'Behind pace' },
+    { status: 'ahead' as const, label: 'Ahead' },
+    { status: 'behind' as const, label: 'Behind' },
   ])('preserves the selected-period $status status', async ({ status, label }) => {
     const q = await render(themed(<RecoveryCoachCard data={insight} period={{ ...basePeriod, status }} isCurrentMonth={false} />));
     expect(q.getByText(label)).toBeTruthy();
@@ -118,7 +118,7 @@ describe('Recovery overview', () => {
     </>));
     expect(q.getByText('of PHP 1,000 sales coverage target')).toBeTruthy();
     expect(q.getByText('PHP 350 / day')).toBeTruthy();
-    expect(q.getByText('Sales needed per remaining operating day to reach the weekly target.')).toBeTruthy();
+    expect(q.getByText('Sales needed per open day left to reach the weekly target.')).toBeTruthy();
     expect(q.getByText("PHP 400 behind today's pace")).toBeTruthy();
     expect(q.queryByText('PHP 2,200 / day')).toBeNull();
   });

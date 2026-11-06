@@ -30,7 +30,7 @@ import type { InsightsScreenProps } from "../navigation/types";
  * what "spending impact" means yet.
  */
 /** The insight views the header switches between: screens in the Insights stack. */
-export type InsightScreenId = "ExpenseBehavior" | "SpendingImpact" | "RecoveryTarget";
+export type InsightScreenId = "ExpenseBehavior" | "SpendingImpact" | "RecoveryTarget" | "PaymentCalendar";
 
 const INSIGHT_SCREENS: readonly {
   id: InsightScreenId;
@@ -43,6 +43,7 @@ const INSIGHT_SCREENS: readonly {
   { id: "ExpenseBehavior", name: "Expenses", detail: "Where your money goes", icon: "wallet-outline", hue: 0 },
   { id: "SpendingImpact", name: "Spending impact", detail: "How spending affects your business", icon: "bar-chart-outline", hue: 1 },
   { id: "RecoveryTarget", name: "Recovery target", detail: "How much to sell to cover costs", icon: "refresh-circle-outline", hue: null },
+  { id: "PaymentCalendar", name: "Payment calendar", detail: "Bills and regular payments by date", icon: "calendar-outline", hue: 2 },
 ];
 
 /**
@@ -170,7 +171,7 @@ export function InsightHeader({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`${title}. Switch insight`}
-            accessibilityHint="Opens Expenses, Spending impact and Recovery target"
+            accessibilityHint="Opens Expenses, Spending impact, Recovery target and Payment calendar"
             onPress={() => {
               haptics.tapped();
               setSwitching(true);

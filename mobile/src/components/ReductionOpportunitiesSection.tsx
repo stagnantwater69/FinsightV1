@@ -42,9 +42,9 @@ const PRIORITY_COPY: Record<ReductionOpportunity["priority"], { label: string; t
 };
 
 const CONFIDENCE_LABEL: Record<ReductionOpportunity["confidence"], string> = {
-  strong: "Strong confidence",
-  moderate: "Moderate confidence",
-  limited: "Limited confidence",
+  strong: "Very sure",
+  moderate: "Fairly sure",
+  limited: "Not very sure",
 };
 
 const COST_BEHAVIOR_BADGE: Partial<Record<ReductionOpportunity["costBehavior"], string>> = {

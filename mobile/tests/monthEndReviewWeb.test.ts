@@ -65,7 +65,7 @@ describe('Month-end SVG on the real web adapter', () => {
       const svg = html.match(/<svg\b[^>]*>/)?.[0];
       expect(svg).toContain('aria-hidden="true"');
       expect(svg).not.toMatch(/\baccessible=/);
-      expect(html).toContain('Sales coverage for September 2026: 92.4% covered');
+      expect(html).toContain('Costs paid by sales for September 2026: 92.4% covered');
       expect(html).toContain('PHP 3,800.00');
       const ring = html.match(/<circle\b[^>]*stroke-dasharray[^>]*>/)?.[0];
       expect(ring).toContain('transform="rotate(-90 58 58)"');

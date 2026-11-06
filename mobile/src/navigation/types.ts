@@ -25,7 +25,11 @@ export type DashboardStackParamList = {
 
 export type RecordsStackParamList = {
   RecordsList: { type?: "expense" | "sales"; categoryId?: number; importBatchId?: number } | undefined;
-  AddExpense: undefined;
+  /** `prefill` comes from the payment calendar; `from` says where to return after saving. */
+  AddExpense: {
+    prefill?: { description: string; vendor: string; categoryId: number | null; amount: number };
+    from?: "PaymentCalendar";
+  } | undefined;
   AddSales: undefined;
   EditRecord: { record: RecordItem };
   ScanReceipt: undefined;
@@ -40,6 +44,8 @@ export type InsightsStackParamList = {
   /** Prefilled from an Ask FinSight answer; validated by the screen, so typed loosely. */
   SpendingImpact: { plannedAmount?: unknown } | undefined;
   RecoveryTarget: undefined;
+  /** `recorded` is set on the way back from saving a payment; cleared once read. */
+  PaymentCalendar: { recorded?: boolean } | undefined;
   RecurringSchedule: { scheduleId?: number } | undefined;
 };
 

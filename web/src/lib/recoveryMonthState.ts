@@ -54,13 +54,13 @@ export function monthToneAndCopy(
         icon: Check,
       };
     case "ahead":
-      return { tone: "good", label: "Ahead of pace", icon: Check };
+      return { tone: "good", label: "Ahead", icon: Check };
     case "on_pace":
       return { tone: "good", label: "On pace for the month", icon: Check };
     case "behind":
       return {
         tone: "critical",
-        label: "Behind pace for the month",
+        label: "Behind this month",
         icon: AlertTriangle,
       };
     default:
@@ -74,7 +74,7 @@ export function monthToneAndCopy(
           ? { tone: "good", label: "On pace for the month", icon: Check }
           : {
               tone: "critical",
-              label: "Behind pace for the month",
+              label: "Behind this month",
               icon: AlertTriangle,
             };
   }
