@@ -51,6 +51,16 @@ upstream finsight_backend {
   keepalive_timeout 60s;
 }
 
+# Requests for any other name (the bare IP, a domain someone else points here)
+# are dropped instead of being served the app.
+server {
+  listen 80 default_server;
+  listen 443 ssl default_server;
+  server_name _;
+  ssl_reject_handshake on;
+  return 444;
+}
+
 server {
   listen 80;
   server_name ${DOMAIN};
@@ -60,7 +70,7 @@ server {
   }
 
   location / {
-    return 301 https://$host$request_uri;
+    return 301 https://${DOMAIN}$request_uri;
   }
 }
 
