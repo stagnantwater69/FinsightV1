@@ -31,6 +31,7 @@ import { Callout, Card, PageHead, Pill } from "../components/ui";
 import { Alert } from "../components/Alert";
 import { useAskFinSight } from "../components/AskFinSightButton";
 import { Button } from "../components/Button";
+import { AutoLoadMore } from "../components/AutoLoadMore";
 import { EmptyState } from "../components/EmptyState";
 import { FormError } from "../components/Field";
 import { Money } from "../components/Money";
@@ -316,6 +317,7 @@ export function FlaggedRecords() {
     if (!selected) return;
     if (findingsCursor === null && flaggedCursor === null) return;
     setLoadingMore(true);
+    setError(null);
     try {
       const [findingPage, flaggedPage] = await Promise.all([
         findingsCursor === null
@@ -644,23 +646,14 @@ export function FlaggedRecords() {
             </EmptyState>
           ) : null}
 
-          {/*
-            One "show more" for the merged queue. The label names whichever
-            source still has a page left, so pressing it is never a surprise
-            about what appears.
-          */}
+          {/* One loader for the merged queue: it advances whichever source still has a page left. */}
           {findingsCursor !== null || flaggedCursor !== null ? (
-            <div className="pt-1">
-              <Button type="button" variant="secondary" disabled={loadingMore} onClick={loadMore}>
-                {loadingMore
-                  ? "Loading…"
-                  : findingsCursor !== null && flaggedCursor === null
-                    ? "Show more findings"
-                    : findingsCursor === null && flaggedCursor !== null
-                      ? "Show more flagged records"
-                      : "Show more"}
-              </Button>
-            </div>
+            <AutoLoadMore
+              onLoadMore={() => void loadMore()}
+              loading={loadingMore}
+              paused={Boolean(error)}
+              label="Show more"
+            />
           ) : null}
         </div>
       )}

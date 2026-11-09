@@ -8,6 +8,7 @@ import {
 } from "react";
 import { IconTile } from "../components/IconTile";
 import { ListDisclosureControl, useListDisclosure } from "../components/ListDisclosure";
+import { Modal } from "../components/Modal";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle,
@@ -559,8 +560,8 @@ function findCurrentAndNextCheckpoints(
 
 /**
  * Weekly checkpoints — plan §10.4. The current and next checkpoint are shown
- * prominently; the full month's list stays behind an expand toggle, the same
- * pattern `RecoveryScenarioPanel`'s own "Try a scenario" button already uses.
+ * prominently; the full month's list opens in a popup so the card keeps its
+ * height.
  */
 function RecoveryCheckpoints({
   checkpoints,
@@ -573,7 +574,7 @@ function RecoveryCheckpoints({
   periodName: string;
   periodComplete: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   if (checkpoints.length === 0) return null;
   const isFinished = (c: RecoveryCheckpoint) => periodComplete || c.endDate < todayKey;
 
@@ -587,25 +588,15 @@ function RecoveryCheckpoints({
       title="Weekly checkpoints"
       eyebrow={`Cumulative open-day targets for ${periodName}`}
       action={
-        !expanded ? (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => setExpanded(true)}
-          >
-            Show all checkpoints
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => setExpanded(false)}
-          >
-            Hide full list
-          </Button>
-        )
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          aria-haspopup="dialog"
+          onClick={() => setShowAll(true)}
+        >
+          Show all checkpoints
+        </Button>
       }
     >
       <div className={`grid gap-4 ${current && next ? "sm:grid-cols-2" : ""}`}>
@@ -617,8 +608,13 @@ function RecoveryCheckpoints({
         ) : null}
       </div>
 
-      {expanded ? (
-        <div className="mt-4">
+      <Modal
+        open={showAll}
+        onClose={() => setShowAll(false)}
+        title={`Weekly checkpoints for ${periodName}`}
+        size="wide"
+      >
+      {showAll ? (
           <DataTable
             rows={checkpoints}
             columns={checkpointColumns(isFinished)}
@@ -654,8 +650,8 @@ function RecoveryCheckpoints({
               </div>
             )}
           />
-        </div>
       ) : null}
+      </Modal>
     </Panel>
   );
 }
@@ -2357,6 +2353,94 @@ function PlanFigure({
   );
 }
 
+/**
+ * The remaining target as two pictures instead of five boxed numbers: a bar
+ * for how much of the target sales already cover, then the one sum that turns
+ * what's left into a daily goal (still to go ÷ open days left = new goal).
+ */
+function RemainingTargetVisual({
+  targetLabel,
+  target,
+  targetSource,
+  sales,
+  remaining,
+  daysLeft,
+  operatingDays,
+  elapsedDays,
+  approximated,
+  dailyGoal,
+}: {
+  targetLabel: string;
+  target: number;
+  targetSource: ReactNode;
+  sales: number;
+  remaining: number;
+  daysLeft: string;
+  operatingDays: number;
+  elapsedDays: number;
+  approximated: boolean;
+  dailyGoal: number | null;
+}) {
+  const covered = target > 0 ? Math.min(Math.max((sales / target) * 100, 0), 100) : 0;
+  const operator = (symbol: string) => (
+    <span aria-hidden className="hidden text-center font-display text-2xl text-ink-500 sm:block">
+      {symbol}
+    </span>
+  );
+  return (
+    <div className="space-y-5">
+      <div>
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <p className="text-xs font-medium text-ink-500">
+            {targetLabel}{" "}
+            <span className="figure text-sm font-semibold text-ink-900">{formatMoney(target)}</span>
+          </p>
+          <p className="text-xs text-ink-500">{targetSource}</p>
+        </div>
+        <div
+          role="img"
+          aria-label={`Sales so far ${formatMoney(sales)} of ${formatMoney(target)}. Still to go ${formatMoney(remaining)}.`}
+          className="mt-2 h-3 w-full overflow-hidden rounded-full bg-paper-200"
+        >
+          <div
+            className="h-full rounded-full bg-tone-brand transition-[width] duration-700 ease-out motion-reduce:transition-none"
+            style={{ width: `${Math.max(covered, covered > 0 ? 2 : 0)}%` }}
+          />
+        </div>
+        <div aria-hidden className="mt-2 flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs text-ink-600">
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-tone-brand" />
+            Sales so far <span className="figure font-semibold text-ink-900">{formatMoney(sales)}</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-paper-200 ring-1 ring-inset ring-ink-300" />
+            Still to go <span className="figure font-semibold text-ink-900">{formatMoney(remaining)}</span>
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_1fr]">
+        <div className="rounded-xl ring-1 ring-paper-200">
+          <PlanFigure label="Still to go" value={formatMoney(remaining)} />
+        </div>
+        {operator("÷")}
+        <div className="rounded-xl ring-1 ring-paper-200">
+          <PlanFigure label="Open days left" value={daysLeft} />
+          <div className="px-3.5 pb-3.5">
+            <OperatingDayDots total={operatingDays} elapsed={elapsedDays} approximated={approximated} />
+          </div>
+        </div>
+        {operator("=")}
+        <PlanFigure
+          label="New daily goal"
+          value={dailyGoal === null ? "Not applicable" : formatMoney(dailyGoal)}
+          emphasis
+        />
+      </div>
+    </div>
+  );
+}
+
 export function RecoveryInsightPage() {
   return (
     <ReportingPeriodScope scope="recovery-target">
@@ -3027,73 +3111,29 @@ function RecoveryInsightContent() {
                     ? "Remaining recovery target"
                     : "Remaining weekly target"
                 }
-                eyebrow="Worked out again across the open days you have left"
+                eyebrow="What's left, split across your open days"
               >
-                <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-5">
-                  <PlanFigure
-                    label={
-                      reportingPeriod.kind === "month"
-                        ? "Monthly costs"
-                        : "This week's target"
-                    }
-                    value={formatMoney(reportingPeriod.target)}
-                    sublabel={reportingPeriodBasisSource(data, reportingPeriod)}
-                  />
-                  <PlanFigure
-                    label={
-                      reportingPeriod.kind === "month"
-                        ? "Sales recorded so far this month"
-                        : "Sales recorded this week"
-                    }
-                    value={formatMoney(reportingPeriod.sales)}
-                    sublabel="From your records"
-                  />
-                  <PlanFigure
-                    label="Remaining target"
-                    value={formatMoney(reportingPeriod.remainingTarget)}
-                    sublabel="Computed from your records"
-                  />
-                  <PlanFigure
-                    label="Open days left"
-                    value={formatOperatingDays(
-                      reportingPeriod.remainingOperatingDays,
-                      reportingPeriod.operatingDaysIsApproximated,
-                    )}
-                    sublabel={
-                      reportingPeriod.operatingDaysIsApproximated
-                        ? `About ${formatOperatingDayNumber(
-                            reportingPeriod.elapsedOperatingDays,
-                            true,
-                          )} of ${formatOperatingDayNumber(
-                            reportingPeriod.operatingDays,
-                            true,
-                          )} estimated operating days elapsed`
-                        : `${formatOperatingDayNumber(
-                            reportingPeriod.elapsedOperatingDays,
-                            false,
-                          )} of ${formatOperatingDayNumber(
-                            reportingPeriod.operatingDays,
-                            false,
-                          )} operating days elapsed`
-                    }
-                  />
-                  <PlanFigure
-                    label="New daily goal"
-                    value={
-                      reportingPeriod.adjustedDailyTarget === null
-                        ? "Not applicable"
-                        : formatMoney(reportingPeriod.adjustedDailyTarget)
-                    }
-                    sublabel="Remaining target ÷ open days left"
-                    emphasis
-                  />
-                </div>
-                <p className="mt-3 text-xs text-ink-500">
-                  Remaining target = selected-period target minus sales recorded
-                  so far.
-                </p>
+                <RemainingTargetVisual
+                  targetLabel={
+                    reportingPeriod.kind === "month"
+                      ? "Monthly costs"
+                      : "This week's target"
+                  }
+                  target={reportingPeriod.target}
+                  targetSource={reportingPeriodBasisSource(data, reportingPeriod)}
+                  sales={reportingPeriod.sales}
+                  remaining={reportingPeriod.remainingTarget}
+                  daysLeft={formatOperatingDays(
+                    reportingPeriod.remainingOperatingDays,
+                    reportingPeriod.operatingDaysIsApproximated,
+                  )}
+                  operatingDays={reportingPeriod.operatingDays}
+                  elapsedDays={reportingPeriod.elapsedOperatingDays}
+                  approximated={reportingPeriod.operatingDaysIsApproximated}
+                  dailyGoal={reportingPeriod.adjustedDailyTarget}
+                />
                 {reportingPeriod.operatingDaysIsApproximated ? (
-                  <p className="mt-1 text-xs text-ink-500">
+                  <p className="mt-3 text-xs text-ink-500">
                     Open days left is an estimate: your profile
                     records how many days a month you operate, not which days of
                     the week, so this scales the count across the selected
@@ -3110,7 +3150,7 @@ function RecoveryInsightContent() {
                     </Link>
                   </p>
                 ) : reportingPeriod.operatingScheduleConfigured ? (
-                  <p className="mt-1 text-xs text-ink-500">
+                  <p className="mt-3 text-xs text-ink-500">
                     Based on your configured operating days
                     {` (${formatOperatingDayNumber(
                       reportingPeriod.operatingDays,

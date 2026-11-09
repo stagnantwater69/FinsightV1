@@ -2468,7 +2468,7 @@ function ExpenseInsightPage() {
               <p className="text-sm text-ink-600">
                 {findings.length} open {findings.length === 1 ? "finding" : "findings"} about spending patterns.{" "}
                 <Link to="/records/flagged" className="tap-inline link-action">
-                  Review in Needs review
+                  Go to Needs review
                 </Link>
               </p>
             ) : null}

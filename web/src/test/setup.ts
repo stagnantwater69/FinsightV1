@@ -25,3 +25,14 @@ afterEach(() => {
   cleanup();
   if (typeof window !== "undefined") window.sessionStorage.clear();
 });
+
+// jsdom has no <dialog> showModal()/close(); Modal only relies on the `open`
+// attribute, so this is enough for any test that opens a popup.
+if (typeof HTMLDialogElement !== "undefined" && !HTMLDialogElement.prototype.showModal) {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+    this.removeAttribute("open");
+  };
+}
