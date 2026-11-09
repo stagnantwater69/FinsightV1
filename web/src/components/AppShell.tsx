@@ -358,7 +358,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       {/* ============================ SIDEBAR ============================ */}
       <aside
-        className={`surface-sidebar sticky top-0 hidden h-screen flex-col lg:flex ${
+        // z-40: sticky makes the rail its own stacking layer, and without a
+        // z-index the page's animated cards paint over the Insights flyout.
+        className={`surface-sidebar sticky top-0 z-40 hidden h-screen flex-col lg:flex ${
           railCollapsed ? "px-2 py-3.5" : "p-3.5"
         }`}
       >
@@ -500,9 +502,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                           <div className="invisible absolute left-full top-0 z-50 pl-2 opacity-0 transition duration-150 group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
                             <ul
                               aria-label={item.label}
-                              className="min-w-44 rounded-xl bg-ink-900 p-1.5 text-paper shadow-md"
+                              className="min-w-44 rounded-xl border border-paper-200/70 bg-paper/80 p-1.5 text-ink-900 shadow-md backdrop-blur-md"
                             >
-                              <li className="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-paper/60" aria-hidden>
+                              <li className="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-500" aria-hidden>
                                 {item.label}
                               </li>
                               {item.children.map((child) => {
@@ -513,7 +515,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                                       to={child.to}
                                       aria-current={active ? "page" : undefined}
                                       className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-2.5 text-[13px] transition ${
-                                        active ? "bg-paper/15 font-semibold" : "hover:bg-paper/10"
+                                        active ? "bg-tint-brand font-semibold text-tone-brand" : "hover:bg-paper-100"
                                       }`}
                                     >
                                       {child.label}

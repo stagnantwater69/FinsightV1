@@ -189,8 +189,8 @@ describe("Records sorting", () => {
     renderPage();
     await screen.findByRole("table");
 
-    // Paging under the current sort does use the cursor…
-    await user.click(screen.getByRole("button", { name: /Load more records/ }));
+    // The first batch fits on one page, so the owner is already on the last
+    // page and the next batch loads by itself, under the current sort's cursor…
     await waitFor(() =>
       expect(lastSearch()).toMatchObject({
         sort: "date_desc",
@@ -234,6 +234,8 @@ describe("Records sorting", () => {
     const user = userEvent.setup();
     searchResponses = [
       { items: SERVER_ORDER, nextCursor: "cursor-minted-under-date_desc" },
+      // The next batch, fetched on its own because one page holds the first.
+      { items: [], nextCursor: null },
       // The same filters under a different sort still match nothing here —
       // contrived, but it is the state the old code left a stale pager and
       // stale rows in.
@@ -241,7 +243,7 @@ describe("Records sorting", () => {
     ];
     renderPage();
     await screen.findByRole("table");
-    expect(screen.getByRole("button", { name: /Load more records/ })).toBeInTheDocument();
+    await waitFor(() => expect(lastSearch()).toMatchObject({ cursor: "cursor-minted-under-date_desc" }));
 
     await user.click(screen.getByRole("button", { name: /Amount/ }));
 
