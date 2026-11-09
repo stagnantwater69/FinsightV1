@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Pagination, isPageSize, type PageSize } from "./Pagination";
 import { usePersistentState } from "../lib/hooks";
 
@@ -119,6 +119,7 @@ export function DataTable<T>({
   defaultPageSize = 10,
   toolbar,
   rowClassName,
+  onLastPage,
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -166,6 +167,13 @@ export function DataTable<T>({
    * emphasised, not just the same row in the same order.
    */
   rowClassName?: (row: T) => string;
+  /**
+   * Called when the owner is on the last page of the loaded rows — the cue
+   * for a server-paged caller to fetch the next batch. Pass it only while
+   * the server has more and nothing is loading; the new rows add pages, so
+   * it does not fire again until the owner pages to the end once more.
+   */
+  onLastPage?: () => void;
 }) {
   const serverSorted = onSortChange !== undefined;
   const [localSort, setLocalSort] = useState<SortState | null>(initialSort ?? null);
@@ -195,6 +203,11 @@ export function DataTable<T>({
   // results while you're on page 9, an effect would render one frame of an
   // empty table before snapping back. This just never shows that frame.
   const currentPage = Math.min(page, totalPages);
+
+  const onLastLoadedPage = paginate && !loading && totalItems > 0 && currentPage === totalPages;
+  useEffect(() => {
+    if (onLastLoadedPage) onLastPage?.();
+  }, [onLastLoadedPage, totalItems, onLastPage]);
 
   const visible = useMemo(() => {
     if (!paginate) return sorted;

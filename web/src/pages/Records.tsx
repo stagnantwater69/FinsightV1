@@ -13,7 +13,6 @@ import { MoreActions } from "../components/MoreActions";
 import { ReviewReason } from "../components/LargeExpenseReason";
 import { useDismiss } from "../lib/hooks";
 import { Button, ButtonLink } from "../components/Button";
-import { AutoLoadMore } from "../components/AutoLoadMore";
 import { EmptyState } from "../components/EmptyState";
 import { DataTable, type Column, type SortState } from "../components/DataTable";
 import { IconDuplicate, IconEdit, IconSearch, IconTrash } from "../components/icons";
@@ -1259,6 +1258,15 @@ export function Records() {
           defaultPageSize={25}
           sort={sort}
           onSortChange={handleSortChange}
+          // Fetches the next batch once the owner pages to the end of what is
+          // loaded. Not while a fresh query or a page is in flight (the cursor
+          // may belong to results being replaced), nor after a failed page,
+          // whose error banner carries the retry.
+          onLastPage={
+            nextCursor && !loading && !loadingMore && errorKind !== "load-more"
+              ? () => void loadRecords(undefined, nextCursor)
+              : undefined
+          }
           toolbar={toolbar}
           rowClassName={(r) =>
             `group ${highlightRecordId && r.type === "expense" && r.id === highlightRecordId ? "bg-tint-accent" : ""}`
@@ -1344,15 +1352,10 @@ export function Records() {
         />
       )}
 
-      {/* Hidden while a fresh query is in flight: the cursor on screen belongs
-          to results that are being replaced. Also hidden after a failed page,
-          whose error banner above carries the retry. */}
-      {nextCursor && !loading && errorKind !== "load-more" ? (
-        <AutoLoadMore
-          onLoadMore={() => void loadRecords(undefined, nextCursor)}
-          loading={loadingMore}
-          label="Load more records"
-        />
+      {loadingMore ? (
+        <p role="status" className="mt-4 text-center text-xs text-ink-500">
+          Loading more records…
+        </p>
       ) : null}
 
       {/* Both add modals need a business for the record to belong to, so with
