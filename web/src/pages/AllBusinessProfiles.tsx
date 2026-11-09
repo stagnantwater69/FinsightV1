@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { Archive, ArrowLeft, ArrowLeftRight, Check, Pencil } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { getErrorMessage } from "../lib/errors";
 import { formatMoney } from "../components/Money";
@@ -380,20 +380,24 @@ export function AllBusinessProfiles() {
                   </div>
                 </dl>
 
-                {/* Wraps: the two actions side by side set the card's minimum
-                    width, which scrolled the page at 200px (400px at 200% zoom). */}
-                <div className="mt-auto flex flex-wrap gap-2 pt-5">
+                {/* One row for every card, so the actions line up across the
+                    grid. It wraps (the primary action has a basis, not a fixed
+                    width), which keeps the page from scrolling sideways at
+                    200px (400px at 200% zoom). */}
+                <div className="mt-auto flex flex-wrap items-center gap-2 pt-5">
                   {isActive ? (
-                    <Button variant="secondary" size="sm" fullWidth disabled>
-                      Currently Active
-                    </Button>
+                    <p className="flex min-h-tap flex-1 basis-32 items-center gap-1.5 text-sm font-semibold text-tone-brand">
+                      <Check aria-hidden className="size-4 shrink-0" />
+                      Active business
+                    </p>
                   ) : (
                     <Button
                       variant="brand"
                       size="sm"
-                      fullWidth
+                      className="flex-1 basis-32"
                       onClick={() => selectProfile(p.id)}
                     >
+                      <ArrowLeftRight aria-hidden className="size-4 shrink-0" />
                       Switch
                     </Button>
                   )}
@@ -401,21 +405,25 @@ export function AllBusinessProfiles() {
                     variant="secondary"
                     size="sm"
                     onClick={() => setEditing(p)}
+                    aria-label={`Edit ${p.name}`}
                   >
+                    <Pencil aria-hidden className="size-4 shrink-0" />
                     Edit
                   </Button>
+                  {!isActive ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleArchive(p)}
+                      disabled={busyId === p.id}
+                      aria-label={busyId === p.id ? undefined : `Archive ${p.name}`}
+                      className="hover:!bg-tint-danger hover:!text-tone-danger"
+                    >
+                      <Archive aria-hidden className="size-4 shrink-0" />
+                      {busyId === p.id ? "Archiving…" : "Archive"}
+                    </Button>
+                  ) : null}
                 </div>
-
-                {!isActive ? (
-                  <button
-                    type="button"
-                    onClick={() => handleArchive(p)}
-                    disabled={busyId === p.id}
-                    className="tap mt-2 w-full rounded-lg text-xs font-medium text-ink-500 transition hover:bg-paper-100 hover:text-tone-danger disabled:opacity-60"
-                  >
-                    {busyId === p.id ? "Archiving…" : "Archive"}
-                  </button>
-                ) : null}
               </Card>
             );
           })}

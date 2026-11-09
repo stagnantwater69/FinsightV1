@@ -13,6 +13,7 @@ import { MoreActions } from "../components/MoreActions";
 import { ReviewReason } from "../components/LargeExpenseReason";
 import { useDismiss } from "../lib/hooks";
 import { Button, ButtonLink } from "../components/Button";
+import { AutoLoadMore } from "../components/AutoLoadMore";
 import { EmptyState } from "../components/EmptyState";
 import { DataTable, type Column, type SortState } from "../components/DataTable";
 import { IconDuplicate, IconEdit, IconSearch, IconTrash } from "../components/icons";
@@ -1344,13 +1345,14 @@ export function Records() {
       )}
 
       {/* Hidden while a fresh query is in flight: the cursor on screen belongs
-          to results that are being replaced. */}
-      {nextCursor && !loading ? (
-        <div className="mt-4 flex justify-center">
-          <Button variant="secondary" onClick={() => loadRecords(undefined, nextCursor)} disabled={loadingMore}>
-            {loadingMore ? "Loading…" : "Load more records"}
-          </Button>
-        </div>
+          to results that are being replaced. Also hidden after a failed page,
+          whose error banner above carries the retry. */}
+      {nextCursor && !loading && errorKind !== "load-more" ? (
+        <AutoLoadMore
+          onLoadMore={() => void loadRecords(undefined, nextCursor)}
+          loading={loadingMore}
+          label="Load more records"
+        />
       ) : null}
 
       {/* Both add modals need a business for the record to belong to, so with

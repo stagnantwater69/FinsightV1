@@ -814,7 +814,7 @@ describe("ExpenseInsight resilience", () => {
 
     expect(await screen.findByText(/7 open findings about spending patterns/)).toBeInTheDocument();
     expect(screen.queryByText("Finding number 1")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Review in Needs review" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Go to Needs review" })).toHaveAttribute(
       "href",
       "/records/flagged",
     );

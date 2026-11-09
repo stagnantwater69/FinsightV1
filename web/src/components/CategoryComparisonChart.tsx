@@ -2,7 +2,8 @@ import { useState } from "react";
 import { formatMoney } from "./Money";
 import { ChartTooltip } from "./ChartTooltip";
 import type { CategoryTrend } from "../lib/types";
-import { ListDisclosureControl, useListDisclosure } from "./ListDisclosure";
+import { Button } from "./Button";
+import { Modal } from "./Modal";
 
 /**
  * This period vs the previous one, per category.
@@ -26,47 +27,31 @@ import { ListDisclosureControl, useListDisclosure } from "./ListDisclosure";
 
 /** Bars shorter than this still show, so "almost nothing" doesn't read as nothing. */
 const MIN_BAR_PERCENT = 1.5;
+/** Rows the card shows; the full list opens in a popup so the card keeps its height. */
+const PREVIEW_ROWS = 6;
 
 export function CategoryComparisonChart({
   trends,
   previousLabel = "Last period",
   currentLabel = "This period",
-  resetKey,
 }: {
   trends: CategoryTrend[];
   previousLabel?: string;
   currentLabel?: string;
-  resetKey?: string;
 }) {
   const [hovered, setHovered] = useState<number | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   const rows = trends.filter((t) => t.current > 0 || t.previous > 0);
-  const disclosure = useListDisclosure({ total: rows.length, resetKey });
   if (rows.length === 0) return null;
 
   const max = Math.max(...rows.map((t) => Math.max(t.current, t.previous)), 1);
   const width = (value: number) =>
     value <= 0 ? 0 : Math.max((value / max) * 100, MIN_BAR_PERCENT);
 
-  return (
-    <div>
-      {/* Two series, so a legend is mandatory: identity is never colour
-          alone. The previous period is a tick on the same track as the bar,
-          so "did it go up or down" is read as the bar passing or falling
-          short of its tick. */}
-      <div className="mb-4 flex flex-wrap items-center justify-end gap-4 text-xs text-ink-500">
-        <span className="flex items-center gap-1.5">
-          <span aria-hidden className="h-2.5 w-4 rounded-full" style={{ background: "linear-gradient(90deg, rgb(var(--chart-emphasis) / 0.55), rgb(var(--chart-emphasis)))" }} />
-          {currentLabel}
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span aria-hidden className="h-3 w-0.5 rounded-full bg-ink-700" />
-          {previousLabel}
-        </span>
-      </div>
-
-      <ul id={disclosure.contentId} className="space-y-3">
-        {rows.slice(0, disclosure.visibleCount).map((t) => {
+  const renderRows = (list: CategoryTrend[]) => (
+      <ul className="space-y-3">
+        {list.map((t) => {
           const isUp = t.change > 0;
           const isDown = t.change < 0;
           const active = hovered === t.categoryId;
@@ -153,7 +138,53 @@ export function CategoryComparisonChart({
           );
         })}
       </ul>
-      <ListDisclosureControl disclosure={disclosure} total={rows.length} itemLabel="categories" className="mt-3" />
+  );
+
+  // Two series, so a legend is mandatory: identity is never colour alone.
+  // The previous period is a tick on the same track as the bar, so "did it go
+  // up or down" is read as the bar passing or falling short of its tick.
+  const legend = (
+    <div className="mb-4 flex flex-wrap items-center justify-end gap-4 text-xs text-ink-500">
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden className="h-2.5 w-4 rounded-full" style={{ background: "linear-gradient(90deg, rgb(var(--chart-emphasis) / 0.55), rgb(var(--chart-emphasis)))" }} />
+        {currentLabel}
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden className="h-3 w-0.5 rounded-full bg-ink-700" />
+        {previousLabel}
+      </span>
+    </div>
+  );
+
+  return (
+    <div>
+      {legend}
+      {renderRows(rows.slice(0, PREVIEW_ROWS))}
+      {rows.length > PREVIEW_ROWS ? (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-paper-200 pt-2">
+          <p className="text-xs text-ink-600">
+            Showing {PREVIEW_ROWS} of {rows.length} categories
+          </p>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-haspopup="dialog"
+            onClick={() => setShowAll(true)}
+            className="text-tone-brand"
+          >
+            Show all {rows.length} categories
+          </Button>
+        </div>
+      ) : null}
+      <Modal open={showAll} onClose={() => setShowAll(false)} title="Expense comparison" size="wide">
+        {showAll ? (
+          <>
+            {legend}
+            {renderRows(rows)}
+          </>
+        ) : null}
+      </Modal>
     </div>
   );
 }

@@ -494,7 +494,35 @@ export function AppShell({ children }: { children: ReactNode }) {
                             <item.Icon className="h-[18px] w-[18px] shrink-0 opacity-90" />
                             <span className="sr-only">{item.label}</span>
                           </Link>
-                          <RailTip>{item.label}</RailTip>
+                          {/* The rail has no room for the sub-pages, so they fly out
+                              beside the icon on hover or keyboard focus. Padding, not
+                              margin, bridges the gap so the pointer can cross to it. */}
+                          <div className="invisible absolute left-full top-0 z-50 pl-2 opacity-0 transition duration-150 group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+                            <ul
+                              aria-label={item.label}
+                              className="min-w-44 rounded-xl bg-ink-900 p-1.5 text-paper shadow-md"
+                            >
+                              <li className="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-paper/60" aria-hidden>
+                                {item.label}
+                              </li>
+                              {item.children.map((child) => {
+                                const active = location.pathname === child.to;
+                                return (
+                                  <li key={child.to}>
+                                    <Link
+                                      to={child.to}
+                                      aria-current={active ? "page" : undefined}
+                                      className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-2.5 text-[13px] transition ${
+                                        active ? "bg-paper/15 font-semibold" : "hover:bg-paper/10"
+                                      }`}
+                                    >
+                                      {child.label}
+                                    </Link>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
                         </>
                       ) : (
                         <>

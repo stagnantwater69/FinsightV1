@@ -320,7 +320,7 @@ describe("the unified review queue", () => {
   it("offers another page only when the server said there is one", async () => {
     getHandlers["/insights/findings"] = ok({ items: [outlier], nextCursor: 10 });
     renderPage();
-    expect(await screen.findByRole("button", { name: "Show more findings" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
   });
 
   it("still renders the legacy flags when the findings request fails", async () => {
@@ -378,7 +378,7 @@ describe("the flagged list is paged, not truncated", () => {
     expect(await screen.findByText(/First page record/)).toBeInTheDocument();
     expect(screen.queryByText(/Record two hundred and one/)).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Show more flagged records" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
 
     // Appended, not swapped — the owner keeps what they were already reading.
     expect(await screen.findByText(/Record two hundred and one/)).toBeInTheDocument();

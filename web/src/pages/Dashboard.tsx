@@ -657,7 +657,6 @@ function DashboardPage() {
                   <CategoryComparisonChart
                     trends={comparison!.categoryTrends}
                     currentLabel={periodCaption}
-                    resetKey={`${selected.id}:${JSON.stringify(selection)}`}
                     previousLabel={comparedWith ?? "Before"}
                   />
                 )}

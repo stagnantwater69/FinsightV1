@@ -975,7 +975,7 @@ describe("Recovery Target — weekly checkpoints (plan §10.4, Phase 4)", () => 
     expect(await screen.findAllByText("Not yet reached")).not.toHaveLength(0);
   });
 
-  it("expands to show the full checkpoint list, and collapses again", async () => {
+  it("opens the full checkpoint list in a popup, and closes it again", async () => {
     currentRecovery = {
       ...recovery,
       asOfDate: "2026-01-10",
@@ -1000,11 +1000,10 @@ describe("Recovery Target — weekly checkpoints (plan §10.4, Phase 4)", () => 
     await userEvent.click(
       await screen.findByRole("button", { name: "Show all checkpoints" }),
     );
-    expect(await screen.findByRole("table")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("table")).toBeInTheDocument();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Hide full list" }),
-    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
