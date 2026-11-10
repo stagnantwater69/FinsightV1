@@ -1243,7 +1243,11 @@ async function monthComparisonLines(
     .sort((a, b) => Math.max(b.before, b.after) - Math.max(a.before, a.after));
   for (const row of ranked.slice(0, MAX_COMPARED_CATEGORIES)) pair(names.get(row.id) ?? "Unnamed category", row.before, row.after);
   if (ranked.length > MAX_COMPARED_CATEGORIES) lines.push(`- ${ranked.length - MAX_COMPARED_CATEGORIES} smaller categories not listed.`);
-  lines.push("FinSight calculated these totals and differences. Use them as given; do not add or subtract figures yourself.");
+  lines.push(
+    "FinSight calculated these totals and differences. Use them as given; do not add or subtract figures yourself. Keep it short: the two totals, then at most two category changes.",
+    // The answer check reads the words BEFORE a figure as its subject, so "8,750 in January from 7,900" binds 7,900 to January.
+    `Name the month and subject before each figure, for example "In ${earlier.label}, total sales were PHP …; in ${later.label}, PHP …".`,
+  );
   return lines;
 }
 
@@ -1259,7 +1263,10 @@ async function recoveryWhatIfLines(
   today: Date,
   whatIf: RecoveryWhatIf,
 ): Promise<string[]> {
-  const footer = "FinSight calculated these figures and saved nothing. Use them as given; do not recalculate them.";
+  // "Now", not "current": the answer check reads the words before a figure as its subject, and "current" names other lines.
+  const footer =
+    "FinSight calculated these figures and saved nothing. Use them as given; do not recalculate them. " +
+    'Say "now" for today\'s figures, as these lines do (for example "PHP 3,625.00 now"), not "current".';
   if (whatIf.kind === "monthly-costs") {
     const scenario = await simulateRecoveryScenario(userId, profile.id, whatIf.amount);
     return [
