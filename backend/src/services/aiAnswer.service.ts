@@ -284,7 +284,7 @@ interface FinancialFact {
 const SUBJECT_STOP_WORDS = new Set((
   "the a an your you our their this that these those record records equivalent period total amount " +
   "was were are is be been have has had cost costs spent spend spending paid purchase " +
-  "today todays reference against about " +
+  "today todays reference against about compared compare instead versus " +
   "from for and with before after on per as of in to at php peso pesos piso pisos"
 ).split(" "));
 

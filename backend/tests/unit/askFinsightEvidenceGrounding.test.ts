@@ -327,4 +327,30 @@ describe("Ask FinSight keeps correct answers whole", () => {
     expect(result.metadata.amountCheck).toBe("trimmed");
     expect(result.answer).toBe("Rent was PHP 19,000.00. Ingredients cost PHP 28,360.00.\n\nCheck your review queue.");
   });
+
+  // Month comparisons read "X compared to Y". "Compared against:" labels a line in the
+  // flag block, so "compared" must not count as the second figure's subject.
+  const comparison = [
+    "- Compared against: the owner's usual PHP 305.14 in this category, across 7 past record(s) [fact:f3]",
+    "- Raw Materials in December 2021: PHP 3,733.33 [fact:f22]",
+    "- Raw Materials in January 2022: PHP 4,200.00 [fact:f23]",
+    "- Packaging in January 2022: PHP 1,560.00 [fact:f26]",
+  ].join("\n");
+
+  it.each([
+    "Raw Materials went up to **PHP 4,200.00** compared to PHP 3,733.33 [fact:f22, f23].",
+    "Raw Materials went up to **PHP 4,200.00** [fact:f23] compared to PHP 3,733.33 [fact:f22].",
+    "Raw Materials came to PHP 4,200.00 [fact:f23] instead of PHP 3,733.33 [fact:f22].",
+  ])("passes a comparison connector between two cited figures: %s", async (answer) => {
+    const ask = scripted(answer);
+    const result = await groundAnswer(ask, { context: comparison, question: "Compare January and December", references: new Map() });
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(result.metadata.amountCheck).toBe("passed");
+  });
+
+  it("still rejects a compared figure that is not on the cited lines", async () => {
+    const bad = "Raw Materials went up to **PHP 4,200.00** compared to PHP 1,560.00 [fact:f22, f23].";
+    const result = await groundAnswer(scripted(bad, bad), { context: comparison, question: "Compare January and December", references: new Map() });
+    expect(result.metadata.amountCheck).toBe("trimmed");
+  });
 });

@@ -172,9 +172,15 @@ async function callGemini(input: AskInput): Promise<string> {
   }
 
   const data = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
+    candidates?: { finishReason?: string; content?: { parts?: { text?: string; thought?: boolean }[] } }[];
   };
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  const candidate = data.candidates?.[0];
+  // A reply can arrive in several parts; reading only the first drops the rest mid-sentence.
+  const text = (candidate?.content?.parts ?? []).filter((part) => !part.thought).map((part) => part.text ?? "").join("");
+  if (candidate?.finishReason && candidate.finishReason !== "STOP") {
+    // MAX_TOKENS here means the owner gets a cut-off reply; logged so it shows up in production.
+    logger.warn({ finishReason: candidate.finishReason, answerLength: text.length }, "Gemini chat reply did not finish normally");
+  }
   if (!text) {
     throw new Error("Gemini returned no text content");
   }
