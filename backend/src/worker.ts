@@ -30,6 +30,7 @@ import {
 } from "./services/receiptPurge.service";
 import { reconcileStaleReceiptProviderDispatches } from "./services/receiptProviderDispatch.service";
 import { runCsvSourcePurgeWorkerOnce, sweepRetainedCsvSources } from "./services/csvSourcePurge.service";
+import { sendWeeklySummaries } from "./services/weeklySummary.service";
 
 const SELECTED_LANES = env.WORKER_LANES;
 
@@ -134,6 +135,7 @@ let dailyAnalysisTimer: NodeJS.Timeout | undefined;
 let unverifiedPurgeTimer: NodeJS.Timeout | undefined;
 let abandonedScanSweepTimer: NodeJS.Timeout | undefined;
 let csvRetentionSweepTimer: NodeJS.Timeout | undefined;
+let weeklySummaryTimer: NodeJS.Timeout | undefined;
 
 function startCsvSchedules(): void {
   /*
@@ -218,6 +220,21 @@ function startMaintenanceSchedules(): void {
     runSustainedUsageSweep();
   }, 60 * 60_000);
   runSustainedUsageSweep();
+
+  // Hourly so each business gets its Monday summary soon after its own
+  // midnight; the service skips any profile already sent one this week.
+  const runWeeklySummaries = () => {
+    void sendWeeklySummaries()
+      .then((result) => {
+        if (result.sent > 0) logger.info(result, "sent weekly summaries");
+      })
+      .catch((error) => logger.error({ err: error }, "weekly summary sweep failed"));
+  };
+  weeklySummaryTimer = setInterval(() => {
+    if (shuttingDown) return;
+    runWeeklySummaries();
+  }, 60 * 60_000);
+  runWeeklySummaries();
 
   /*
    * Unconfirmed registrations expire.
@@ -308,6 +325,7 @@ async function shutdown(signal: string): Promise<void> {
   clearInterval(unverifiedPurgeTimer);
   clearInterval(abandonedScanSweepTimer);
   clearInterval(csvRetentionSweepTimer);
+  clearInterval(weeklySummaryTimer);
 
   const forceTimer = setTimeout(() => {
     logger.fatal("worker graceful shutdown timed out; forcing exit mid-job");

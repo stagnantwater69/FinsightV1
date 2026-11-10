@@ -20,6 +20,8 @@ export const NOTIFICATION_TYPES = {
   // [ADDED] Recovery Target plan §10.8/§11 Phase 6 — see
   // recoveryNotification.service.ts, the only writer of this type.
   RECOVERY_TARGET: "Recovery Target",
+  // [ADDED] weeklySummary.service.ts is the only writer of this type.
+  WEEKLY_SUMMARY: "Weekly Summary",
 } as const;
 
 /**

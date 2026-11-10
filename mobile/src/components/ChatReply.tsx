@@ -10,6 +10,7 @@ import { CHAT_PAGE_TARGETS, inlineRuns, parseChatBlocks, recordPath } from "../l
 import { formatMoney } from "../lib/money";
 import { formatDueDate } from "../lib/recurringAgenda";
 import { useTheme } from "../context/ThemeContext";
+import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import type { ChatAction, ChatAnswerMetadata, RecordItem } from "../lib/types";
 import { navigateToTabScreen, type TabNavigation } from "../navigation/types";
@@ -201,6 +202,11 @@ export function ChatReplyExtras({
           key={scopeKey}
           actions={metadata.actions}
           onOpenSpendingImpact={(amount) => openPage("spending-impact", { plannedAmount: amount })}
+          onPrefill={(recordType, description, amount) =>
+            recordType === "sales"
+              ? openPage("add-sales", { prefill: { description, amount } })
+              : openPage("add-expense", { prefill: { description, vendor: "", categoryId: null, amount } })
+          }
         />
       ) : null}
 
@@ -272,11 +278,14 @@ export function ChatReplyExtras({
 function ActionRow({
   actions,
   onOpenSpendingImpact,
+  onPrefill,
 }: {
   actions: ChatAction[];
   onOpenSpendingImpact: (amount: number) => void;
+  onPrefill: (recordType: "expense" | "sales", description: string, amount: number) => void;
 }) {
   const t = useTheme();
+  const { selected } = useBusinessProfiles();
   const [busy, setBusy] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -294,19 +303,34 @@ function ActionRow({
       onOpenSpendingImpact(action.amount);
       return;
     }
-    if (!Number.isSafeInteger(action.findingId) || action.findingId < 1) return;
+    if (action.kind === "prefill-record") {
+      // Opens the normal form filled in; nothing is saved until the owner saves it there.
+      if (!Number.isFinite(action.amount) || action.amount <= 0 || (action.recordType !== "expense" && action.recordType !== "sales")) return;
+      onPrefill(action.recordType, String(action.description ?? ""), action.amount);
+      return;
+    }
+    const watching = action.kind === "watch-recurring-pattern";
+    if (action.kind === "watch-recurring-pattern") {
+      if (!selected || !Number.isSafeInteger(action.patternId) || action.patternId < 1) return;
+    } else if (action.kind !== "review-finding" || !Number.isSafeInteger(action.findingId) || action.findingId < 1) {
+      return; // an action kind this build does not know
+    }
     busyRef.current = true;
     haptics.pressed();
     setBusy(action.label);
     setError(null);
     try {
-      await api.patch(`/insights/findings/${action.findingId}/review`, {
-        status: action.status,
-        feedback: action.feedback,
-      });
+      if (action.kind === "watch-recurring-pattern") {
+        await api.post(`/insights/recurring-patterns/${action.patternId}/confirm`, undefined, { cacheScope: { businessProfileId: selected!.id } });
+      } else if (action.kind === "review-finding") {
+        await api.patch(`/insights/findings/${action.findingId}/review`, {
+          status: action.status,
+          feedback: action.feedback,
+        });
+      }
       if (!mounted.current) return;
       haptics.committed();
-      setDone(action.label);
+      setDone(watching ? `${action.label}. It is now on your Payment calendar.` : `${action.label}. This flag has left your review list.`);
     } catch (err) {
       if (mounted.current) setError(err instanceof Error && err.message ? err.message : "That didn't save. Please try again.");
     } finally {
@@ -318,7 +342,7 @@ function ActionRow({
   if (done) {
     return (
       <T variant="caption" style={{ color: t.brand[700] }}>
-        Saved: {done}. This flag has left your review list.
+        Saved: {done}
       </T>
     );
   }

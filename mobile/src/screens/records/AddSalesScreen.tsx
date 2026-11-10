@@ -20,7 +20,7 @@ import { isDefiniteManualRecordRejection, verifiedManualRecordResult, type Manua
 import { ManualRecordRecoveryNotice } from "../../components/ManualRecordRecoveryNotice";
 import type { RecordsScreenProps } from "../../navigation/types";
 
-export function AddSalesScreen({ navigation }: RecordsScreenProps<"AddSales">) {
+export function AddSalesScreen({ navigation, route }: RecordsScreenProps<"AddSales">) {
   const { selected } = useBusinessProfiles();
   const { profile: owner } = useAuth();
   const [date, setDate] = useState(() => businessToday(selected?.timezone));
@@ -54,6 +54,15 @@ export function AddSalesScreen({ navigation }: RecordsScreenProps<"AddSales">) {
     return () => { retryPrompt.current = null; };
   }, [owner?.id, selected?.id, clearBaselineDecision]);
   useFocusEffect(useCallback(() => () => { if (flight.current) flight.current.unknown = true; operation.cancel(); setBusy(false); }, [operation]));
+  // Filled in from Ask FinSight once the saved-request check has finished, then cleared so it applies once.
+  const prefill = route?.params?.prefill;
+  const formLocked = busy || recovery.frozen;
+  useEffect(() => {
+    if (!prefill || formLocked) return;
+    setDescription(prefill.description);
+    setAmount(String(prefill.amount));
+    navigation.setParams({ prefill: undefined });
+  }, [prefill, formLocked, navigation]);
   // The date field is a pressable, so the chain is Description → Amount.
   const amountRef = useRef<TextInputInstance>(null);
 

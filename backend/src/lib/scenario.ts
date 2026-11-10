@@ -1,7 +1,7 @@
-// Bounded extraction of a planned-expense amount from a plain-language
-// message. This exists ONLY for the Spending Impact drawer (Module 6, B5)
-// — it is deliberately not general-purpose NLP, and nothing else in the
-// app should call it.
+// Bounded extraction of an amount from a plain-language Ask FinSight message.
+// Written for the Spending Impact drawer (Module 6, B5); lib/chatIntents.ts
+// reuses it for the other chat what-ifs. It is deliberately not
+// general-purpose NLP, and nothing outside Ask FinSight should call it.
 //
 // The point is that the AI never invents the impact numbers. We pull an
 // amount out of the sentence here, run it through the real

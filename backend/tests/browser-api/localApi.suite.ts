@@ -8,7 +8,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { guardBrowserFixture } from "./guard";
 import { cleanOwnedResources, runOwnedProcess } from "./ownedProcess";
 
-const controls = vi.hoisted(() => ({ identities: new Map<string, string>(), providerCalls: 0 }));
+const controls = vi.hoisted(() => ({ identities: new Map<string, string>(), providerCalls: 0, lastContext: "" }));
 vi.mock("../../src/config/supabase", async (original) => ({
   ...await original<typeof import("../../src/config/supabase")>(),
   supabaseAdmin: { auth: { getUser: async (token: string) => {
@@ -18,8 +18,10 @@ vi.mock("../../src/config/supabase", async (original) => ({
 }));
 vi.mock("../../src/services/ai.service", async (original) => ({
   ...await original<typeof import("../../src/services/ai.service")>(),
-  askFinSight: async () => {
+  askFinSight: async (input: { context: string }) => {
     controls.providerCalls++;
+    // Kept so a journey can check what the server put in front of the model.
+    controls.lastContext = input.context;
     return { answer: "Review your recorded expenses before your next purchase.", provider: "gemini" };
   },
 }));
@@ -95,6 +97,17 @@ beforeAll(async () => {
     return { id: owner.user.id, authId: owner.user.authId, email: owner.user.email, token,
       businessProfileId: owner.profile.id, categoryId: owner.categories.Inventory };
   });
+  // Ask FinSight journeys: a repeating expense FinSight noticed, and sales in the two
+  // months before this one. Sales only, so the expense-record journeys still start empty.
+  await db.recurringPattern.create({ data: { businessProfileId: ownerA.profile.id, categoryId: ownerA.categories.Inventory!,
+    normalizedKey: "lpg refill", description: "LPG refill", intervalDays: 30, expectedAmount: 1200, amountTolerance: 0.1,
+    confidence: 0.9, observationCount: 3, lastOccurrence: new Date(setup.utcDayString(-20)), nextExpectedDate: new Date(setup.utcDayString(10)) } });
+  const { createSalesRecord } = await import("../../src/services/salesRecord.service");
+  const now = new Date();
+  for (const [back, amount] of [[2, 2000], [1, 1000]] as const) {
+    await createSalesRecord(ownerA.user.id, { businessProfileId: ownerA.profile.id, description: "Daily sales", amount,
+      date: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 15)).toISOString().slice(0, 10) });
+  }
   const { app } = await import("../../src/app");
   const fixture = express();
   fixture.get("/__qa/state", async (req, res, next) => {
@@ -102,15 +115,16 @@ beforeAll(async () => {
       res.status(404).end(); return;
     }
     try {
-      const [records, manualRequests, chats, messages, limits] = await Promise.all([
+      const [records, manualRequests, chats, messages, limits, sales, schedules] = await Promise.all([
         db!.expenseRecord.findMany(), db!.manualRecordCreateRequest.count(), db!.chatSendRequest.findMany(),
-        db!.chatMessage.count(), db!.apiRateLimit.findMany(),
+        db!.chatMessage.count(), db!.apiRateLimit.findMany(), db!.salesReferenceRecord.count(),
+        db!.recurringSchedule.findMany({ select: { businessProfileId: true, label: true } }),
       ]);
       res.json({ records: records.map((record) => ({ id: record.id, businessProfileId: record.businessProfileId,
         categoryId: record.categoryId, description: record.description, amount: record.amount.toFixed(2) })),
         manualRequests, chats: chats.map((chat) => ({ status: chat.status, userId: chat.userId,
           businessProfileId: chat.businessProfileId, conversationId: chat.conversationId })),
-        messages, providerCalls: controls.providerCalls, limits: limits.map((limit) => ({ key: limit.key, count: limit.count })) });
+        messages, providerCalls: controls.providerCalls, lastContext: controls.lastContext, sales, schedules, limits: limits.map((limit) => ({ key: limit.key, count: limit.count })) });
     } catch (error) { next(error); }
   });
   fixture.use(app);
@@ -153,6 +167,6 @@ it("runs the real local API/database browser journeys", async () => {
   expect(result.timedOut, result.output).toBe(false);
   expect(result.exit, result.output).toBe(0);
   const results = JSON.parse(readFileSync(path.join(scratch, "browser-results.json"), "utf8"));
-  expect(results.stats).toMatchObject({ expected: 3, unexpected: 0, skipped: 0, flaky: 0 });
+  expect(results.stats).toMatchObject({ expected: 7, unexpected: 0, skipped: 0, flaky: 0 });
   expect(externalRequests).toEqual([]);
 }, 180_000);

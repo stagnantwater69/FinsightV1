@@ -1330,7 +1330,9 @@ export type ChatAction =
       status: "CONFIRMED" | "DISMISSED" | "RESOLVED";
       feedback: "CONFIRMED_UNUSUAL" | "EXPECTED_TRANSACTION" | "DUPLICATE" | "INCORRECT_MATCH" | "NO_LONGER_RELEVANT";
     }
-  | { kind: "open-spending-impact"; amount: number; label: string };
+  | { kind: "open-spending-impact"; amount: number; label: string }
+  | { kind: "prefill-record"; recordType: "expense" | "sales"; amount: number; description: string; label: string }
+  | { kind: "watch-recurring-pattern"; patternId: number; label: string };
 
 export interface ChatAnswerMetadata {
   references: ChatRecordReference[];
