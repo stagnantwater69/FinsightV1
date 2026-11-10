@@ -61,6 +61,53 @@ function yearSelection(year: number, today: Date): QuestionPeriod | null {
   return { selection: { kind: "rolling", days, endDate: end }, label: year === today.getUTCFullYear() ? `${year} so far` : `${year}` };
 }
 
+/**
+ * Every month the question names, in the order it names them. A month name
+ * may carry a year on either side: "January 2022", "jan 2022", "2022 January".
+ * "may" is also an ordinary English word ("may I…") and Filipino ("may utang"),
+ * so on its own it only counts when a year is next to it.
+ */
+function namedMonths(q: string, today: Date): QuestionPeriod[] {
+  const thisYear = today.getUTCFullYear();
+  const thisMonth = today.getUTCMonth() + 1;
+  const found: QuestionPeriod[] = [];
+  const monthPattern = new RegExp(`\\b(${Object.keys(MONTH_NAMES).join("|")})\\b(?:\\s*,?\\s*((?:19|20)\\d{2}))?`, "g");
+  for (const match of q.matchAll(monthPattern)) {
+    const name = match[1]!;
+    const month = MONTH_NAMES[name]!;
+    const before = q.slice(Math.max(0, match.index! - 6), match.index!).match(/((?:19|20)\d{2})\s*$/);
+    const yearText = match[2] ?? before?.[1];
+    if (name === "may" && !yearText) continue;
+    // Three-letter English words that are also month abbreviations ("mar", "jun")
+    // only count beside a year, for the same reason.
+    if (name.length === 3 && !yearText && !["jan", "feb", "apr", "aug", "sep", "oct", "nov", "dec"].includes(name)) continue;
+    // No year: the most recent such month that has started.
+    found.push(monthSelection(yearText ? Number(yearText) : month > thisMonth ? thisYear - 1 : thisYear, month));
+  }
+  return found;
+}
+
+/**
+ * Two calendar months to set side by side — "October vs September",
+ * "this month compared with last month" — oldest first. Null unless the
+ * question names two different months.
+ */
+export function extractComparedMonths(question: string, today: Date): [QuestionPeriod, QuestionPeriod] | null {
+  const q = question.toLowerCase().replace(/[’']/g, "'");
+  const thisYear = today.getUTCFullYear();
+  const thisMonth = today.getUTCMonth() + 1;
+  const months = namedMonths(q, today);
+  if (/\b(this month|ngayong buwan)\b/.test(q)) months.push(monthSelection(thisYear, thisMonth));
+  if (/\b(last month|nakaraang buwan|noong isang buwan|previous month)\b/.test(q)) {
+    months.push(thisMonth === 1 ? monthSelection(thisYear - 1, 12) : monthSelection(thisYear, thisMonth - 1));
+  }
+  const distinct = months.filter((month, index) => months.findIndex((other) => other.label === month.label) === index);
+  if (distinct.length < 2) return null;
+  const [a, b] = distinct as [QuestionPeriod, QuestionPeriod];
+  const key = (period: QuestionPeriod) => (period.selection.kind === "month" ? period.selection.month : "");
+  return key(a) <= key(b) ? [a, b] : [b, a];
+}
+
 export function extractQuestionPeriod(question: string, today: Date): QuestionPeriod | null {
   const q = question.toLowerCase().replace(/[’']/g, "'");
   const thisYear = today.getUTCFullYear();
@@ -101,23 +148,8 @@ export function extractQuestionPeriod(question: string, today: Date): QuestionPe
   const isoMonth = q.match(/\b((?:19|20)\d{2})-(0[1-9]|1[0-2])\b/);
   if (isoMonth) return monthSelection(Number(isoMonth[1]), Number(isoMonth[2]));
 
-  // A month name, optionally with a year on either side: "January 2022", "jan 2022", "2022 January".
-  // "may" is also an ordinary English word ("may I…") and Filipino ("may utang"),
-  // so on its own it only counts when a year is next to it.
-  const monthPattern = new RegExp(`\\b(${Object.keys(MONTH_NAMES).join("|")})\\b(?:\\s*,?\\s*((?:19|20)\\d{2}))?`, "g");
-  for (const match of q.matchAll(monthPattern)) {
-    const name = match[1]!;
-    const month = MONTH_NAMES[name]!;
-    const before = q.slice(Math.max(0, match.index! - 6), match.index!).match(/((?:19|20)\d{2})\s*$/);
-    const yearText = match[2] ?? before?.[1];
-    if (name === "may" && !yearText) continue;
-    // Three-letter English words that are also month abbreviations ("mar", "jun")
-    // only count beside a year, for the same reason.
-    if (name.length === 3 && !yearText && !["jan", "feb", "apr", "aug", "sep", "oct", "nov", "dec"].includes(name)) continue;
-    if (yearText) return monthSelection(Number(yearText), month);
-    // No year: the most recent such month that has started.
-    return monthSelection(month > thisMonth ? thisYear - 1 : thisYear, month);
-  }
+  const named = namedMonths(q, today)[0];
+  if (named) return named;
 
   if (/\b(this year|ngayong taon)\b/.test(q)) return yearSelection(thisYear, today);
   if (/\b(last year|nakaraang taon|noong isang taon)\b/.test(q)) return yearSelection(thisYear - 1, today);

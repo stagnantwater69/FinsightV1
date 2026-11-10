@@ -145,3 +145,83 @@ test("a committed lost chat response recovers after refresh and replays one immu
   expect(foreign.status()).toBe(404);
   expect(await foreign.json()).not.toHaveProperty("result");
 });
+
+// Ask FinSight's server-built extras, end to end. The model reply is a fixed
+// stand-in, so what is checked is what the SERVER did: the buttons it offered
+// and what pressing them does, and the context it handed the model.
+async function ask(page: Page, question: string) {
+  const composer = page.getByRole("textbox", { name: "Ask about your numbers" });
+  await composer.fill(question);
+  const sent = page.waitForResponse((response) => response.request().method() === "POST"
+    && new URL(response.url()).pathname.startsWith("/api/v1/ai/conversations") && response.status() === 201);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await sent;
+}
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+test("Ask FinSight works out what-ifs, month comparisons and a completeness check from real records", async ({ page, request }) => {
+  await page.goto("/");
+  await openChat(page);
+  await ask(page, "what if I sell 3,000 a day?");
+  expect((await state(request)).lastContext).toContain("=== RECOVERY WHAT-IF: selling PHP 3,000.00 on each open day left this month ===");
+
+  const now = new Date();
+  const month = (back: number) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 15));
+  const [earlier, later] = [month(2), month(1)];
+  const label = (date: Date) => `${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+  await ask(page, `compare ${MONTHS[later.getUTCMonth()]} and ${MONTHS[earlier.getUTCMonth()]}`);
+  expect((await state(request)).lastContext)
+    .toContain(`- Total sales recorded change from ${label(earlier)} to ${label(later)}: down PHP 1,000.00`);
+
+  // The two expense journeys above recorded PHP 1,234.56 and PHP 12.34 of Inventory.
+  await ask(page, "what if I cut Inventory by 10%?");
+  expect((await state(request)).lastContext).toContain("Amount this cut takes off: PHP 124.69");
+
+  await ask(page, "is my data complete?");
+  expect((await state(request)).lastContext).toContain("=== IS THE DATA COMPLETE? ===");
+});
+
+test("Ask FinSight opens Add expense filled in from what the owner says they paid, saving nothing", async ({ page, request }) => {
+  const before = await state(request);
+  await page.goto("/");
+  await openChat(page);
+  await ask(page, "I paid 500 for rice today");
+  await page.getByRole("button", { name: "Add this expense", exact: true }).click();
+  await expect(page).toHaveURL(/\/records\/expenses\/new$/);
+  await expect(page.locator("#description")).toHaveValue("rice");
+  await expect(page.locator("#amount")).toHaveValue("500");
+  expect((await state(request)).records).toHaveLength(before.records.length);
+});
+
+test("Ask FinSight offers Add sales once, and holds it back when that sale is already recorded", async ({ page, request }) => {
+  const before = await state(request);
+  await page.goto("/");
+  await openChat(page);
+  await ask(page, "sold 777 today");
+  await page.getByRole("button", { name: "Add this sale", exact: true }).click();
+  await expect(page).toHaveURL(/\/records\/sales\/new$/);
+  await expect(page.locator("#description")).toHaveValue("Daily sales");
+  await expect(page.locator("#amount")).toHaveValue("777");
+  expect((await state(request)).sales).toBe(before.sales);
+
+  const saved = await request.post(`${api}/records/sales`, { headers: { Authorization: `Bearer ${owner.token}` },
+    data: { businessProfileId: owner.businessProfileId, date: fixture.today, amount: 777, description: "Daily sales",
+      idempotencyKey: "local-ask-finsight-sale" } });
+  expect(saved.status()).toBe(201);
+  await page.goto("/");
+  await openChat(page);
+  await ask(page, "sold 777 today");
+  expect((await state(request)).lastContext).toContain("A sales record of the same amount is already in the records");
+  await expect(page.getByRole("button", { name: "Add this sale", exact: true })).toHaveCount(0);
+});
+
+test("Ask FinSight watches a repeating expense it noticed, for this business only", async ({ page, request }) => {
+  await page.goto("/");
+  await openChat(page);
+  await ask(page, "what are my regular bills?");
+  await page.getByRole("button", { name: 'Watch "LPG refill" as a repeating payment', exact: true }).click();
+  await expect(page.getByText(/now on your Payment calendar/)).toBeVisible();
+  const { schedules } = await state(request);
+  expect(schedules).toEqual([{ businessProfileId: owner.businessProfileId, label: expect.stringContaining("LPG refill") }]);
+});

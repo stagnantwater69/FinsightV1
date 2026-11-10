@@ -5,6 +5,8 @@ import { api } from "../../lib/api";
 import { getErrorMessage } from "../../lib/errors";
 import { CHAT_PAGE_ROUTES, recordHref } from "../../lib/chatLinks";
 import { useToast } from "../Toast";
+import { useBusinessProfiles } from "../../context/BusinessProfileContext";
+import { watchRecurringPattern } from "../../pages/expenseInsight/reviewRequests";
 import { Button } from "../Button";
 import { Money } from "../Money";
 import { IconArrowRight } from "../icons";
@@ -138,6 +140,7 @@ function RateButton({
 function ActionRow({ actions, onNavigate }: { actions: ChatAction[]; onNavigate: () => void }) {
   const toast = useToast();
   const navigate = useNavigate();
+  const { selected } = useBusinessProfiles();
   const [busy, setBusy] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -148,14 +151,32 @@ function ActionRow({ actions, onNavigate }: { actions: ChatAction[]; onNavigate:
       navigate(CHAT_PAGE_ROUTES["spending-impact"], { state: { plannedAmount: action.amount } });
       return;
     }
+    if (action.kind === "prefill-record") {
+      // Opens the normal form filled in; nothing is saved until the owner saves it there.
+      onNavigate();
+      const duplicateFrom =
+        action.recordType === "sales"
+          ? { description: action.description, amount: action.amount }
+          : { description: action.description, vendor: "", amount: action.amount };
+      navigate(CHAT_PAGE_ROUTES[action.recordType === "sales" ? "add-sales" : "add-expense"], { state: { duplicateFrom } });
+      return;
+    }
+    if (action.kind === "watch-recurring-pattern" && !selected) return;
     setBusy(action.label);
     setError(null);
     try {
-      await api.patch(`/insights/findings/${action.findingId}/review`, {
-        status: action.status,
-        feedback: action.feedback,
-      });
-      setDone(action.label);
+      if (action.kind === "watch-recurring-pattern") {
+        await watchRecurringPattern(selected!.id, action.patternId);
+        setDone(`${action.label}. It is now on your Payment calendar.`);
+      } else if (action.kind === "review-finding") {
+        await api.patch(`/insights/findings/${action.findingId}/review`, {
+          status: action.status,
+          feedback: action.feedback,
+        });
+        setDone(`${action.label}. This flag has left your review queue.`);
+      } else {
+        return;
+      }
       toast(`Noted — ${action.label.charAt(0).toLowerCase()}${action.label.slice(1)}`);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -165,7 +186,7 @@ function ActionRow({ actions, onNavigate }: { actions: ChatAction[]; onNavigate:
   }
 
   if (done) {
-    return <p className="text-xs text-tone-brand">Saved: {done}. This flag has left your review queue.</p>;
+    return <p className="text-xs text-tone-brand">Saved: {done}</p>;
   }
 
   return (

@@ -97,15 +97,29 @@ describe("Dashboard context is the wide one", () => {
     expect(context).not.toContain(IMPACT_SECTION);
   });
 
-  it("does not compute a scenario, even when the question looks like one", async () => {
+  it("calculates an explicit what-if purchase and offers to open it in Spending Impact", async () => {
     const profile = await prisma.businessProfile.findUniqueOrThrow({ where: { id: ctx.profile.id } });
-    const { scenario } = await buildModuleContext(
+    const { context, scenario, actions } = await buildModuleContext(
       ctx.user.id,
       profile,
       "Dashboard",
       "if I buy a freezer for 20,000 what happens?"
     );
+    expect(scenario?.amount).toBe(20000);
+    expect(context).toContain(IMPACT_SECTION);
+    expect(context).toContain("Planned amount detected: PHP 20,000.00");
+    expect(context).not.toMatch(/Do not invite questions about planned purchases/i);
+    expect(actions).toContainEqual({ kind: "open-spending-impact", amount: 20000, label: "Open this in Spending Impact" });
+  });
+
+  it.each([
+    "how much did I spend on rice over 1,000?",
+    "what if I sell 3,000 a day?",
+  ])("does not treat %s as a planned purchase", async (question) => {
+    const profile = await prisma.businessProfile.findUniqueOrThrow({ where: { id: ctx.profile.id } });
+    const { context, scenario } = await buildModuleContext(ctx.user.id, profile, "Dashboard", question);
     expect(scenario).toBeUndefined();
+    expect(context).not.toContain(IMPACT_SECTION);
   });
 });
 

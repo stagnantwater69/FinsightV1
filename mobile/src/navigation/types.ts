@@ -30,7 +30,8 @@ export type RecordsStackParamList = {
     prefill?: { description: string; vendor: string; categoryId: number | null; amount: number };
     from?: "PaymentCalendar";
   } | undefined;
-  AddSales: undefined;
+  /** `prefill` comes from an Ask FinSight "Add this sale" button. */
+  AddSales: { prefill?: { description: string; amount: number } } | undefined;
   EditRecord: { record: RecordItem };
   ScanReceipt: undefined;
   ImportCsv: undefined;

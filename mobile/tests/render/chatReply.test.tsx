@@ -8,6 +8,7 @@ import { chatMetadata, deferred } from './support/chatFixtures';
 
 const apiGet = vi.fn();
 const apiPatch = vi.fn();
+const apiPost = vi.fn();
 const navigate = vi.fn();
 const onFollowUp = vi.fn();
 const onRate = vi.fn();
@@ -15,7 +16,11 @@ const onLeave = vi.fn();
 let selected: BusinessProfile | null = fixtures.businessProfile;
 
 vi.mock('../../src/lib/api', () => ({
-  api: { get: (...args: unknown[]) => apiGet(...args), patch: (...args: unknown[]) => apiPatch(...args) },
+  api: {
+    get: (...args: unknown[]) => apiGet(...args),
+    patch: (...args: unknown[]) => apiPatch(...args),
+    post: (...args: unknown[]) => apiPost(...args),
+  },
 }));
 vi.mock('@react-navigation/native', () => ({ useNavigation: () => ({ navigate }) }));
 vi.mock('../../src/context/BusinessProfileContext', () => ({ useBusinessProfiles: () => ({ selected }) }));
@@ -40,9 +45,10 @@ function pressHandler(node: ReturnType<Awaited<ReturnType<typeof render>>['getBy
 
 beforeEach(() => {
   selected = fixtures.businessProfile;
-  for (const spy of [apiGet, apiPatch, navigate, onFollowUp, onRate, onLeave]) spy.mockReset();
+  for (const spy of [apiGet, apiPatch, apiPost, navigate, onFollowUp, onRate, onLeave]) spy.mockReset();
   apiGet.mockResolvedValue(record);
   apiPatch.mockResolvedValue(undefined);
+  apiPost.mockResolvedValue(undefined);
 });
 afterEach(async () => { await cleanup(); vi.restoreAllMocks(); });
 
@@ -117,6 +123,39 @@ describe('chat reply record references and actions', () => {
     }]);
     await act(async () => { pending.resolve(); await pending.promise; });
     expect(await queries.findByText(/Saved: Mark expected/)).toBeTruthy();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['expense', 'AddExpense', { description: 'rice', vendor: '', categoryId: null, amount: 500 }],
+    ['sales', 'AddSales', { description: 'rice', amount: 500 }],
+  ] as const)('opens the %s form filled in from a prefill action without saving anything', async (recordType, screen, prefill) => {
+    const action: ChatAction = { kind: 'prefill-record', recordType, amount: 500, description: 'rice', label: 'Add this' };
+    const queries = await render(tree({ ...chatMetadata, actions: [action] }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Add this' }));
+    expect(onLeave).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('Records', { screen, params: { prefill } });
+    expect(apiPatch).not.toHaveBeenCalled();
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('watches a suggested repeating payment for the selected business only when pressed', async () => {
+    const action: ChatAction = { kind: 'watch-recurring-pattern', patternId: 9, label: 'Watch LPG refill' };
+    const queries = await render(tree({ ...chatMetadata, actions: [action] }));
+    expect(apiPost).not.toHaveBeenCalled();
+    await fireEvent.press(queries.getByRole('button', { name: 'Watch LPG refill' }));
+    expect(apiPost).toHaveBeenCalledExactlyOnceWith('/insights/recurring-patterns/9/confirm', undefined, {
+      cacheScope: { businessProfileId: fixtures.businessProfile.id },
+    });
+    expect(await queries.findByText(/now on your Payment calendar/)).toBeTruthy();
+  });
+
+  it('ignores an action kind this build does not know', async () => {
+    const action = { kind: 'something-new', label: 'Mystery' } as unknown as ChatAction;
+    const queries = await render(tree({ ...chatMetadata, actions: [action] }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Mystery' }));
+    expect(apiPatch).not.toHaveBeenCalled();
+    expect(apiPost).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
   });
 

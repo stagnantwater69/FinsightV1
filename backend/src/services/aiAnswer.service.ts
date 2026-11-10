@@ -76,7 +76,11 @@ export type ChatAction =
       status: "CONFIRMED" | "DISMISSED" | "RESOLVED";
       feedback: "CONFIRMED_UNUSUAL" | "EXPECTED_TRANSACTION" | "DUPLICATE" | "INCORRECT_MATCH" | "NO_LONGER_RELEVANT";
     }
-  | { kind: "open-spending-impact"; amount: number; label: string };
+  | { kind: "open-spending-impact"; amount: number; label: string }
+  /** Opens the Add expense / Add sales form filled in. The owner still saves it. */
+  | { kind: "prefill-record"; recordType: "expense" | "sales"; amount: number; description: string; label: string }
+  /** Turns a repeating expense FinSight detected into a watched schedule, through the existing confirm endpoint. */
+  | { kind: "watch-recurring-pattern"; patternId: number; label: string };
 
 /** How the amount check went, so the clients can be honest about a trimmed answer. */
 export type AmountCheck = "passed" | "revised" | "trimmed";

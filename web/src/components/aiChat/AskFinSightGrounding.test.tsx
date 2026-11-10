@@ -49,11 +49,14 @@ const METADATA: ChatAnswerMetadata = {
   amountCheck: "trimmed",
 };
 
-function reply(content: string, metadata: ChatAnswerMetadata | null = METADATA): ChatMessage {
+let replyMetadata: ChatAnswerMetadata = METADATA;
+
+function reply(content: string, metadata: ChatAnswerMetadata | null = replyMetadata): ChatMessage {
   return { id: 102, role: "assistant", content, createdAt: new Date().toISOString(), metadata, feedback: null };
 }
 
 beforeEach(() => {
+  replyMetadata = METADATA;
   get.mockReset();
   post.mockReset();
   patch.mockReset();
@@ -61,7 +64,7 @@ beforeEach(() => {
   get.mockResolvedValue({ data: [] });
   patch.mockResolvedValue({ data: {} });
   put.mockResolvedValue({ data: {} });
-  post.mockImplementation(async (_url: string, body: { question: string }) => ({
+  post.mockImplementation(async (url: string, body: { question: string }) => url.startsWith("/insights/") ? { data: {} } : ({
     data: {
       conversation: { id: 9, title: body.question, originModule: "Records Review", createdAt: "", lastMessageAt: "" },
       userMessage: { id: 101, role: "user", content: body.question, createdAt: "" },
@@ -74,7 +77,13 @@ beforeEach(() => {
 
 function Where() {
   const location = useLocation();
-  return <p data-testid="where">{`${location.pathname}${location.search}`}</p>;
+  const seed = (location.state as { duplicateFrom?: unknown } | null)?.duplicateFrom;
+  return (
+    <>
+      <p data-testid="where">{`${location.pathname}${location.search}`}</p>
+      <p data-testid="seed">{JSON.stringify(seed ?? null)}</p>
+    </>
+  );
 }
 
 function Queue() {
@@ -175,6 +184,33 @@ describe("a grounded reply in the drawer", () => {
     await user.click(screen.getByRole("button", { name: "This is normal for my business" }));
     expect(patch).toHaveBeenCalledWith("/insights/findings/51/review", { status: "DISMISSED", feedback: "EXPECTED_TRANSACTION" });
     expect(await screen.findByText(/This flag has left your review queue/)).toBeInTheDocument();
+  });
+
+  it("opens Add expense filled in from a prefill action, saving nothing itself", async () => {
+    replyMetadata = {
+      ...METADATA,
+      actions: [{ kind: "prefill-record", recordType: "expense", amount: 500, description: "rice", label: "Add this expense" }],
+    };
+    const user = userEvent.setup();
+    renderApp();
+    await askAboutFlag(user);
+    await user.click(screen.getByRole("button", { name: "Add this expense" }));
+    expect(screen.getByTestId("where")).toHaveTextContent("/records/expenses/new");
+    expect(screen.getByTestId("seed")).toHaveTextContent(JSON.stringify({ description: "rice", vendor: "", amount: 500 }));
+    expect(patch).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("watches a suggested repeating payment through the confirm endpoint", async () => {
+    replyMetadata = { ...METADATA, actions: [{ kind: "watch-recurring-pattern", patternId: 9, label: "Watch LPG refill" }] };
+    const user = userEvent.setup();
+    renderApp();
+    await askAboutFlag(user);
+    await user.click(screen.getByRole("button", { name: "Watch LPG refill" }));
+    expect(post).toHaveBeenLastCalledWith("/insights/recurring-patterns/9/confirm", undefined, {
+      serverStateScope: { businessProfileId: 7 },
+    });
+    expect(await screen.findByText(/now on your Payment calendar/)).toBeInTheDocument();
   });
 
   it("saves a thumbs rating, and pressing it again clears it", async () => {
