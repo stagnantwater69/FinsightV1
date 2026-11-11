@@ -227,14 +227,9 @@ async function verifyPassword(email: string, password: string): Promise<boolean>
  * issues a session, so "we've sent a confirmation email" is the whole of what
  * happened in every branch.
  */
-const REGISTRATION_ACKNOWLEDGEMENT = {
-  message: "If that address can be registered, we've sent it a confirmation link. Check your inbox to finish setting up your account.",
-} as const;
-
-function registrationAcknowledgement(platform: ClientPlatform) {
-  return platform === "mobile"
-    ? REGISTRATION_ACKNOWLEDGEMENT
-    : { message: "If that address can be registered, we've sent it a verification code. Check your inbox to finish setting up your account." };
+// Web and mobile both confirm with the emailed code now, so they get the same words.
+function registrationAcknowledgement(_platform: ClientPlatform) {
+  return { message: "If that address can be registered, we've sent it a verification code. Check your inbox to finish setting up your account." };
 }
 
 export async function registerUser(input: RegisterInput, platform: ClientPlatform = "web") {
