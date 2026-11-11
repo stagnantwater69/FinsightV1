@@ -193,12 +193,12 @@ jobs:
           console.log(`Backend production audit gate: ${gated.length} known CLI-chain finding(s), 0 unexpected.`);
           NODE
       # Non-blocking: report-only, not a merge gate, until a maintainer
-      # triages these. `npm audit --audit-level=high`
-      # currently finds 3 high findings, all inside `prisma`'s own CLI
-      # dependency chain (deepmerge-ts via @prisma/config via prisma) —
-      # nothing in the runtime dependency graph the built image ships (the
-      # Dockerfile's runtime stage never installs the `prisma` CLI, only the
-      # generated @prisma/client). continue-on-error surfaces the failed
+      # triages these. The 3 high findings in `prisma`'s own CLI chain
+      # (deepmerge-ts via @prisma/config via prisma) are cleared by the
+      # deepmerge-ts override in backend/package.json; the allowlist above
+      # stays in case a Prisma bump drops the override's effect. The runtime
+      # image never ships the `prisma` CLI either way, only the generated
+      # @prisma/client. continue-on-error surfaces the failed
       # step (and its annotation) in the Actions UI without failing the job,
       # so new findings stay visible instead of silently passing.
       - run: npm audit --audit-level=high --prefix backend

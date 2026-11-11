@@ -475,8 +475,14 @@ export function RegisterScreen({ navigation }: any) {
   const { width, fontScale } = useWindowDimensions();
   const formWidth = Math.min(width - space.lg * 2, 480) - space.xl * 2;
   const namesSideBySide = formWidth >= 360 && fontScale <= 1.2;
-  const { register } = useAuth();
+  const { register, adoptSession } = useAuth();
   const [form, setForm] = useState({ firstName: "", lastName: "", middleName: "", email: "", phoneNumber: "", password: "", confirmPassword: "" });
+  const [code, setCode] = useState("");
+  const [codeFieldError, setCodeFieldError] = useState<string | undefined>();
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const verifyInFlight = useRef(false);
+  const codeRef = useRef<TextInputInstance>(null);
   /** "Did you mean gmail.com?" A suggestion only: `.co` is a real domain. See lib/emailSuggestion. */
   const [emailSuggestion, setEmailSuggestion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -586,13 +592,65 @@ export function RegisterScreen({ navigation }: any) {
     }
   }
 
+  /**
+   * Exchanges the emailed signup code for a session, the same way the web
+   * confirmation form does: Supabase checks the code, the backend activates the
+   * account, and the phone keeps the session. The code is never logged or sent
+   * to our backend.
+   */
+  async function confirmCode() {
+    if (verifyInFlight.current) return;
+    setCodeError(null);
+    const email = form.email.trim();
+    const invalid = validateRecoveryCode({ email, code });
+    if (invalid.code) {
+      setCodeFieldError(invalid.code);
+      codeRef.current?.focus();
+      haptics.failed();
+      return;
+    }
+    setCodeFieldError(undefined);
+
+    verifyInFlight.current = true;
+    setVerifying(true);
+    const client = createRecoveryClient();
+    let adopted = false;
+    try {
+      const { data, error: verifyError } = await client.auth.verifyOtp({
+        email,
+        token: normaliseRecoveryCode(code),
+        type: "email",
+      });
+      // One message for a wrong code and an expired one, as on the reset screen.
+      if (verifyError || !data.session) {
+        setCodeError("That code didn't work. Check it and try again, or send a new one if it has expired.");
+        haptics.failed();
+        return;
+      }
+      const confirmed = await api.postWithToken<{ profile: Profile; message: string }>(
+        "/auth/confirm-email",
+        data.session.access_token,
+      );
+      await adoptSession(data.session, confirmed.profile);
+      adopted = true;
+      haptics.succeeded();
+    } catch {
+      setCodeError("We couldn't finish confirming your email. Try again, or send a new code.");
+    } finally {
+      // On success the session now belongs to the app; signing this client out would revoke it.
+      if (!adopted) await client.auth.signOut({ scope: "local" }).catch(() => undefined);
+      verifyInFlight.current = false;
+      setVerifying(false);
+    }
+  }
+
   /*
    * The end of registration, and it is not the app.
    *
    * Signing straight in used to be possible because registration handed back a
    * session — which is precisely how an address nobody owned became a working
-   * account. The account now stays pending until the link in that inbox is
-   * opened, and this screen says so rather than pretending otherwise.
+   * account. The account now stays pending until the emailed code is entered
+   * below (older link emails still work through ConfirmEmailScreen).
    */
   if (acknowledgement) {
     return (
@@ -605,9 +663,31 @@ export function RegisterScreen({ navigation }: any) {
        */
       <AuthShell title="Check your email" subtitle="One more step.">
         <SuccessPanel icon="mail-unread-outline" tone="brand" body={acknowledgement} email={form.email.trim()} />
-        <T style={{ color: t.textSecondary, marginTop: space.md }}>
-          Open the link on this phone and it will bring you straight back here. Nothing is active until you do.
+        <T style={{ color: t.textSecondary, marginTop: space.md, marginBottom: space.md }}>
+          Enter the code from that email to finish. Nothing is active until you do.
         </T>
+        <CodeInput
+          ref={codeRef}
+          label="Confirmation code"
+          value={code}
+          onChangeText={(v: string) => {
+            setCode(v);
+            setCodeFieldError(undefined);
+            setCodeError(null);
+          }}
+          error={codeFieldError}
+          accessibilityHint="The numbered code in your FinSight confirmation email."
+          inputMode="numeric"
+          keyboardType="number-pad"
+          textContentType="oneTimeCode"
+          autoComplete={Platform.OS === "android" ? "sms-otp" : "one-time-code"}
+          maxLength={MAX_RECOVERY_CODE_LENGTH + 4}
+          returnKeyType="done"
+          onSubmitEditing={() => {
+            if (!verifying) confirmCode();
+          }}
+        />
+        {codeError ? <ErrorNote>{codeError}</ErrorNote> : null}
         {/*
           NO "OPEN MAIL APP" BUTTON, and that is a decision rather than an
           omission. There is no reliable cross-platform way to open an inbox:
@@ -620,9 +700,10 @@ export function RegisterScreen({ navigation }: any) {
           dependable.
         */}
         <Button
-          title="Back to log in"
+          title="Confirm email"
           variant="primary"
-          onPress={() => navigation.navigate("Login")}
+          onPress={confirmCode}
+          loading={verifying}
           style={{ marginTop: space.md }}
         />
         <Button
@@ -646,8 +727,11 @@ export function RegisterScreen({ navigation }: any) {
             focusEmailOnReturn.current = true;
             setAcknowledgement(null);
             setResent(false);
+            setCode("");
+            setCodeError(null);
           }}
         />
+        <Button title="Back to log in" variant="ghost" onPress={() => navigation.navigate("Login")} />
       </AuthShell>
     );
   }
@@ -979,8 +1063,8 @@ export function RecoverPasswordScreen({ navigation, route, initialEmail = "", on
  * GoTrue's recovery code and nothing else. So there is no link left to arrive
  * on, and a screen that could only be reached by one would have left every
  * mobile owner holding a code with nowhere to type it. This is that somewhere.
- * (Email CONFIRMATION is unaffected: it still has its link and its
- * `auth/confirm` deep link — see ConfirmEmailScreen.)
+ * (Email confirmation also uses a code now, typed on RegisterScreen; older
+ * link emails still arrive through ConfirmEmailScreen.)
  *
  * THE CODE IS A LIVE CREDENTIAL, on exactly the footing the link's token was:
  * it is enough to change the password on the account. So it is never logged,

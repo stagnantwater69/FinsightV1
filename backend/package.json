@@ -95,6 +95,9 @@
   "overrides": {
     "@sentry/bundler-plugins": {
       "glob": "^14.0.2"
+    },
+    "@prisma/config": {
+      "deepmerge-ts": "^8.0.2"
     }
   },
   "allowScripts": {

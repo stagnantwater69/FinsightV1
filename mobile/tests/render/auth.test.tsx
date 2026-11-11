@@ -38,11 +38,13 @@ const verifyOtp = vi.fn();
 const setSession = vi.fn();
 const updateUser = vi.fn();
 const recoverySignOut = vi.fn();
+const adoptSession = vi.fn();
 
 vi.mock('../../src/context/AuthContext', () => ({
   useAuth: () => ({
     login,
     register: registerUser,
+    adoptSession,
     logout,
     profile: null,
     loading: false,
@@ -132,6 +134,7 @@ beforeEach(() => {
   updateUser.mockResolvedValue({ error: null });
   recoverySignOut.mockReset();
   recoverySignOut.mockResolvedValue({ error: null });
+  adoptSession.mockReset();
   navigation.navigate.mockReset();
 });
 
@@ -414,6 +417,43 @@ describe('Register — the success panel', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('confirms the account with the emailed code and keeps the session', async () => {
+    const queries = await renderRegister();
+    await fill(queries);
+    registerUser.mockResolvedValueOnce({ message: 'We sent a verification code.' });
+    await fireEvent.press(queries.getByRole('button', { name: 'Create account' }));
+
+    const session = { access_token: 'access', refresh_token: 'refresh' };
+    const profile = { email: 'nena@example.com' };
+    verifyOtp.mockResolvedValueOnce({ data: { session }, error: null });
+    apiPostWithToken.mockResolvedValueOnce({ profile, message: 'Email confirmed.' });
+
+    await fireEvent.changeText(await queries.findByLabelText('Confirmation code'), '1234 5678');
+    await fireEvent.press(queries.getByRole('button', { name: 'Confirm email' }));
+
+    await waitFor(() => expect(adoptSession).toHaveBeenCalledWith(session, profile));
+    expect(verifyOtp).toHaveBeenCalledWith({ email: 'nena@example.com', token: '12345678', type: 'email' });
+    expect(apiPostWithToken).toHaveBeenCalledWith('/auth/confirm-email', 'access');
+    // Signing the verifying client out would revoke the session the app just adopted.
+    expect(recoverySignOut).not.toHaveBeenCalled();
+  });
+
+  it('keeps the owner on the code form when the code is wrong', async () => {
+    const queries = await renderRegister();
+    await fill(queries);
+    registerUser.mockResolvedValueOnce({ message: 'We sent a verification code.' });
+    await fireEvent.press(queries.getByRole('button', { name: 'Create account' }));
+
+    verifyOtp.mockResolvedValueOnce({ data: { session: null }, error: { message: 'Token has expired or is invalid' } });
+    await fireEvent.changeText(await queries.findByLabelText('Confirmation code'), '12345678');
+    await fireEvent.press(queries.getByRole('button', { name: 'Confirm email' }));
+
+    expect(await queries.findByText(/That code didn't work/)).toBeTruthy();
+    expect(apiPostWithToken).not.toHaveBeenCalled();
+    expect(adoptSession).not.toHaveBeenCalled();
+    expect(recoverySignOut).toHaveBeenCalled();
   });
 
   it('offers a way back to the form when the address was mistyped', async () => {

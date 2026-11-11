@@ -1,0 +1,22 @@
+name: Uptime
+
+# Nothing outside the VM watched the live site. A failed scheduled run makes
+# GitHub email the repo owner, which is the alert. Set the repository variable
+# HEALTH_URL when the site moves to its own domain.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ready:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      # Three tries, so one dropped packet between GitHub and Singapore is not an outage.
+      - run: >-
+          curl --fail --silent --show-error --max-time 20
+          --retry 2 --retry-delay 20 --retry-all-errors
+          "${{ vars.HEALTH_URL || 'https://finsight-jimzwarren.duckdns.org' }}/api/v1/health/ready"

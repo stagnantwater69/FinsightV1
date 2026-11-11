@@ -94,9 +94,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   userInterfaceStyle: "automatic",
 
   /*
-   * Native launch art. The app icons are still derived from the legacy
-   * `finsightlogo.png`; the splash, the web and mobile
-   * in-app marks and the Expo web favicon use the current `newmascotlogo.png`.
+   * Native launch art. The app icons, the splash, the web and mobile in-app
+   * marks and the Expo web favicon all use the current `newmascotlogo.png`.
    *
    * `icon` is the iOS/store icon: opaque (iOS rejects alpha), the badge at
    * 78% of the canvas so no launcher mask clips the ring.
@@ -110,10 +109,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       // zone every launcher mask is guaranteed to show, so a circle, a
       // squircle and a teardrop all crop only the transparent margin.
       foregroundImage: "./assets/android-icon-foreground.png",
-      // The launcher icon's plate. The splash below is white; on Android 12+
-      // the system splash draws the splash image (not this icon) on that
-      // white, so the two no longer need to match.
-      backgroundColor: "#052624",
+      // White, like the splash: the mark's dark-green ring disappears on a
+      // dark plate.
+      backgroundColor: "#FFFFFF",
     },
     // Camera is requested at runtime by expo-camera (the receipt scanner) and
     // by expo-image-picker (the gallery fallback); declaring it here keeps the
@@ -162,8 +160,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         "FinSight can read a receipt from a photo you have already taken.",
     },
   },
-  // Regenerated from the current transparent brand mark, unlike the native
-  // icon/adaptive/splash files above, which intentionally remain legacy.
   web: { favicon: "./assets/favicon.png" },
 
   plugins: [
