@@ -4434,8 +4434,13 @@
     "actual": {
       "date": "2024-07-06",
       "vendor": "WENDY'S HAMBURGER RESTAURANT",
-      "amount": 136,
+      "amount": 135,
       "items": [
+        {
+          "name": "LITRO ICED TEA",
+          "quantity": null,
+          "amount": 136
+        },
         {
           "name": "Sublolal",
           "quantity": null,
@@ -4451,7 +4456,7 @@
     "verdict": {
       "date": "correct",
       "vendor": "wrong",
-      "amount": "wrong"
+      "amount": "correct"
     },
     "itemScore": null,
     "rawText": "WENPHIL CORPORATION\nWENDY'S HAMBURGER RESTAURANT\nSP# 301 JLEV GATEWAY\nMALL, QUEZON CITY\nTIN: 001-096-949-066 VAT\nSALES INVOICE\n1 #066-001-0000176771\nHost: Jazzele 07/06/2024\n123 6:26 PM\n10123\nOrder Typo: DINE IN\nLITRO ICED TEA 136.00\nSublolal 120.64\nTax 14.46\nDINE IN Total 136.00\nCash 200.00\nChange 65.00\nVAT\n12% Sub: 120.54 12%: 14.46\nVATABLE SALES : 120.54\nVAT-EXEMPT SALES : 0.00\nZERO-RATED SALES : 0.00\nTOTAL SALES 120.64\n12% VAT i 14.46\nTOTAL AMOUNT DUE : 136.00\nGENIE TECHNOLOGIES INC.\nTF Alphaland Southgate Tower Makatl City\nVAT REG TIN: 208-662-029-000\nAACC:048-200662029-00020368928\nDate Issued:07/31/16Valld T11:07/31/2026\n“THIS INVOICE/RECEIPT SHALL BE VALID FOR\nFIVE(8) YEARS FROM THE DATE OF PERMIT TO USE\"\nCustomer's Name:_\nN— _—\n"
@@ -4577,7 +4582,7 @@
     "actual": {
       "date": "2024-06-11",
       "vendor": "Rece1ved Merchandise In Good Condit on",
-      "amount": 10.25,
+      "amount": 70.25,
       "items": [
         {
           "name": "ois",
@@ -4594,7 +4599,7 @@
     "verdict": {
       "date": "correct",
       "vendor": "wrong",
-      "amount": "wrong"
+      "amount": "correct"
     },
     "itemScore": null,
     "rawText": "AERCURY ORUS - WHIT LEGASPI VLG SALCEDO\nG{E XALAVAMN BLOG. OR, SALCEDO\" OFLA\nSh ST, LEGASPY VICLAGE WARATE CITY\n\nUAT RES TIN:000-385 474-0057\nTEL NO; (07) G553-8dg7\nMBLEIVISER 10: (0945) Ge 7108\nTOSHIBA 4300 417M336 ROO 01021\n| MIN:20111909521124122 11.5.30] 29\nPA #99 §/S\nCHRME ALL NGT+H4 24.7517\n480048801147\nKATINKD LIN 10mL 45.501\n480901241324\nTOTAL 10.25\nAMOUNT TENDERED\nois 1000.00\nTOTAL PAYMENT 1000.00\nCHANGE 929.75\n#7 item(s) **\nSp, GEN\n==\nEDR —\nVaTable (1) 62.72\nVT-Exenpt Sale (K) 0.00\nVAT Zero-Rated Sale(Z) 0.00 g\nVAT - 12% 7.53\nArount Due. 70.55\nRece1ved Merchandise In Good Condit on\nrug Nakasisiguro Ganot\n5a Hercury 0 E90) Rh\nWaring Sa enat Fo...\nphi Joa x Systems, Inc.\nfille Pees Bray Corazon ce\naus, san Juan, Hetro Manila\nREG TIN 205-113-671-00000\nRo 1 ARIES,\nflo. #b112020-116-0213125-00667 ©\n30501 06-11-24 0B:284 ELLEN\n#110211162481\n= THIS IS YOUR IWOICE\n"

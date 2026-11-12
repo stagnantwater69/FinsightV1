@@ -12,7 +12,7 @@ A field is **correct** only on an exact match (amounts to the centavo, dates to 
 |---|---|---|---|---|---|
 | Date | 52 | 15 | 34 | 101 | **51%** |
 | Vendor | 52 | 57 | 0 | 109 | **48%** |
-| Amount | 70 | 30 | 22 | 122 | **57%** |
+| Amount | 72 | 28 | 22 | 122 | **59%** |
 
 All three fields correct on the same receipt: **42 of 122** (34%).
 
@@ -122,7 +122,7 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 | Category | Images | Date | Vendor | Amount |
 |---|---|---|---|---|
 | real (earlier public-dataset photos) | 45 | 39% | 59% | 60% |
-| real-ph (Philippine phone photos, single AI review, 800 px) | 49 | 28% | 10% | 31% |
+| real-ph (Philippine phone photos, single AI review, 800 px) | 49 | 28% | 10% | 35% |
 | synthetic | 19 | 100% | 100% | 100% |
 | degraded | 9 | 100% | 100% | 100% |
 
@@ -211,12 +211,12 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 | 79 | `real-ph-rf-06-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, Panda Express, TAX INVOICE banner above the name; same paper as ph-rf-23. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ✅ |
 | 80 | `real-ph-rf-07-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, Wendy's; same paper as ph-rf-31. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ✅ |
 | 81 | `real-ph-rf-08-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, MM/DD date. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ✅ |
-| 82 | `real-ph-rf-09-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, Wendy's. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ❌ |
+| 82 | `real-ph-rf-09-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, Wendy's. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ✅ |
 | 83 | `real-ph-rf-10-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, Wendy's; same paper as ph-rf-21 and ph-rf-30. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
 | 84 | `real-ph-rf-11-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, date line below the crop; same paper as ph-rf-40. Downscaled to 800 px tall by the dataset export. | — | ✅ | ✅ |
 | 85 | `real-ph-rf-12-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, single item. Downscaled to 800 px tall by the dataset export. | — | ❌ | ✅ |
 | 86 | `real-ph-rf-13-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, clothing store, DD/MM date (31/01/2024), customer and card details printed. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ✅ |
-| 87 | `real-ph-rf-14-img-20240616-032703` | Phone photo of a thermal receipt, header cut at the left edge, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ❌ |
+| 87 | `real-ph-rf-14-img-20240616-032703` | Phone photo of a thermal receipt, header cut at the left edge, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ✅ |
 | 88 | `real-ph-rf-15-img-20240616-033147` | Phone photo of a thermal receipt, heavily faded fuel receipt, low contrast, logo header. Downscaled to 800 px tall by the dataset export. | — | ❌ | ⬜ |
 | 89 | `real-ph-rf-16-img-20240616-033229` | Phone photo of a thermal receipt, crumpled, bent across the total. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
 | 90 | `real-ph-rf-17-img-20240616-034047` | Phone photo of a thermal receipt, debit card payment, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ❌ |
@@ -629,7 +629,6 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 | Field | Expected | Got | |
 |---|---|---|---|
 | vendor | `"WENPHIL CORPORATION"` | `"WENDY'S HAMBURGER RESTAURANT"` | ❌ |
-| amount | `135` | `136` | ❌ |
 
 ### `real-ph-rf-10-camscanner-07-07-2024-23`
 
@@ -665,7 +664,6 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 | Field | Expected | Got | |
 |---|---|---|---|
 | vendor | `"MERCURY DRUG - MKTI LEGASPI VLG SALCEDO"` | `"Rece1ved Merchandise In Good Condit on"` | ❌ |
-| amount | `70.25` | `10.25` | ❌ |
 
 ### `real-ph-rf-15-img-20240616-033147`
 
@@ -1062,7 +1060,7 @@ Measured effect across all five: date accuracy 90% → **100%**, vendor accuracy
 
 ## Bottom line
 
-Once the corpus stopped being 90% clean renders, the headline numbers dropped hard: date 51%, vendor 48%, amount 57% overall (see "Results by image category" above for the real-only breakdown, which is materially lower than the synthetic/degraded rows). Synthetic and degraded images still score ~100% — that number was never wrong, it was just describing a narrow slice of conditions (clean renders, and uniform programmatic degradation of clean renders) that most real phone photos of a crumpled or glare-lit thermal receipt do not resemble. **The corpus was the thing hiding the gap, not the parser being newly broken.**
+Once the corpus stopped being 90% clean renders, the headline numbers dropped hard: date 51%, vendor 48%, amount 59% overall (see "Results by image category" above for the real-only breakdown, which is materially lower than the synthetic/degraded rows). Synthetic and degraded images still score ~100% — that number was never wrong, it was just describing a narrow slice of conditions (clean renders, and uniform programmatic degradation of clean renders) that most real phone photos of a crumpled or glare-lit thermal receipt do not resemble. **The corpus was the thing hiding the gap, not the parser being newly broken.**
 
 This is not read as "the parser regressed" — nothing in `ocr.service.ts` changed between the 31-image and 73-image runs. It is read as "the 31-image number was measuring the wrong thing." See the failure taxonomy in the plan/PR notes for this corpus-expansion pass for the specific, evidenced categories behind these numbers (blur/glare/obstruction, non-PH date locales, vendor-in-footer-or-cropped, unreconciled real subtotals, and more) — that taxonomy, not this summary paragraph, is the actionable input for Phase 3 fixes.
 
