@@ -1743,13 +1743,13 @@
     "actual": {
       "date": null,
       "vendor": "Subtotal RT",
-      "amount": 6.6,
+      "amount": null,
       "items": []
     },
     "verdict": {
       "date": "n/a",
       "vendor": "n/a",
-      "amount": "wrong"
+      "amount": "missed"
     },
     "itemScore": {
       "expected": 1,
@@ -2109,7 +2109,7 @@
     "actual": {
       "date": null,
       "vendor": "I fnaus Strinloin 140,000",
-      "amount": 150,
+      "amount": 215,
       "items": []
     },
     "verdict": {
@@ -2677,7 +2677,7 @@
     },
     "actual": {
       "date": null,
-      "vendor": "| WEST HOLLYWOOD CA 9006",
+      "vendor": "/ HEDLEYS",
       "amount": 41.45,
       "items": [
         {
@@ -2689,7 +2689,7 @@
     },
     "verdict": {
       "date": "missed",
-      "vendor": "wrong",
+      "vendor": "correct",
       "amount": "correct"
     },
     "itemScore": {
@@ -2873,7 +2873,7 @@
     },
     "actual": {
       "date": null,
-      "vendor": "2 International Market Place",
+      "vendor": "m2 YAUATCHA",
       "amount": 88.62,
       "items": [
         {
@@ -2915,7 +2915,7 @@
     },
     "verdict": {
       "date": "n/a",
-      "vendor": "wrong",
+      "vendor": "correct",
       "amount": "correct"
     },
     "itemScore": {
@@ -2951,8 +2951,8 @@
     },
     "actual": {
       "date": null,
-      "vendor": "Separate checks: 1-of-3",
-      "amount": 43,
+      "vendor": "BOA",
+      "amount": 47.09,
       "items": [
         {
           "name": "CRAB CAKE",
@@ -2968,8 +2968,8 @@
     },
     "verdict": {
       "date": "missed",
-      "vendor": "wrong",
-      "amount": "wrong"
+      "vendor": "correct",
+      "amount": "correct"
     },
     "itemScore": {
       "expected": 2,
@@ -3098,7 +3098,7 @@
     "actual": {
       "date": "2017-07-01",
       "vendor": "P SEAFOOD KITCHEN X",
-      "amount": 38.95,
+      "amount": 42.16,
       "items": [
         {
           "name": "Side Craw Etouffee 4oz",
@@ -3125,7 +3125,7 @@
     "verdict": {
       "date": "wrong",
       "vendor": "wrong",
-      "amount": "wrong"
+      "amount": "correct"
     },
     "itemScore": {
       "expected": 3,
@@ -3395,7 +3395,7 @@
     "actual": {
       "date": "2017-06-13",
       "vendor": "Lan Sheng",
-      "amount": 973.77,
+      "amount": 18.95,
       "items": [
         {
           "name": "c Soy V",
@@ -3575,12 +3575,12 @@
     "actual": {
       "date": "2018-03-11",
       "vendor": "KING'S CONFECTIONERY §/B 273500-U (KSB)",
-      "amount": 29.15,
+      "amount": 25.15,
       "items": [
         {
-          "name": "Bty 8",
+          "name": "Dug",
           "quantity": null,
-          "amount": 25.15
+          "amount": 29.15
         },
         {
           "name": "Fay",
@@ -3592,7 +3592,7 @@
     "verdict": {
       "date": "correct",
       "vendor": "correct",
-      "amount": "wrong"
+      "amount": "correct"
     },
     "itemScore": {
       "expected": 5,
@@ -3959,7 +3959,7 @@
     "actual": {
       "date": null,
       "vendor": "Wyily Prt ya par progr ana",
-      "amount": 48.07,
+      "amount": 164.5,
       "items": [
         {
           "name": "Manteiya AlLho } e",
@@ -4049,13 +4049,13 @@
     "actual": {
       "date": null,
       "vendor": "be bp 11Y ET i1Geira",
-      "amount": null,
+      "amount": 40,
       "items": []
     },
     "verdict": {
       "date": "missed",
       "vendor": "wrong",
-      "amount": "missed"
+      "amount": "correct"
     },
     "itemScore": {
       "expected": 1,
@@ -4086,7 +4086,7 @@
     "actual": {
       "date": null,
       "vendor": "—— potLUK | ISBUA",
-      "amount": 19.1,
+      "amount": 4.15,
       "items": [
         {
           "name": "1,000 TABUA tod iheh i 418",
@@ -4098,7 +4098,7 @@
     "verdict": {
       "date": "missed",
       "vendor": "wrong",
-      "amount": "wrong"
+      "amount": "correct"
     },
     "itemScore": {
       "expected": 1,
@@ -4129,13 +4129,13 @@
     "actual": {
       "date": null,
       "vendor": "Entreposto Serva Bloco 1 Fracao F",
-      "amount": 0,
+      "amount": 6,
       "items": []
     },
     "verdict": {
       "date": "missed",
       "vendor": "wrong",
-      "amount": "wrong"
+      "amount": "correct"
     },
     "itemScore": {
       "expected": 1,
@@ -4183,5 +4183,1561 @@
       "falsePositives": 0
     },
     "rawText": "\\ : Pc 1 218877455,\nNIF 2164579849\n48 Lj:00 FT.SIMPLICADA =\n~s4b ORIGINAL AJ 3171\nLliente 2 71 NIF:510774914\nFEELSLIKEHOME. LDA\nLISBOA\nLISEDA\nLISBOA\nod. 223 SERVIZOS PRESTADOS\n“42.000 X 6,13 4 12.30\nSUB-TOTAL 12.30\n® 12.30\nT 0 T A k B . a 1 2 bp a 1\nTaxa Incidencias Iva Yalor Iva\n1 - 23.002 10.00 2.4\nRR ATH] pL 8 Hisiig\nORIG yu TELA vidiin\n~, A HH\n: ] |.3rtinos - roc ghe\nN.registos : 1 N.artigo\nOperador : BAVA ERNE aera\nProc. p/prog. certifticadi uJob/nt Jas\n"
+  },
+  {
+    "id": "real-ph-rf-01-02",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, Jollibee franchise, handwritten marks top right, slight tilt. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-08-18",
+      "vendor": "CUISINE ALA MORE INC.",
+      "amount": 227,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "CUTS INE ALA more",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "CUTS INE ALA more\nars by VT we\n1 ST FO GH Atl\ni om 0 0\nent un ons\nRU\nHone\nSates TROD\nCot BA gil KATRIN 1,\nDI 1113 0 STIDRS24448\nee\n1 sone 2.0\n118 5 ole\n16 FE\n116 C0\n11 fel om\n111 tt 1\n| CRC\nHE Ee a\n17 ki fice\n7 ens) torn 27,0\nTw. Zan\nor ann\n| we 27400\nURTalile Sales 068\nst Si 00\nAY sera fate ales io\nAI fant 75%\nGit tm: a\n[rl —\nTT\nCC E——\nTel) 15 atv AS\ni i fac a AEA\nGat 15 a1 41 ou GARE\ni 0, PEAS fat\n111 serves 0c 1 HE THREE\nPET Tota yal In\nTrt 50 aid\nAT bn Th O01 40515 000\nSRREITIA IN AT (008A Ot s\nat Tr, A/T\nUnt it: 0310s\nHo! (01 4 ATE 7\nite Tost: 091/200\nTae\n"
+  },
+  {
+    "id": "real-ph-rf-02-07",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, text logo header, slight fold. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-08-13",
+      "vendor": "southstardrug",
+      "amount": 608,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "iodouill, 1 1T CO",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "southstardrug”\niy\n01 ut 50 Al\nSe mfbriet\nTotal Peon og\niodouill, 1 1T CO\nee\nTerminal no: pont Trans 10: 5446\nEm mae\nee\nEe is io ae\nHe\npe\ninl i\n"
+  },
+  {
+    "id": "real-ph-rf-03-13",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, faint print, date printed as 29JUL2024. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-29",
+      "vendor": "watsons",
+      "amount": 349,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "COA ety esse Pac. ¥",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "; =\n watsons J\nEte\nCOA ety esse Pac. ¥\nok da, wow wa 0.0\nPRPPING BAT i P00\nun Bi\nyok rie rime\n= ee\nwo AR\nfi\n| icons Ee\nWi SHE Fi\nol\nerent 0 Hu\nNy Soong RID. Cand\ni ss 4 VOR NES TE\nCece (1a 8\nees\nBIS GI pn ==\nws Fe) 1\nERE a ie\nNo AN\nee\nne\nsch Hn te. 200\noe 1 FOEAEEBBS 1\nat Ee\nSE\nTimer\nShe Sa\nEa\n"
+  },
+  {
+    "id": "real-ph-rf-04-19",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, clean, ISO date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-25",
+      "vendor": "Jollibee Foods Corp.",
+      "amount": 322,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "ole Food Core",
+      "amount": 162,
+      "items": [
+        {
+          "name": "UISLRIC F600",
+          "quantity": null,
+          "amount": 162
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "ole Food Core\n1011 en S1 Fairview\nSORE 1260\nTO S801 Fall, Fava, oF\nORI Ti TINO S00 791 OIA\nHIN 2A\n014 4 G41)\nUISLRIC [F600 162.00\nRCH\nOH IER\nUf Col\n\n1 BTR vow pl\nBF i\nUf Gis\nA HH WE io\nlo Gtk HL 6 sn ii\n\nHist He\nhoc Suda\n\nAmount Due Eee 00\n\nash 00 Feats HL\n\nye Fre\null\n\nUnable Sales resto\n\nULB] ali [ET\n\nUAT Zora Sales 11\n\nUI fun (124) fi\n\nST None DAGCO5255\n\nGashiprs 2° ces Bassa TAME: E3100\n\nNate: 2024-17-25 Tine: 1508 by\nTHIS Ge11es 55 OUT 53/65 In ce.\n\nTel] Us abou youn exper ence,\n\nSeni os feadback of bit 10011616\nD511 Hs A050 a Hi 501 Ibe, cu pr\nHiri i, ane alas: ce agar\n\nBist Namen\n\naddress: Trm—_\n\n[Hj\n\nBe SOlE\nSues Systens Ph 1103 76s, Ic\n\n201 Ruin Tower, Mekal Lit\nUat fi TIN: O0/S10-244-000\nACER F00E 340 1100525\nate ssid 03/1000\nad Uad id wit 1 1731/2075\n\nSprial § Ferm\nINI B35 F201 O41 552 005)\n\n|\n"
+  },
+  {
+    "id": "real-ph-rf-05-camscanner-07-07-2024-23",
+    "kind": "real",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, Wendy's, MM/DD date; same paper as ph-rf-29. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 235,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "WENDY'S HAMBURGER RESTAURANT",
+      "amount": 209.82,
+      "items": [
+        {
+          "name": "12% sub: 209.82 12",
+          "quantity": null,
+          "amount": 26.1
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "WENPHIL CORPORATION\nWENDY'S HAMBURGER RESTAURANT\n5P¥0 301 IAEV OATEWAY\nMALL. GUEZON CITY\nTI: 001006-U8.068 VAT\nsues voice\n$19065-003.000003001 1\not: Mary ose omsnoze\n3100 6:02PM\nREPRINTY | Soro\nOrdar Typ: TAKE OUT\nBACON MUSHROOM MELT 12000\nFREES LARGE T1800\nsutola wen\nTax 218\nTAKE OUT Tol 2800\ncash 60000\nChangs 20800\nI\n12% sub: 209.82 12.26.10\nVATABLE swLES 86\nVATEXEWPT SALES 000\nZERORATED SALES 000\nTOTAL BALES wn\n12% VAT 210\nTOTAL AMOUNT DUE 23600\nGENIE TECHNOLOGIES INC.\n7F Aaland Souihgete Tower akal Cy\nVAT REG TI: 200.662.028.000\nACC'048-200652075.00020166020\nDale [30s 0TI\\/18Vald THO73172028\n“THS OICERECET SHALL BE VALID FOR\nFIVE(®) YEARS FROM THE DATE OF PERMIT T0 USE\"\nCuroers Name: 3%\nJr ——\ni RT\nPorm: 1112-126:142112.088\nMIN: 120301340 SNR63902\nAcer: 04B-200662028.000203\nFor Dalveres Call 833-3353\n\"THANK YOU\n.. Chock Close\nRECEIVED ORDERS IN CC\nGOOD CONDITION\nRidar's Full\n"
+  },
+  {
+    "id": "real-ph-rf-06-camscanner-07-07-2024-23",
+    "kind": "real",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, Panda Express, TAX INVOICE banner above the name; same paper as ph-rf-23. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "JBPX FOODS INC.",
+      "amount": 354,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-07-08",
+      "vendor": "Panda Fxpros Gateway Hal 2",
+      "amount": 354,
+      "items": [
+        {
+          "name": "Teed Tea Hedin",
+          "quantity": null,
+          "amount": 55
+        },
+        {
+          "name": "EURMDAY PLATE HEAL",
+          "quantity": null,
+          "amount": 269
+        },
+        {
+          "name": "of ters 2",
+          "quantity": null,
+          "amount": 6.07
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "TAH WOICE\nOriginal\n100 FOU 10\nPanda Fxpros Gateway Hal 2\nSucorra Ciba\nuozon City\nUAL TINEOID-352 1394-00026\nAxTHIS SERUES AS A SALES TNUOICEx®\nSALES TNUOTCE ¥ 180037-2-0040863\nOrder #319\nHost: Vanessa 07/08/2024\nOrder #319 5:59 iy\n0220\nOrder Type: Dine In\nTeed Tea Hedin 55.00\nEURMDAY PLATE HEAL 269.00\nDrange Chicken Evy\nHangol tan Fork Evy\nFried Rice Ew\nFortune Conkie\n# of ters 2 6.07\nDine In Total 354.00\nCash 404.00\nChange 50.00\nSALES BREADOHN\nVATABLE SALES 26.07\nUAT EXERPT SALES 0.00\nZERD RATED SALES 0.00\nur 37.9\nTOTAL SALES 350.00\nTHAR OU\nPTUMFEP102023-D40-0408351-00028\non pTHNT 477 MIN: 2310) 308044024166\n"
+  },
+  {
+    "id": "real-ph-rf-07-camscanner-07-07-2024-23",
+    "kind": "real",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, Wendy's; same paper as ph-rf-31. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 298,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-07-06",
+      "vendor": "WENDY'S HAMBURGER RESTAURANT",
+      "amount": 298,
+      "items": [
+        {
+          "name": "Sublotal",
+          "quantity": null,
+          "amount": 266.07
+        },
+        {
+          "name": "12% Sub: 266.07 12%:",
+          "quantity": null,
+          "amount": 31.93
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "WENPHIL CORPORATION\nWENDY'S HAMBURGER RESTAURANT\nSPH 301 ILEV GATEWAY\nMALL, QUEZON CITY\nTIN: 001-006-949-068 VAT\nBALES INVOICE\nS| #066-001-0000176722\nHost: Jazelo 07/06/2024\nn 3.01PM\n10071\nOrder Typo: TAKE OUT\nCHEESEBURGER DELUXE FOR 2 (2 @149.0 298.00\nSublotal 266.07\nTax 3193\nTAKE OUT Total 298.00\nCash 600.00\nChange 202.00\nVAT\n12% Sub: 266.07 12%: 31.93\nVATABLE SALES : 266.07\nVAT-EXEMPT SALES : 0.00\nZERO-RATED SALES © 0.00\nTOTAL SALES © 266.07\n12% VAT H 31.93\nTOTAL AMOUNT DUE : 298.00\nGENIE TECHNOLOGIES INC.\n7F Alphaland Southgate Tower Makati City\nVAT REG TIN: 208-652-029-000\nACCi048-208662020-000203656928\nDale lssued:07/31/16Valld Til:07/3172026\n© “THIS INVOICE/RECEIPT SHALL BE VALID FOR\n"
+  },
+  {
+    "id": "real-ph-rf-08-camscanner-07-07-2024-23",
+    "kind": "real",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, MM/DD date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-03",
+      "vendor": "KYU KYU RAMEN 99",
+      "amount": 327,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-03-01",
+      "vendor": "FENPOOSS LEVEL 3 GATENAY Not FOOD",
+      "amount": 327,
+      "items": [
+        {
+          "name": "AT",
+          "quantity": null,
+          "amount": 5.04
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "KYU KYU RAMEN 99\nKVUKYL CONCEPT INC.\nFENPOOSS LEVEL 3 GATENAY Not FOOD\nEXPRESS ARANETA CITY SUOORRY\nOUEZCH CITY NCR, SECOND DISTRICT\n\\ VAT Req TIN: G16-236-050-00044\nPOSO 1-H: 1S TAYSRGONG4AE T0003 1\nMINEZA0I0310G0925657\nsales INVOICE\n01/03/2024 14:36 ww\nJ ETE ———\nI COKE 49.000\n1 6Y07A 79.000\n1 ICHIBAN Ri 199,000\n3 Iten(s 327.00\nTOTAL Dut 327.00\nCASH 500,00\nCHANGE 173.00\nvarable (Vi 291.9\nVAT-Exenpt (E) 0.00\nVAT Zero-Ratea (2) 0.00\nAT 5.04\nTrans# 0021 01011072\nSI 01011063\nCnt Nae cone sr\nAddress:\nme\nLL AS MI\nServing #2\nThi serves a an SALES IWVOICE\nANSI Inforsation Systees, Inc.\nTytana St., Manila\nVAT Reg TIK: 000-336-515-60000\nACCRCOTTAYIAN NN MOOT 15000 TRG 47\n"
+  },
+  {
+    "id": "real-ph-rf-09-camscanner-07-07-2024-23",
+    "kind": "real",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, Wendy's. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 135,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-07-06",
+      "vendor": "WENDY'S HAMBURGER RESTAURANT",
+      "amount": 135,
+      "items": [
+        {
+          "name": "LITRO ICED TEA",
+          "quantity": null,
+          "amount": 136
+        },
+        {
+          "name": "Sublolal",
+          "quantity": null,
+          "amount": 120.64
+        },
+        {
+          "name": "12% Sub: 120.54 12%:",
+          "quantity": null,
+          "amount": 14.46
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "WENPHIL CORPORATION\nWENDY'S HAMBURGER RESTAURANT\nSP# 301 JLEV GATEWAY\nMALL, QUEZON CITY\nTIN: 001-096-949-066 VAT\nSALES INVOICE\n1 #066-001-0000176771\nHost: Jazzele 07/06/2024\n123 6:26 PM\n10123\nOrder Typo: DINE IN\nLITRO ICED TEA 136.00\nSublolal 120.64\nTax 14.46\nDINE IN Total 136.00\nCash 200.00\nChange 65.00\nVAT\n12% Sub: 120.54 12%: 14.46\nVATABLE SALES : 120.54\nVAT-EXEMPT SALES : 0.00\nZERO-RATED SALES : 0.00\nTOTAL SALES 120.64\n12% VAT i 14.46\nTOTAL AMOUNT DUE : 136.00\nGENIE TECHNOLOGIES INC.\nTF Alphaland Southgate Tower Makatl City\nVAT REG TIN: 208-662-029-000\nAACC:048-200662029-00020368928\nDate Issued:07/31/16Valld T11:07/31/2026\n“THIS INVOICE/RECEIPT SHALL BE VALID FOR\nFIVE(8) YEARS FROM THE DATE OF PERMIT TO USE\"\nCustomer's Name:_\nN— _—\n"
+  },
+  {
+    "id": "real-ph-rf-10-camscanner-07-07-2024-23",
+    "kind": "real",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, Wendy's; same paper as ph-rf-21 and ph-rf-30. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 251,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "WENDY'S HAMBURGER RESTAURANT",
+      "amount": 224.11,
+      "items": [
+        {
+          "name": "12% Sub: 224.11 12%;",
+          "quantity": null,
+          "amount": 26.09
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "WENPHIL CORPORATION\nWENDY'S HAMBURGER RESTAURANT\nSPH 301 ILEV GATEWAY.\nMALL, QUEZON CITY\nTIN: 007-096-348-088 VAT\nSALES INVOICE\n§1#066-003-0000038016\nHos: Mary Rose o7m6R024\nNo 526 PM\nREPRINT#1 20106\nOrder Typo: DINE IN\n‘BACON MUSHROOM MELT CMa 17400\nSWITCH TO ICED TEA 1600\nUPSIZE LITRO ICED TEA 200\nFREES LARGE 200\nSubtotal 2441\nTax 289\nDINE IN Total 2100\ncan 8000\nChangs, 2900\nVAT\n12% Sub: 224.11 12%; 26.09\nVATABLE SALES 2411\nVAT-EXEMPT SALES | 000\nZERO-RATED SALES 000\nTOTAL SALES 2411\n12%VAT 26.69\nTOTAL AMOUNT DUE 26100\nGENIE TECHNOLOGIES INC.\n7F Alphaland Souingate Tower Maka City\nVAT REG TIN: 208.652.026.000\nACC:048-208662029-00020368528\nDale ssusd:0T/1SVald THOT 112026\n“THIS INVOICEIRECEIPT SHALL BE VALID FOR\nFIVE(®) YEARS FROM THE DATE OF PERMIT TO USE\"\nCurlomeraName_________\nFS\nNoo —\nPorm: 1112-126-142112:088\nMIN; 120301340 / SNRE302\nAcer: 046-208662026-000203\nFor Deliveries Cal 633-3333\n"
+  },
+  {
+    "id": "real-ph-rf-11-camscanner-07-07-2024-23",
+    "kind": "real",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, date line below the crop; same paper as ph-rf-40. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "MERCURY DRUG - QC ARANETA CENTER GEN. ROMU",
+      "amount": 91,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "MERCURY DRUG - 0G ARANETA CENTER GEN. ROMU",
+      "amount": 91,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "MERCURY DRUG - 0G ARANETA CENTER GEN. ROMU\nAurora Blvd. cor, Genera] Romulo St.\n(arCubao; duezan City\n© WTRE TIN:000-368-474-00286\nwait Egl0c 4 (02) g91i-0610\nNOBILE/VTBER HO: {oaae) no 0zcB\nAE FL 81%\nPA # 12 JEF EE\nSYNDEX-D TAB 35.001\n480650285000 100 3.50\nBIOFLU TAB 7+1F 56,007\n480776869304\nTOTAL 91.00\nAMOUNT TENDERED\nCASH 100.00\nTOTAL PAYMENT 100.00\nCHANGE 9.00\n#11 item(s) kx\nORDER #00268\nSOLOCTON eid\nAORESS TTT\nGN ra—\nBUSINES STE T\nVATable Mm 8.5\nVAT-Exenpt Sale (X) 0.00\nVAT Zero-Rated Sale(Z) 0.00\nVAT - 12% 9.75\nAmount Due 91.00\nRecetved Merchandise in Good Condition\nSa Mercury Drug Nakas1s1guro Gamot\nay Laglng Bago! !\nMaraning Salamat Po...\nPhillogix Systems, Inc.\n_ Artiaga St. Bray Corazon de\n433 Lt Ard 1aga Metro sis\n"
+  },
+  {
+    "id": "real-ph-rf-12-camscanner-07-07-2024-23",
+    "kind": "real",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, single item. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "MERCURY DRUG - QC ARANETA CENTER GEN. ROMU",
+      "amount": 28.75,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "fieceived Merchandise in Good Condition",
+      "amount": 28.75,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "MERCURY DRUG ~ GC ARANETA GE NTER GEN. ROMU\nAurore Blvd. cor, General Romo St.\nCuba, Quezon C1ty\n\nVALREG TIN:000 368-474-00266\nTEL NO (02) 8911-0616\nMOBELE/VIBER NO: ean] 63-8296\nTOSHIBA 4900 416X132 R003 00005\nMIN:19092611195557839 [1.5.30] 29\nPA # 99 §/8\nVITASOY CHO300mL. 28.757\n480001607396\nTOTAL 28.75\nAMOUNT TENDERED\nCASH 100.00\nTOTAL PAYMENT 100.00\nCHANGE n.25\n#1 item(s) #*\nSOLD TO : SEEN\nADDRESS : BE swe\nTIN NO: ES\nBUSINES STYLE: DP.\nVATable (T) 25.67\nVAT-Exenpt Sale (X) 0.00\nVAT Zero-Rated Sale() 0.00\nVAT - 12% 3.08\nAmount Due 28.75\nfieceived Merchandise in Good Condition\nSa Mercury Drug Nakasisiguro Gamot\nay Laging Bago!\nMaraming Salamat Po...\nPhillogix Systems, Inc. tarazon fe\n"
+  },
+  {
+    "id": "real-ph-rf-13-camscanner-07-07-2024-23",
+    "kind": "real",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, clothing store, DD/MM date (31/01/2024), customer and card details printed. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-01-31",
+      "vendor": "Guess?",
+      "amount": 7497,
+      "items": null
+    },
+    "actual": {
+      "date": "7020-01-31",
+      "vendor": "STORE CODE + 442 TRANS © 7081",
+      "amount": 7497,
+      "items": [
+        {
+          "name": "1111116208244 LHLEOD032GAADDN",
+          "quantity": 1,
+          "amount": 6496
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "Guess?\nCalifornia Clothinn In:\nUpper Grd Fr, Bldg b 5H Heal\nHandaluyony City\nHIN: 22110910293941374\nSM: POOLEY\nGAT REGISTERED TIN; 001-427-500-07\nSALES INVOICE\nINVOICE NO. ¢ 10006806 31/01/7020 1\nCOUNTER + 1 CASHIER : JHACOS\nSTORE CODE + 442 TRANS © 7081\nCUSTOMER ID + 4429000105\nCUSTOMER TYPE ¢ GUL\nCUSTOMER NAME ; MARGIE GRECIA\nADDRESS 1, MARIKINA CITY\nCUSTONER TIN 1\nCARD NO. ¢ 8447043333\nEn ary. PRICE, AMOUNT\n1114118114550 HERCDO11366V032\nH 999.00 999.00\n1111116208244 LHLEOD032GAADDN\n1 6498.00 6496.00\n1111117839281 PBINAGEDLACIEIE\n1 0.00 0.00\n1111118091770 PSBI00004AD200K\n1 0.00 0.00\nSUE TOTAL + 7497.00\nTOTAL AMOUNT DUE © 7497.00\n| VATABLE SALE + 6693.75\nVAT ANT, (122) 1 803.25\nVAT EXENPT SALE : 0.00\nUAT EXEMPT + 0.00\nZERO-RATED SALE + 0.00\nCARD:\nHOD KRRRRIRRNNERG03S\nNAHE: FAHAD H ALKENARK\n"
+  },
+  {
+    "id": "real-ph-rf-14-img-20240616-032703",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, header cut at the left edge, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-06-11",
+      "vendor": "MERCURY DRUG - MKTI LEGASPI VLG SALCEDO",
+      "amount": 70.25,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-06-11",
+      "vendor": "Rece1ved Merchandise In Good Condit on",
+      "amount": 70.25,
+      "items": [
+        {
+          "name": "ois",
+          "quantity": null,
+          "amount": 1000
+        },
+        {
+          "name": "Arount Due",
+          "quantity": null,
+          "amount": 70.55
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "AERCURY ORUS - WHIT LEGASPI VLG SALCEDO\nG{E XALAVAMN BLOG. OR, SALCEDO\" OFLA\nSh ST, LEGASPY VICLAGE WARATE CITY\n\nUAT RES TIN:000-385 474-0057\nTEL NO; (07) G553-8dg7\nMBLEIVISER 10: (0945) Ge 7108\nTOSHIBA 4300 417M336 ROO 01021\n| MIN:20111909521124122 11.5.30] 29\nPA #99 §/S\nCHRME ALL NGT+H4 24.7517\n480048801147\nKATINKD LIN 10mL 45.501\n480901241324\nTOTAL 10.25\nAMOUNT TENDERED\nois 1000.00\nTOTAL PAYMENT 1000.00\nCHANGE 929.75\n#7 item(s) **\nSp, GEN\n==\nEDR —\nVaTable (1) 62.72\nVT-Exenpt Sale (K) 0.00\nVAT Zero-Rated Sale(Z) 0.00 g\nVAT - 12% 7.53\nArount Due. 70.55\nRece1ved Merchandise In Good Condit on\nrug Nakasisiguro Ganot\n5a Hercury 0 E90) Rh\nWaring Sa enat Fo...\nphi Joa x Systems, Inc.\nfille Pees Bray Corazon ce\naus, san Juan, Hetro Manila\nREG TIN 205-113-671-00000\nRo 1 ARIES,\nflo. #b112020-116-0213125-00667 ©\n30501 06-11-24 0B:284 ELLEN\n#110211162481\n= THIS IS YOUR IWOICE\n"
+  },
+  {
+    "id": "real-ph-rf-15-img-20240616-033147",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, heavily faded fuel receipt, low contrast, logo header. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "PETRON",
+      "amount": 284.44,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "| = SY MOSES ©",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "| = SY MOSES ©\n]\n(all\nPETROM\na\nsr\nstr apis\nEne\nie Fa,\nHE\nwre!\nTE\nERE i\nth re\n"
+  },
+  {
+    "id": "real-ph-rf-16-img-20240616-033229",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, crumpled, bent across the total. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-05-31",
+      "vendor": "RED RIBBON QUIRINO HIWAY BARTOLOME",
+      "amount": 450,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "7D REGAN ATRIND | Tu gro oe",
+      "amount": 50.1,
+      "items": [
+        {
+          "name": "teas £",
+          "quantity": null,
+          "amount": 50.1
+        },
+        {
+          "name": "04l foro ato Sie",
+          "quantity": null,
+          "amount": 0.01
+        },
+        {
+          "name": "facut",
+          "quantity": 1,
+          "amount": 1.21
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "7D REGAN ATRIND | Tu gro oe\nOperated bv: INURE 1p gPCTME\ni HA 50 i ep\nN07 751-748 DLAI 1 Vat\nin AUS\nAE] 121173\nRESUS\nS/AI20 05:1) BEAL sTNgnoszry\nee =\n1 OC ROD 50 150.001\npres 1.100\n1 GALE Fe) Sik 0.1\nteas £50.10\niA le 0 an\n[AHA Tita 0\npinks 00150\nOA Sates 0\nUAT Cent Cas a\n04] foro ato Sie 0.01\n1 facut 1.21\nCost hae:\narose:\ni\nELLIE Ast) Yom expen\nur ell Vis BEL. Ty fins\nSRBER Us 70d hone ary, con pi\nOF DUAR) TE R70) Rua sori\nhi S618 i 2 Sls; 1\nHEL TIBI 1, Erg\nIla 68 |g\nAY Re C1: 0-330\nARBITATIEN 0005306 a\nBite Essig. ny rt\nValid nts: 773) pe\nRC re.\nate Tosi) 7,00\noe INCE gy ge\n1A an gg pi\n(LCG\ns\n"
+  },
+  {
+    "id": "real-ph-rf-17-img-20240616-034047",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, debit card payment, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-05-27",
+      "vendor": "MERCURY DRUG - ARTC FARMERS MARKET ARCADE",
+      "amount": 269.5,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-05-21",
+      "vendor": "#1 FIRIERS WRKET ARCADE ARANETA CENTER",
+      "amount": 9.5,
+      "items": [
+        {
+          "name": "want ©",
+          "quantity": null,
+          "amount": 29.5
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "SE EE A A\n| UEROURY TAG - GTC FARIRS MIRKET MRCADE\n#1 FIRIERS WRKET ARCADE ARANETA CENTER\n| Gio DISTRICT 111 S080 QUEL ITY\n\nVAT'REG THY:00- 368-274-0035\nI es\nVOBILEN BER Md: (0508) a13-6on\nT0518 4500 4TokC22 Abed 0273\nMIN: 108151321 1556140 11:5.30F 24\nSRN\nFERRERD ROCHER B 268.501\na00050013317\nToT 263.5\nHOUR TENOERED -\nDEBIT RD 262.50\nTOTAL PAVHENT 9.50\n© fen(s) we\nGPADEBTT CARD DETATLS\nPAVHMA Horoval : 065477\nPe\nwant © 29.50\nS110 0 TER\nFe\nbi —\nwale Mm 206\nwaTbeerpt Sale (0 0.00\nGAT Zoro Roted Salell) 0.00\nVET 8 ng\nAmount Due 265.50\nReceived Merchandise 1n Good Condition\nSa ercury Dig ies aro et\nfrie Sy a\nYarShing slmat Po...\niia Systems, Tne.\n0 (PA HaGRSH Bray corazon\nSidus, \"san Joan, Metro Hani 12\nape\ncored Np. t\n#1 Ka. F202 Da00as-003%6\nTXNB0822T5 05-21-24 O1:21P MICHEL\nINVOICE I0p793451604\nTHES 15 YOUR TWICE -\n"
+  },
+  {
+    "id": "real-ph-rf-18-storage-emulated-0-dcim",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, rotated 90 degrees, heavily crumpled, McDonald's. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-05-28",
+      "vendor": "GOLDEN ARCHES DEVELOPMENT CORPORATION",
+      "amount": 89,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "ED HEPES chin =i gesiSasuinon",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "ns\n\nSS 7\n\n<2 =:\n\nET\n‘a \\ Ss 5\nHr! iz a . i\n! (= 2% C3RUEESS Lowest 5 |\n= (Es SE EES naE oe Seiwies |]\nHi Ea == a aes 2\n1a VEE BED 5 a SEC, Nit SEER 22\na jos Ee iE LE Ee Beast ti 22 Sessgesct a\nVED (SE cTiRetESs ous a8 oat °F SESREeCRs 2 |\n= | EgpizRsiEEmoE = FA Corl Gf\n| Sa | F3REER RES Ze =o is fm PecErE sReRel |\n|e VGEReasiEEt ni BS 3 som TENE EERE TERE\nED HEPES chin =i gesiSasuinon\nhe le Ct Cts Le Ar SpiELpiiogElL |\n53 (ooB2 mui iaRbang g E80 Some iE $35a800T8E\nAS (GeTTEsRaBentt Ee 2022 an p= sf amosiEmis ©\n| §S= ffEnsss SciBE ECCT aw wi Sol\njr Vigs See “Get BR 73 Ei new 3 2 BRaTEZ asl\nhs Jeg az 2228 0 EEE mel iE sCqrirEE\n\n‘8 Bedi Ee 2 ogeERE ST gf |\n\nhs : sia isl —o mms $A a= LB\n"
+  },
+  {
+    "id": "real-ph-rf-19-img-20240706-204424",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, clean, MM/DD/YY date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "Starbucks Coffee",
+      "amount": 85,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-07-06",
+      "vendor": "OFD by: Rustan Coffee Corp.",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "Starbucks Cof fee\nOFD by: Rustan Coffee Corp.\nG/F Gateway Mall Araneta Center\nCuba Quezon City\nUAT Reg, TIN: 005-216-077-108\nMIN: 16097]6543785448 / S/N: 41-NIEB\n07/06/24 8:54 PH\nToy, No. :0000000000001052366\n000000206A000B36755\nHico FOR HERE\nCustomer Name:\nAddress: |\nTIN:\nTten Price Oty Aunt\n£HaCo DONUT & | 85 UA\nTotal PhP 15\nCash -100\nCHANGE 18\nNumber of Ttens: il\nNet. Ant VAT Amount\nUATABL. 7% | [3\nEXENPT 0 0 0\nZERO-R 0 0 0\nTHIS SERVES AS YOUR INVOICE\nPOS Provider:\nDynanic Global Enterprise Systems Inc.\nMezzanine A, LPL Center 130 LP.\nLayiste St.) Salcedo Ul. Makati LIEV |\nUAT Rea. TIN: 246-989-906-000 |\nAccred. No: 06024688990620150 i\na i; Septener 2d, 2018 |\nhe ho 16-12 5 0088753-00108\n|\n|\n"
+  },
+  {
+    "id": "real-ph-rf-20-img-20240706-204827",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, dim lighting. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 85,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "WENDY'S HAMBURGER RESTAURANT",
+      "amount": 76.89,
+      "items": [
+        {
+          "name": "DINE IN Tolal",
+          "quantity": null,
+          "amount": 85
+        },
+        {
+          "name": "om",
+          "quantity": null,
+          "amount": 100
+        },
+        {
+          "name": "12% Sub: 76.82 12%:",
+          "quantity": null,
+          "amount": 8.11
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "WENPHIL CORPORATION\nWENDY'S HAMBURGER RESTAURANT\n'SP#3 301 JLEV GATEWAY.\nMALL, QUEZON CITY\nTIN 001-096-943-066 VAT :\nSALES INVOICE\nSI #066-001-0000176770\nod Jazzele 710612024\n526 PM\nOrder Type: DINE IN fous\nICED TEA MED. cr\nSubtotal\n76.89\niL / ait\nDINE IN Tolal 85.00\nom 100.00\nChange 15.00\nVAT\n12% Sub: 76.82 12%: 8.11\nVAT! 8LE SALES 76.89\nVAT-EXENPT SALES 0.00\nZERO-RATED SALES 0.00\nTOTAL SALES: 76.89\n12% VAT : 811\nTOTAL AMOUNT BUE 8500\nGENE TECHNOLOGIES INC.\n7F Alphaland Soulhgale Tower Makatl City\nAT REG TIN: 208-662:029-000\nACCi046-208662029-00020386326\nDate saued 07/3 1/16Valld THOTRIZZS\nTHB NVOICERECEPT SHALL BE VALD FOR\nENB YEARS FROM THE DATE OF PERMIT To USE\"\nEe Name\nCas Tr\nCoipimeee————\n"
+  },
+  {
+    "id": "real-ph-rf-21-img-20240706-204911",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, dim, slight curl; same paper as ph-rf-10. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 251,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-07-06",
+      "vendor": "'s MAMBLIRGER RESTAURANT",
+      "amount": 24.11,
+      "items": [
+        {
+          "name": "BACON MUSHROOM MELT CME",
+          "quantity": null,
+          "amount": 174
+        },
+        {
+          "name": "SWITCH TO ICED TEA",
+          "quantity": null,
+          "amount": 16
+        },
+        {
+          "name": "FRIES LARGE",
+          "quantity": null,
+          "amount": 20
+        },
+        {
+          "name": "DINE IN Tolsl",
+          "quantity": null,
+          "amount": 261
+        },
+        {
+          "name": "Bub: 224,11 12%:",
+          "quantity": 120,
+          "amount": 26.88
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": " wenpHL alin]\n's MAMBLIRGER RESTAURANT\nA WENO ow 301 LEV GATEWAY\nMALL, OUEZON CITY\nTIN; 001-086-949-068 VAT\nSALES INVOICE\n$1#066:003-0000038018\nHos: Mary Rose 07/06/2024\n3104 8.26PM\nREPRINT# 1 30106\nOrder Type: DINE IN\nBACON MUSHROOM MELT CME 174.00\nSWITCH TO ICED TEA 16.00\nUPSIZE LITRO ICED TEA 4200\nFRIES LARGE 20.00\nSublolal 22411\nTax 2688\nDINE IN Tolsl 261.00\n| cash 600.00\nchange 243.00\nVAT\n120 Bub: 224,11 12%: 26.88\nVATABLE SALES 224.41\nVAT-EXEMPT SALES 0.00\nZERO-RATED SALES 0.00\nTOTAL SALES 24.11\n12% VAT 26.89\nTOTAL AMOUNT DUE 26100\nGENIE TECHNOLOGIES INC.\nTF Aghalin Saulngas Tower Maka ly\n/AT REG TIN; 208-862-028-000\nACC/048-208662029:00020388928\nDale Issued:07/3118Valld TII07/31/2026\n\"THIS INVOICE/RECEIPT SHALL BE VALID FOR\nFIVE(E) YEARS FROM THE DATE OF PERMIT TO USE*\nCurfomer's Name:\nAddress:\nTIN: a\n"
+  },
+  {
+    "id": "real-ph-rf-22-img-20240706-204955",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, GCash payment. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 398,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-07-06",
+      "vendor": "WENDY'S HAMBURGER RESTAURANT",
+      "amount": 98,
+      "items": [
+        {
+          "name": "BACON CHEESEBURGER CMB",
+          "quantity": null,
+          "amount": 168
+        },
+        {
+          "name": "MACARONI SIDE SALAD",
+          "quantity": null,
+          "amount": 76
+        },
+        {
+          "name": "Sublotal",
+          "quantity": null,
+          "amount": 366.36
+        },
+        {
+          "name": "GASH #070624647164",
+          "quantity": null,
+          "amount": 198
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "WENPHIL CORPORATION\nWENDY'S HAMBURGER RESTAURANT\nSP#3 301 ILEV GATEWAY\nMALL, QUEZON CITY\nTIN: 001-096-948-085 VAT\nSALES INVOICE\nSI # 066-003-0000038010\nfons Mary Rose 07/06/2024\nREPRINTS 2 ii\nOrder Type: DINE IN\nCHEESEBURGER DELUXE Cf\nFRIES REGULAR al hie\nZERO 120Z\nBACON CHEESEBURGER CMB 168.00\nFRIES REGULAR\nZERO 1207.\nMACARONI SIDE SALAD 76.00\nSublotal 366.36\nTax 4254\nDINE IN Total 98.00\nGASH #070624647164 198.00\nVAT\n12% Sub: 365.36 12%: 42 6\nVATABLE SALES beoro4\nVAT-EXEMPT SALES 000;\nZERO-RATED SALES on\nTOTAL SALES: rid\n12% VAT: 39800\nTOTAL AMOUNT DUE\nGENIE TECHNOLOGIES INC\n7F Alphaland Southgate Tower Makell City\nVAT REG TIN: 208-652-026-000\nACC:048-208652029-00020365628\nDate tssusd:07/31/16Valld TI07/31/2028\n“THIS INVOICERECEIPT SHALLBEVALD FOR, ___\nFIVE(S) YEARS FROM THE DATE OF PERMIT Tt\nCusiomersName:_________ ——————\n"
+  },
+  {
+    "id": "real-ph-rf-23-img-20240706-205109",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, rotated 90 degrees, Panda Express; same paper as ph-rf-06. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "JBPX FOODS INC.",
+      "amount": 354,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "iE Ek in",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "iE Ek in\nL tsa== 0 2% gx = =2\n= Ese g = F3z938 § BR 5\nPs ei | 3 558855 oz EB\nEEE Sp: iefEgE = © 3 ZEEE\nee | ia i = == © $26 a8\n3805300 18 d TRL 5 Zp sid\noe i LR po\ngautoit | = - EE\nCEH La i! 5 3 2 ae F\n‘Hazhe | TT © 5 GC\nSPEC 2 s £88\nEe dean) [ool cn pe |\n: lems) 1828 ¢ =f RE E\n"
+  },
+  {
+    "id": "real-ph-rf-24-img-20240706-205335",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, clean, MM/DD date with time. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-03",
+      "vendor": "BONCHON GATEWAY MALL",
+      "amount": 275,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-07-03",
+      "vendor": "operated by: Scot and Food Grow",
+      "amount": 275,
+      "items": [
+        {
+          "name": "2PC CHICKEN MEAL",
+          "quantity": 1,
+          "amount": 230
+        },
+        {
+          "name": "¢ gniteRice",
+          "quantity": null,
+          "amount": 45
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "BONCHON\noperated by: Scot and Food Grow\nLEVEL 3 GATENAY TBLLS ARRIETA CENTER\nBRGY. SOCORRO DISTRICT III, CUBAD,\nBiel\nVAT REE TERED\nTIN; 009-663 -413-00083\nSerial Number : SFGC-SGHT20PGP\nMIN:23041911080275156\nSALES INVOICE\nTerminal: 4 Cashier:Micha Nabata\nDate and Time: 07/03/2024 02:19:33 PH\nSI #: 0-00014051 Order Number: 65\nTrans #: 14664 Queue #: 10° Guest: 1\n~—DINE-TN-—\n1 2PC CHICKEN MEAL 230.00\n1 NO DIP 0.00\n1 ICED TEA 0.00\nLode JB\ni 0.\n¢ gniteRice 45.00\n7.00 subtotal 275.00\nAmount Due 7.0\n5.54\nrte eT\nVAT 0.00\nVAT-Exempt 0.00\nvAT-Zero-Rated\namount Tendered: 1,000.00\nCASH \"725.00\nChange\nNae :\nAdress:\nTIN, :\nBusiness Type:\n2S A SALES INVOICE.\nTISEER Eu FEEDBACK.) oc\nSHARE YOUR So EXPERIE 279\nvisit bit.1y, /BonchonCustomerta\nEv\n"
+  },
+  {
+    "id": "real-ph-rf-25-img-20240706-205715",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, rotated 90 degrees, restaurant with service charge, many items. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-01-22",
+      "vendor": "ROTI SHOP",
+      "amount": 3064.25,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "INA ra CET Re",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "INA ra CET Re\n\nsgfs 3 3% E§%.383.ERE3EZ |DE39gsas\n\nHELIER tg Fg EEL HR ML\n\nCLO I HR Ho ERE EL J ETRE 3 gelat?\n\n5 f EEE CIE I RE SE\n\n= + fal amemesabaeanailBs 353 98 HEEEHE Ho\nEE 28 al aehils\nLA EEE eT he ~ 8 TEIEEcERi;\n\ncc of. 8 J | baie |\n\ns¥a: 8% Wii E3:|822 ses sesees | CE =\n\noo B an\n"
+  },
+  {
+    "id": "real-ph-rf-26-img-20240706-233645",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, Jollibee, dark background, handwritten number, ISO date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-05",
+      "vendor": "Quest Food Corporation",
+      "amount": 245,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "STORE #044",
+      "amount": 24,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "STORE #044\n505\nCE\n1 HOCH MC J\nHOCh2y MC\nCoke FIt HC\n1 ChyCkiwch HC #\nCnotiyCkrsch MK\nCoke FIT MC\n1 Sag a Bm\nSian NC\nun IHR\n;\n- P24. 00\n| ZN}\nE 218.5\nM0\nMow\n{7 We)\n"
+  },
+  {
+    "id": "real-ph-rf-27-img-20240706-233901",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, dark background, date near the bottom. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "DAVAO TUNA GRILL",
+      "amount": 185,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Corporation",
+      "amount": 185,
+      "items": [
+        {
+          "name": "N i",
+          "quantity": null,
+          "amount": 19.82
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "AVAD TUNA GRILL\nOwped & Optd By.\nDavao Tupa Grill Fastfood\nCorporation\nFS 301-K Poodeourt Ma) |\nAraneta Avenue (Quezon City\nVAT REG TIN : 239-160-328-00006\nMSN : CP240004542\nMIN + 15072511563511768\nSERVICE INVOICE\nNo, of Guest: 1\nOrder 4: 411092\nInvoice #: 0000411062\nTern, 4: 1 Oshr KATRINA\nWALK-IN x\nOty Description(s) Price\nDINE IN\n7.00 KARE KARE BUNTOT 185,00\n=== TE 201700 tems) co\nSub Total E 185.00\nTOTAL 185.00\nTendered:\nCASH 200.00\nChange: N 15.00\n| VaTable Sales(¥) 165.18\nN i 19.82\n(E) 0.00\nir 0.00\n024 06:51:54 PM\nng, Ine.\n"
+  },
+  {
+    "id": "real-ph-rf-28-img-20240706-234012",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, Panda Express, TAX INVOICE banner, bottom cut. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "JBPX FOODS INC.",
+      "amount": 918,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-06-11",
+      "vendor": "Panda Express Gateuay Hal)",
+      "amount": 918,
+      "items": [
+        {
+          "name": "BOML MEAL SIZE",
+          "quantity": null,
+          "amount": 299
+        },
+        {
+          "name": "Strauberry Lemond 160:",
+          "quantity": null,
+          "amount": 5
+        },
+        {
+          "name": "Coke Reg Larse",
+          "quantity": null,
+          "amount": 70
+        },
+        {
+          "name": "PLATE MEAL SIZE",
+          "quantity": null,
+          "amount": 399
+        },
+        {
+          "name": "Honey Walnut Shrimp Sul",
+          "quantity": null,
+          "amount": 76
+        },
+        {
+          "name": "of 4",
+          "quantity": null,
+          "amount": 819.64
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "TAK TNUOIEE\nJPA F000 TN\nPanda Express Gateuay Hal)\nOuezon C11\nUAT TINE010 456-134-001\n*3THIS SERVES AS A SALES TNUOITCER®\nSALES INUOTCE # 180037-2-0040894\nOrder #330\nHost: Vanessa 11/06/2024\nOrder #330 6:15 PM\n024\nOrder Type: Dire In\nBOML MEAL SIZE 299.00\nAslan Grilled Chicken So\nFried Rice Hed\nFortune Cookie\nStrauberry Lemond 160: 5.00\nCoke Reg Larse 70.00\nPLATE MEAL SIZE 399.00\nHoney Walnut Shrimp Sul 76.00\nStir Fried Fork Sal\nHALF + HALF SIDE\nChow Mein Half\nFried Rice Half\nFortune Cookie\n# of 4 819.64\n918.00\n02.00\n34.00\n"
+  },
+  {
+    "id": "real-ph-rf-29-img-20240706-234532",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, small in frame on a dark background; same paper as ph-rf-05. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 235,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Bon a hoe arasanns",
+      "amount": 1228.1,
+      "items": [
+        {
+          "name": "To su 20m",
+          "quantity": null,
+          "amount": 1228.1
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "sot\nrrr —\nBon a hoe arasanns\nie ra\nREPRINTS 1 Soret\nBacon MusHROOM VEL T 2000\nFree ker a\nsun ma\nTAKE our Tote 2500\ncan 0000\nCs 280\nwr\nTo su 20m 1228.10\nhae snes wn\nVATEXEWET Ses 53\nZENG RATED SALES 5%\nToT Snes 09\nTur 30\nTOTAL AMOLIT DUE fired\nGENE TECHNoLaGES Ne\nTF AghalanSadngae Tous ass Cy\nVAT REG TI 208.62.024.565\nAGC OU. 200062028 00026356420\nDa 480d 0TS18Va1d i 73025\n“THS WVOICERECERT Sr Bt WAL fon\nFIVE) YEARS FROM THE DATE OF Pero 0 vse\nCurlonars Nae ki\nER —\nLh ——\nPorm: 1112-126-142112.085.\nMIN 1203013401 SN R9303\nFr\n5\nTHANK YOU 111\n— Chock Sowa.\nRECEIVED ORDERS IN CC\nGOOD CONDITION\nRider's Full\n"
+  },
+  {
+    "id": "real-ph-rf-30-img-20240706-234647",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, small in frame; same paper as ph-rf-10. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 251,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "(GENIE TECHNOLOGIES INC",
+      "amount": 224.11,
+      "items": [
+        {
+          "name": "12% Bub: 224.11 12%:",
+          "quantity": null,
+          "amount": 26.69
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "enol corporTON\nSes 301 SEY CATEWAY\nALL, GUEZON City\nTIN 001.096.565.058 VAT\nSALES INVOICE\n51 068-003-0000038015\nFo any Rone\nHou: ovmen0\nREPRINTS 1 i\nOrder Type: DINE IN iia\nBACON MUSHROOM MELT CMB\nSWTCHTO ED TER | Th\nUpSizE LITRG ICED TEA 330\nFRIES LARGE Eis\n2000\nSublotal\nsu 2411\n2689\nDINE IN Total 28100\ncan 50000\nChangs 800\nVAT\n12% Bub: 224.11 12%:26.69\nVATABLE SALES “Lak\nVAT-EXEMPT SALES 900\nZERO-RATED SALES ae\nTOTAL SALES. ro\nJ2%VAT Cid\nTOTAL AMOUNT DUE pan\n(GENIE TECHNOLOGIES INC\n‘Soulngate Tow Maka! City\nTEARES TIN; 208-662:02%-000\nACCIOA8-208682028-00020368525\n{07/31/15Valld THOT.\n& A aE RECEPT SHALL BE VLD FOR\nRies\nFIVE®) Vilma mou tie one PET 10\na\nPam 1112-126 :\nVIN; 120301340 1 k:\nCo MFoere 3\n"
+  },
+  {
+    "id": "real-ph-rf-31-img-20240706-234913",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, tilted; same paper as ph-rf-07. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 298,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 31.93,
+      "items": [
+        {
+          "name": "CHEESEBURGER DELUXE FOR 2 (2 @149.0",
+          "quantity": null,
+          "amount": 298
+        },
+        {
+          "name": "TAKE OUT Tolal",
+          "quantity": null,
+          "amount": 208
+        },
+        {
+          "name": "ald",
+          "quantity": null,
+          "amount": 500
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "WENPHIL CORPORATION\nWENDAE LAMBURGER RESTALIRANT\nXs 301 SA EV GATEWAY\nWALL, QUEZON CITY\nTING 001.006-45.066 VAT\nSALES INVOICE\n$1 #066-001-0000176722\nHost: Jazzels 07/06/2024\nn 3.01PM\n0071\nOrder Type: TAKE out\nCHEESEBURGER DELUXE FOR 2 (2 @149.0 298.00\nSubtotal 266.07\nTax aes\nTAKE OUT Tolal 208.00\nald 500.00\nChange 202.00\nVAT\n12% Sub: 266.07 12%: 31.93\nVATABLE SALES\nVAT-EXEMPT SALES | gy\nZERO-RATED SALES | ao\nTOTALSALES\n12% VAT: 266.07\nTOTAL i 31.93\nE: 298.00\nGIES INC.\nr Maka City\nALID FOR\n"
+  },
+  {
+    "id": "real-ph-rf-32-img-20240707-002102",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, ink stamp across the header, discount lines, card payment. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-01-31",
+      "vendor": "CHARLES & KEITH",
+      "amount": 25834.3,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "oe IE rR",
+      "amount": 2306.3,
+      "items": [
+        {
+          "name": "TABLE SALES (T)",
+          "quantity": null,
+          "amount": 2306.3
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "i aE Le\noe IE rR\nUATRETING 000-004-34a\nSALES TWWDICE AD. 176760\nmm\naneess; a\nBw SFE\nary rence ICE 7 EXT\n\\ BSORse 1559.0 5 4\nBecEssuRIEs (120044)\nLaem 19.0 5\nesesiass | oo0es\n|r\ncress (12006\nEEA CH\nhCCESaRIES (1700ke)\nErma 499.00 5 was\nscans (120066\nar EE\nfesEsSaRis (120045)\nCheeni Gm oo 00\nPicci\nRT\nFAERIE\nTRIAL OF 12 TEN(S) WITH JO RES\nBROS 2m94.0\nDISCO 1356.0\nTABLE SALES (T) 2306.30\nwiz 2167.9\nVAT Exempt SLES (1) 0.0\nir si 0) fi\nNE : 2\nHE ZED\nbile.\nwer / an\nEo 9 E\n1 01-31-2 , HALLAKL\n"
+  },
+  {
+    "id": "real-ph-rf-33-img-20240707-002809",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, faint print, text logo. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-06-18",
+      "vendor": "7-ELEVEN",
+      "amount": 46,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "VAT Exempted 0",
+      "amount": 6,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "Total (1) 6.00\nte\nTable 41 .(\nVAT Tax 4\nVAT Exempted 0\nold To\nName\nAdress\nIN\noo Vigiow Swen Gorin on\nTeh Hur Toe Columbla Tow\n11a Avenue Manda yong\ni (0-450 1689-000\nBIR Acct #\n1 15-00033U169-000346: 19602\nAccrbate: WH 12020\nPernit # 2p\nerait &:\n"
+  },
+  {
+    "id": "real-ph-rf-34-img-20240707-002918",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, clean, text logo. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-06-26",
+      "vendor": "7-ELEVEN",
+      "amount": 10,
+      "items": null
+    },
+    "actual": {
+      "date": "2020-08-01",
+      "vendor": "HUIPPING SLVER CORPORATION",
+      "amount": 10,
+      "items": [
+        {
+          "name": "Cas",
+          "quantity": null,
+          "amount": 10
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "HUIPPING SLVER CORPORATION\nBond § Ooereterd by: Piping\nven Corporat lon\nVATRLGTIN 4000 390 184-02\n430 Auruca Blvd. , Cuban, Quezon\nCity, Philippines\nTel #: NULL\n06/20/20z4(Ked) 11:34:41\nCHT #2507236 RCPT_CKT#0\n31URE#9323 SN: H200091\n\nMIN #: 20112021575127139\nSTAFF TLBBJOY PEUAFLOR\nNaturesSOWter 350nt 10.00¢\nTotal (1) 10.00\nCas 10.00\nCHANGE 0.00\nVaTable 8.93\nval Tax 1.07\nTer Rated 0.00\nwl _Exenpred va\nS010 108\nA ——\n5\nIh: JE —\nhilipnine Seven Corporation\nith Floor The Columbia Toner\nUrtigas Avenue, Mandaluyong\nCity\n11: 000-390- 169-000\nSIR Acer i\nV16-000390\\9-00034b 19602\nccrbate: 08/01/2020\nrernit 4:\nFPUIZ020 116-02 14662 00000\nHAPPY 1 ELEVEN DAY\niel up to S0fercent off on ver\n400 tems as we celebrate the\nEe ER EE SE fe en\n"
+  },
+  {
+    "id": "real-ph-rf-35-img-20240707-081542",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, McDonald's, slight crumple, order-number banner above the name. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-05",
+      "vendor": "MCROMESON FOOD CORP.",
+      "amount": 124,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-07-05",
+      "vendor": "MCROMESON FOOD CORP.",
+      "amount": 124.8,
+      "items": [
+        {
+          "name": "MA TNPSFryFit 124.80",
+          "quantity": 1,
+          "amount": 124
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "4& a” TT RT repr YRC\nYour 8h is\nMCROMESON FOOD CORP.\nMCDONALD'S KROMA TOWER\nUnit 1-3, G/F Krona Tower,\nDeia Rosa St., Legaspi Uill..\nSan Lorenzo, City OF Makati,\nNCR, Fourth District,\ni UAT REG TIN 010310166-000.\nFor online delivery,\n| visit ncdelivery con.ph\nTell us about your |\n: McDonald's experience\nuyv.ncdolistens. con |\nSurvey Code: 0779\nuriteusdoh.ned. con\n+637 3883-6236\nInvoice § 00137034\nHardvare Serial # 190033290\nMIN # 19081309213750603\nCrev id 153 Sernana 1\nDate:07/05/2024 12:12:33\nary ITes PRICE TOTAL\n1 MA TNPSFryFit 124.80 124.00\nta hii\nCash Tenders 20.\nChange a\n1 1 110.\nJaistie Sales 19-79\nUAT Exenpt Sales 0.00\nUAT Exemption 0.00\nZerg Rated Sales 0.00\nTell us about your visit. Scan the OR Code and share\nyour experience. Thank you\nEERE\n¥ a:\nhits os\n¥ Ear\n"
+  },
+  {
+    "id": "real-ph-rf-36-img-20240707-081701",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, McDonald's, heavily crumpled, faint lower half; same paper as ph-rf-18. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-05-28",
+      "vendor": "GOLDEN ARCHES DEVELOPMENT CORPORATION",
+      "amount": 89,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "OLDEN ARCHES DEUSLOPHENT CORPORATION",
+      "amount": 100.09,
+      "items": [
+        {
+          "name": "+-tTisey AlakKin 83.00",
+          "quantity": null,
+          "amount": 89
+        },
+        {
+          "name": "Take-Out Tota?",
+          "quantity": null,
+          "amount": 89
+        },
+        {
+          "name": "ash Tendersd",
+          "quantity": null,
+          "amount": 100.09
+        },
+        {
+          "name": "haige",
+          "quantity": null,
+          "amount": 11
+        },
+        {
+          "name": ":ule Sales",
+          "quantity": null,
+          "amount": 2.46
+        },
+        {
+          "name": "LRT ¥",
+          "quantity": null,
+          "amount": 9.54
+        },
+        {
+          "name": "AI Exenpr £21",
+          "quantity": null,
+          "amount": 0.2
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "|\n4\nYour Heb” is\nOLDEN ARCHES DEUSLOPHENT CORPORATION\nHOOONALD 'S EASTLAND WEIGHTS\nCUSED BRANCH\nKareos Highuay Coseo Bagong\n#ayen City of Antipolo Rizal\nURT REG TIN 000 121 742 £35\nFor online delivery,\nvigit acdelivery.con.ph\nTell us about your\nHcDonald's experience\nwy. nedolisteas.con\nSurvey Code: (744\n*\\ uriteys@ph.ncd. con\n+632 8888-po30\nwh 60130958\nduare Serial 4 18EI0384\nPTH Wn 1820517455814360\n1 id 84\ndle: (is i FATE FU\n[44 Si \" PRICE 10TAL\n+-tTisey AlakKin 83.00 89.00\n1 Plein Sunfie\nTake-Out Tota? 89.00\nash Tendersd 100.09\nhaige 11.00\n:ule Sales 2.46\nLRT ¥ 9.54\nAI Exenpr £21 0.20\n8'fn\nRat 1 6 a0\nPlease pick we your orde:\ncounter. For\noA CLIN Lye as\n"
+  },
+  {
+    "id": "real-ph-rf-37-img-20240707-081901",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, dot-matrix print, faded header, MM/DD/YY date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-06-16",
+      "vendor": "DUNKIN' DONUTS",
+      "amount": 377,
+      "items": null
+    },
+    "actual": {
+      "date": "2025-06-16",
+      "vendor": "Tam TOUT FoARe SARRARATTON",
+      "amount": 397.9,
+      "items": [
+        {
+          "name": "Ya 00 on",
+          "quantity": null,
+          "amount": 100.8
+        },
+        {
+          "name": "ig 370.80",
+          "quantity": null,
+          "amount": 397.9
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "EE\nINGEN HN\nTam TOUT FoARe SARRARATTON\nSTARLIGHT [GODS CORMORATION\n| rE A Pr ah a\nVAT REC TIN: 200 836 732 G17\nrum “TREE A355, SERVE TREAA Ty er\nLEVEL 1 MOAR PIZZA HOT RODINSGNS Misch\nHE a .\nTHUS CAVITE\nfu. pmnemnng A ETS YAM ng senTan an\nSH: RT0S700167 EIN: 10071011573076073\nRC TR La Er trig\nAI RIN QUICK SCRVICT Pos v4.0 |\nTure mrnuCe An aun aecTeTal neocon\nTHIG SIRVLS AS YOUR OFTICIAL RCCCINT\narevera nefraT wn An nonnnasanschan\nOTTICIAL RCCTIPT HO. 0D DDDODOC004S0300\nLl ae BRaRERREAEaRC TS\nTa NUETCR 52008026000051 70.2\nAML TOLR reno FRO aggeataY DE\nCASHICR: CASHIER 1 71 06/16/25 13:50\nSPREE oo\nTAKE OUT\nPITTS\nTRICUS (V)\nYa 00 on 100.80\nig 370.80 397.90\noT Pav\nTOTAL: ly pened\ncan Fron\nSagi : 300.00 |\nSuAuSE RE 4 an\nLHNITUL PUL dau\nwn oar TYrMS Lt\nNo, OF ITONS 5 1\nyaTobys onat 34 ne\nVATable Sales 356.25\nbh olor 255\nVAT Bagunt 12.75\nar Prost oo a\nVAT Cagapt Sales 5.50\nZero Asted Dales g.38\n"
+  },
+  {
+    "id": "real-ph-rf-38-img-20240707-082642",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, crumpled, bottom cut before the date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "MERCURY DRUG - ARTC FARMERS MARKET ARCADE",
+      "amount": 269.5,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "MERCURY DRUG = ARTE FARMERS MARKET ARCADE",
+      "amount": 269.5,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "Zi Le\nMERCURY DRUG = ARTE FARMERS MARKET ARCADE\n#1 FARMERS MARKET ARCADE ARANETA CENTER\nBURA0 DISTRICT T11 SOCORRO QUE/ON CITY\n; VAT REG THUR 40 00396\n\nTEL NO: (02) 8995-7163\nalin Hd ey\nVIN:21091313194068126 [1.5.30] 29 3\nCR BRE ED\n1\nFERRERO ROCHER 8 269.501\n800050013317\n\nTOTAL 269.50\nAMOUNT TENDERED\nCASH 500.00\nTOTAL PAYHENT 500.00 |\nCHANGE 230.50\nw | item(s)\nORDER #00505 |\n24 SOLD TO\nADDRESS © Row |\nTINND :\nBUSINES STYLE : |\n"
+  },
+  {
+    "id": "real-ph-rf-39-img-20240707-110605",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, clean, struck-through handwritten cash figures. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "Starbucks Coffee",
+      "amount": 445,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-07-06",
+      "vendor": "UPD by: Rustan Cotfee Corp",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "Starbucks Coffee\nUPD by: Rustan Cotfee Corp\nG/F Gateway Mall Araneta Center\nCuban Guezon City\nUAT Reg. TIN: 005-215-077-108\nMIN: 16092916543785448 / S/N: 1-H ea\n07/06/24 6:14 PH\nInv, No. 0000000000001052348\n000000206A000836 745\nKae FOR HERE\nCustomer Name:\nAddress:\nTIN:\nTien Price Oty Amun\nBeal 240 1 240 Uh\n1CED\nFd 5% 205 0h\nGRANDE se pen\nBsa 5\nTotal Pp o0\nposh NGE 3\nER ——\nara tet. Att | hr\nUATABL L 0 a\nEXEMPT 0 0 0\nZERDR\nTHIS SERVES AS YOUR INVOICE\nPOS Provider: Systens Inc.\npyranic elokal Bert irs\nMezzanine Au Salcedo Vill. Makati City\nLeviste A 246-989-906-000\nUAT Re. EE daonae062015060353\naccred. No: Bob ner 29, 2016\nte Issued: Septanbel -00108\nFe No.: FPO92016-122 0096769-001\n"
+  },
+  {
+    "id": "real-ph-rf-40-img-20240707-111613",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, flat and clean; same paper as ph-rf-11. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "MERCURY DRUG - QC ARANETA CENTER GEN. ROMU",
+      "amount": 91,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Received Merchandise in Goo",
+      "amount": 91,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "Co So B\nHERCLRY DRUG ~ OC ARANETA CENTER GEN, ROMU\nAurora Blvd. cor, Genera] hom og\n\nI\" Cuban, “uezon tity\nYAT REG 1IN:000-388-474-00286\nwos! Eo M0: (02) 8911-0616\nNOBILE/VIBER No: (0549) 603-256\nRE\nPE 1 40 [1.5.30] 29\nSYDEX-D 14B 5.001\n480650285000 10 6 3.50\nBIOFLU TAB 7+1F 56.007\n480778869304\nTOTAL 91,00\nAMOUNT TENDERED\nCASH 100.00\nTOTAL PAYMENT 100.90\nCHANGE 9.00\n#11 item(s)\nORDER #00268 |\nspt:\ni ——\nBUSINES STPET\ne——— 1.25\nVATable m 8\nVAT-Exempt Sale (X) oa\nVAT Zero-Rated Sale(Z) oe\nVAT - 12% ie\nAmount Due\nro | Worchandise in Good Condition\nReceived Merchandise in Goo\nSa Mercury Drug Nakasisiguro Ganot\nay Laging Bago:\nMaraming Salamat Po...\n"
+  },
+  {
+    "id": "real-ph-rf-41-img-20240707-111647",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, flat and clean, single item. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "MERCURY DRUG - ARANETA CTR FARMER'S PLAZA",
+      "amount": 41.75,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Received Merchandise in Good Condition",
+      "amount": 41.75,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "MERCURY DRUG - ARANETA CTR FARMER'S PLAZA\nNew Farmers Plaza,\nCubao Quezon City\nVAT REG TIN:000-386-474-00285\nWo TEL NO : {2 8913-2876\nBILE/VIBER NO: (0a) 883-8267 |\nHone TOT) 120 7g |\nPA # 2°ATZA H.5:90] 2 |\nHHT FLURHS 1.5nL 41.757 |\n480650128315\nTOTAL 41.75\n| AMOUNT TENDERED\nCASH 102.00\ni\nTOTAL PAYMENT 102.00\nCHANGE 60.25\n#1 item(s) k\nORDER #00398\nSOLD 10 : cs\nADDRESS © |\nTIN NO ©\nBUSINES STVIE +\nVATable (Tn) 37.28\nVAT-Exempt Sale  (X) 0.00\nVAT Zero-Rated Sale(Z) 0.00\nVAT - 12% 4.47\nAmount Due 41.75\nReceived Merchandise in Good Condition\nSa Mercury Drug Nakasisiguro Gamot\nay Laging Bago!l! /\nMaramina Salamat Po.\n"
+  },
+  {
+    "id": "real-ph-rf-42-img-20240707-112117",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, text logo, faint, date cut at the bottom edge. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "watsons",
+      "amount": 42.5,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "PRED IY FAMILYHEAL TI & BEAUTY COMP",
+      "amount": 0.01,
+      "items": [
+        {
+          "name": "GOYA TAKE 1 2F INGER",
+          "quantity": null,
+          "amount": 20.5
+        },
+        {
+          "name": "SNICKERS CLASSIC BAR",
+          "quantity": null,
+          "amount": 22
+        }
+      ]
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "~ watsons |\n[ ns |\nPRED IY FAMILYHEAL TI & BEAUTY COMP\n| TEVEL ALE 201 C GATEWAY MA \\\nGCORRU NCR, SECOND DISTRICT\nUUEZON CITY (1zu0219)\nGAT REG TINH 230-393 680 (00\n[RIAL #: BuGsBTEIB2\nMIN 15040314115929565\nJuul | 7043020\nGOYA TAKE 1 2F INGER 20.50 V\n69025310\nSNICKERS CLASSIC BAR $22.00 V\n20925002 12566\nPAPER BAG BRON) KRAT £0.01 V\nSHOPPING BAG “pi. 01\nSUBTOTAL 42.50\n0p Pap.\na LU\nTotal rumbet of toms sold Kl\nYou SAVED\nTOTAL DISCOUNTS 0.01\nTAN CODE AMOUNT VAL AM\nVAI SALE 47.95 4.5%\ndigo 4B IR\n{ho RATED SALE )\nfon 41.95 455\ni\nnt AME DIMAS\nSalsesiales No (sedans\n| 6 feset Geunver : .o00000 i\n"
+  },
+  {
+    "id": "real-ph-rf-43-img-20240707-123525",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, mobile-load purchase, faint. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "PUREGOLD PRICE CLUB, INC.",
+      "amount": 150,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "PUREGOLD PRICE CLUB, INC)",
+      "amount": 150,
+      "items": [
+        {
+          "name": "AUTOLOAD",
+          "quantity": null,
+          "amount": 150
+        },
+        {
+          "name": "T0TAL",
+          "quantity": null,
+          "amount": 150
+        },
+        {
+          "name": "voz 133.53",
+          "quantity": null,
+          "amount": 16.07
+        }
+      ]
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "PUREGOLD PRICE CLUB, INC)\nGEN, ORDONEZ §T., CONCEPCION Ty\nWARIKINA CITY\nTel. No.: $42-7764/942-1596\nPOS Serial N 41-ARUUF\nMIN 0 15024311130788322\nTIN 201-217-095-130\nBagger\nAUTOLOAD 150.00 V\nNobile No: 09459789510\nWY Provider Globe Telecon\nSubs Type PERSONAL\nCard Nos\nSUBTOTAL 150.00\nGross Amount 150.00 |\nT0TAL 150.00\ncasH 150.00\net\nTax Code-RATE ---=-faaunt. -- TAK ant\nvoz 133.53 16.07\n_\n-\n"
+  },
+  {
+    "id": "real-ph-rf-44-img-20240707-123635",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, 'SECOND RECEIPT', points redeemed, small in frame. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "PUREGOLD PRICE CLUB, INC.",
+      "amount": 3838.72,
+      "items": null
+    },
+    "actual": {
+      "date": "2018-12-18",
+      "vendor": "Turrent Tan ptanill be credited ton",
+      "amount": 7.08,
+      "items": [
+        {
+          "name": "EC 182",
+          "quantity": null,
+          "amount": 1
+        },
+        {
+          "name": "Totals 335084",
+          "quantity": null,
+          "amount": 7.08
+        },
+        {
+          "name": "Points Balances",
+          "quantity": null,
+          "amount": 0.65
+        }
+      ]
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "STONER 0; 110\n\nTai Cada-RATE -—--fuount ~= TH aut\n\nEC 182. 1.00\nTotals 335084 7.08\n\nCa SUP AANE/STG:\n\n¥ HENBER DETAILS 8\n\nJanes JULIENNE T GARCT\n\nCard fla: 110000000Z080214\n\nPoints Expiry; 2018-12-18\n\nPoints Balances 0.65\n\n€ Vouchers: 0\n\nPoints Redeeneds 67\n\nTurrent Tan ptanill be credited ton\n\nCasters Thovelyn h. Solis\n\nSalen TnvoicaDt290698\n\nHamer\n\nAddress:\n\nbac a\n"
+  },
+  {
+    "id": "real-ph-rf-46-img-20240707-124504",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, Robinsons-run supermarket, card payment, MM/DD date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-01-25",
+      "vendor": "THE MARKETPLACE",
+      "amount": 505,
+      "items": null
+    },
+    "actual": {
+      "date": "2005-12-30",
+      "vendor": "HON § SUPERMARKET CORPORATLL",
+      "amount": 505,
+      "items": [
+        {
+          "name": "ALONPAS PAIN",
+          "quantity": null,
+          "amount": 6
+        },
+        {
+          "name": "atable",
+          "quantity": null,
+          "amount": 450.99
+        },
+        {
+          "name": "AT",
+          "quantity": null,
+          "amount": 54.11
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": null,
+    "rawText": "[ MARKETPLACE\nHON § SUPERMARKET CORPORATLL\nAY REG, LI) 000-405-340-569\nTHE MARKETPLACE\nWER. G/F ROCKWELL DRIVE COR ESTREL\n! MAKATI CITY\nTiN:\nfess ST\nT0004 SF ENON 406 0\nALONPAS PAIN 6.00\nFEI 2\nALONPAS PATCH 40 $7.00 ¥\n111833510650103 :\nTOTA 505\ngard Tsster lang\nEar Hombar: GODQOHEF+£4GB4\nNAIA\n{ folder Mane:\n\nAoproval Code: 004792\nETAT EERE EER ER FRET EY\natable 450.99\nVAT Exenpt Sales 0.00\nZero Rated Sales 0.00\nAT 54.11\nTotal 505.00\nLaF FREER\nHaskirusk Go Rayards  MRHIRA\n\nCard Number £110001022549610\nCustomer Name: MARGIE GRECTA\nCard Expiry: 12/30/05\nAvailable Balance i 208 96\nEarned Points £02\nBrant Balance. i 210.98\nRI A rE a\nTota) tens: 5 i\nCashier: 760 RICHEL TIAPE \\\nSET No: 0721 Oate:01/25/2024 Tae 215:08:1\nTerminal No: 0008 Trans 10: 2480\n"
+  },
+  {
+    "id": "real-ph-rf-47-img-20240707-124604",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, logo header, MM/DD date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-02-01",
+      "vendor": "Robinsons Supermarket",
+      "amount": 62,
+      "items": null
+    },
+    "actual": {
+      "date": "2012-08-25",
+      "vendor": "robs Supermarket Corporatio",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "#51 Robinsons\n. Supermarke\nUA Superma\nji ME! ITER iQ\nTOTAL ; PB: OC\n0 How\nchange 2,00\nUAT Breen Sales fob\nALE :\nIo) bog\nta shi\nbE a\nae! TARE SET\nSere\n| Eerned Points. 5 |\nrent Bala: wh\nsrs SEE Els Etre\nBr No: DOI Date:08/01(2024 Tine;13:57\ninal Wo: L012 ans 10: 381\nHei tisiotils\nrobs Supermarket Corporatio\n10° EoRo aes 1 pines Bagman 0\nACCOTN ND,» 116-GOU405340-000340-57230\nTssued 08/25/12, Effective 08/01/20\nTIN; 000-405- 340-000\nSN: TXMB0106.\nPN: FPO32023-115-0373937-00020\nMIN: 2303081 1524768612\nSPH; $°(32023-116-0116223-00020\n"
+  },
+  {
+    "id": "real-ph-rf-48-img-20240707-124658",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, GCash top-up acknowledgement receipt, high contrast. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-01-30",
+      "vendor": "Robinsons Supermarket",
+      "amount": 3000,
+      "items": null
+    },
+    "actual": {
+      "date": "2024-01-30",
+      "vendor": "fobinson's Supermarket Corporation",
+      "amount": 73000,
+      "items": [
+        {
+          "name": "oath",
+          "quantity": null,
+          "amount": 73000
+        },
+        {
+          "name": "dmount;",
+          "quantity": null,
+          "amount": 3000
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "Kobinsons\n3 SUE Rel\nROBINGIN'S § [ ORERATION\nAT REG TIN Ou 405-240-620\nROBINSONS GALLERIA\nFh CORNER ORTIGAS AVENUE\nQUEZON CITY\nGCASH TCP up 3.00000\nQOUOCONGEAT2\nTOTAL P3000 00\noath 73,000.00\nReference No: 2810108043455 20138708\nBRN: 2024013611123 700010 101 260232 170059\nApproval Code: 885108\ndmount; 3000.00\nAhh Fx Hi kb cb +\nVarahle 0.00\nVAT Exe Sales 0.90\nZero Rated Sales 0.0\nial 0.00\nTolal 0.00\nRF EERE ERE ERE ERR LET\nCollections in Trust F00,00\nPATRRR FESR EERE HERE ECER EE\nfatal Items: 1\nCashier: had sessabel Risbao\ntr No: 0101 Bate:01/30/2024 Tae: 16:12:57\nTerminal No: C020 Trang 1k: OOGC\nThis serves as your ackoowledgenent recei\nBR No: 0000001439\nTHIS KEGEIPT 14 NOT VALID FOR\nCLAIM OF INPUT TAX.\nfobinson's Supermarket Corporation\n10 Rodriguez Jr. Ave, Bagumbayan U\nACCT ND, : 116 -000405340-000340- 57230\nIssued 08/29/12, Effective 08/01/20\nTER: 000- 405-340-000\nGH: TXMBO16S\nPN: FRODZ023- 116 0373957 00020\nMIN: 230308133930660 74\nGPM SPUY2023-116-0116231-00020\n"
+  },
+  {
+    "id": "real-ph-rf-49-img-20240707-124737",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, small in frame on a dark background. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-03",
+      "vendor": "Robinsons Supermarket",
+      "amount": 11,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "io anryen. mm you Salts. uate",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": null,
+    "rawText": "Robinson:\n\n§ Sipermarket\nVora 11-00\nAl in\nTah fit\nio anryen. mm you Salts. uate\nfirme\n\nJit agora\n"
+  },
+  {
+    "id": "real-ph-rf-50-img-20240707-124832",
+    "kind": "real",
+    "conditions": "Phone photo of a thermal receipt, weighed items, card payment, small in frame. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-02-02",
+      "vendor": "Robinsons Supermarket",
+      "amount": 511.34,
+      "items": null
+    },
+    "actual": {
+      "date": null,
+      "vendor": "BINGON'S SUPERMARKET CORPCRATION",
+      "amount": 15.2,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": null,
+    "rawText": "79) Robinsons\nU fa Supermareer\nBINGON'S SUPERMARKET CORPCRATION\nUREHE ST mg s-aar- 20\nShale GALTERLL\n5A SURNGR DRLIGES AVE\nQUEL 17\noe\nRoose\nToto] 1 3\nart MeL: WARE Gic\nstone! 16% Yayopace\n|r Ka EN\nTotal HG fae Viens\nmasher: B13 KORO TAA Toe: 15.20:\nrat at OL Fane 191 1551\ni 48 your Sales Tout\n1 No: 0oR0IEEOR\nRE uo J Naterueton take\nad Restaurer\nabincan's Supermerket Corpard\nfsa 01s, SHEE y\n"
   }
 ]

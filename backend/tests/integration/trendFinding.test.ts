@@ -21,9 +21,14 @@ async function add(amount: number, day: number) {
   });
 }
 
+/** One PHP 2,000 purchase in each of the seven weeks before this one, from `firstDay` back. */
+async function weeklyBaseline(firstDay: number) {
+  for (let week = 0; week < 7; week++) await add(2_000, firstDay - 7 * week);
+}
+
 describe("trend findings", () => {
   it("requires both percentage and peso materiality", async () => {
-    await add(2_000, -10); await add(6_000, -2);
+    await weeklyBaseline(-10); await add(6_000, -2);
     const findings = await refreshTrendFindings(ctx.user.id, ctx.profile.id, utcDay(), enabled);
     expect(findings.some((finding) => finding.method === "comparable-period-trend")).toBe(true);
   });
@@ -34,25 +39,32 @@ describe("trend findings", () => {
   });
 
   it("keeps one stable open finding when the same trend continues the next day", async () => {
-    await add(2_000, -9);
+    await weeklyBaseline(-9);
     await add(6_000, -2);
 
     await refreshTrendFindings(ctx.user.id, ctx.profile.id, utcDay(), enabled);
     await refreshTrendFindings(ctx.user.id, ctx.profile.id, utcDay(1), enabled);
 
-    const open = await prisma.anomalyFinding.findMany({
+    const weekly = await prisma.anomalyFinding.findMany({
       where: {
         businessProfileId: ctx.profile.id,
         type: AnomalyFindingType.TREND_CHANGE,
         status: AnomalyFindingStatus.OPEN,
+        fingerprint: { endsWith: ":7" },
       },
     });
-    expect(open).toHaveLength(1);
-    expect(open[0]!.fingerprint).toBe(`trend-v1:${ctx.categories.Inventory}:7`);
+    expect(weekly).toHaveLength(1);
+    expect(weekly[0]!.fingerprint).toBe(`trend-v1:${ctx.categories.Inventory}:7`);
+  });
+
+  it("does not report a weekly swing for a bill paid once a month", async () => {
+    await add(15_000, -9);
+    await add(15_000, -39);
+    expect(await refreshTrendFindings(ctx.user.id, ctx.profile.id, utcDay(), enabled)).toEqual([]);
   });
 
   it("supersedes a previously open trend when the current records no longer produce it", async () => {
-    await add(2_000, -9);
+    await weeklyBaseline(-9);
     await add(6_000, -2);
     const [created] = await refreshTrendFindings(ctx.user.id, ctx.profile.id, utcDay(), enabled);
     expect(created).toBeDefined();

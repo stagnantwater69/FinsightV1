@@ -384,7 +384,6 @@ describe("file and cell validation", () => {
     ["ZIP signature", Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x08, 0x00])],
     ["PNG signature", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
     ["forbidden control byte", Buffer.from("Date,Description,Amount\n2026-09-29,Rice\u0000,100")],
-    ["invalid UTF-8", Buffer.from([0x44, 0x61, 0x74, 0x65, 0x0a, 0xc3, 0x28])],
   ])("rejects a %s payload wearing a .csv name before Storage or database writes", async (label, buffer) => {
     await expect(confirmImport(ctx.user.id, confirmArgs(buffer, {
       idempotencyKey: `binary-${label}`,
@@ -395,6 +394,20 @@ describe("file and cell validation", () => {
     expect(uploadCsvFile).not.toHaveBeenCalled();
     expect(await prisma.cSVImportBatch.count()).toBe(0);
     expect(await prisma.expenseRecord.count()).toBe(0);
+  });
+
+  it("imports an Excel Windows-1252 export with its accented letters intact", async () => {
+    // "Niño" and "Peñafrancia" as Excel's default "CSV (Comma delimited)" writes them:
+    // ñ is the single byte 0xF1, which is not valid UTF-8.
+    const buffer = Buffer.from(
+      ["Date,Description,Amount,Category", `${utcDayString(0)},Sto. Ni\xf1o candles,150,Inventory`, `${utcDayString(-1)},Pe\xf1afrancia rice,1200,Inventory`].join("\n"),
+      "latin1",
+    );
+    uploadedBuffer = buffer;
+    const result = await confirmImport(ctx.user.id, confirmArgs(buffer, { idempotencyKey: "cp1252-1" }));
+    expect(result.imported).toBe(2);
+    const descriptions = (await prisma.expenseRecord.findMany({ select: { description: true } })).map((row) => row.description).sort();
+    expect(descriptions).toEqual(["Peñafrancia rice", "Sto. Niño candles"]);
   });
 
   it("imports a semicolon-delimited export instead of reading it as one column", async () => {

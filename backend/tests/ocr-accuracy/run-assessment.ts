@@ -34,6 +34,8 @@ interface Entry {
   known_ambiguous?: boolean;
   known_layout_risk?: boolean;
   vendor_note?: string;
+  /** Capture date (YYYY-MM-DD) from the photo's filename; passed as the upload date production uses to settle ambiguous dates. */
+  uploaded?: string | null;
   /**
    * Set by ingest-images.ts on an entry whose expected values were DRAFTED
    * FROM THE PIPELINE'S OWN OUTPUT rather than read off the paper by a person.
@@ -108,7 +110,7 @@ function tally(results: Result[], field: "date" | "vendor" | "amount") {
         pageSegMode: process.env.OCR_PSM,
         dpi: process.env.OCR_DPI,
       });
-      const parsed = parseReceiptFields(rawText);
+      const parsed = parseReceiptFields(rawText, { referenceDate: entry.uploaded ?? null });
       actual = {
         date: parsed.date,
         vendor: parsed.vendor,
@@ -139,8 +141,9 @@ function tally(results: Result[], field: "date" | "vendor" | "amount") {
   const v = tally(results, "vendor");
   const a = tally(results, "amount");
 
+  const PH_RF = "real-ph-rf-";
   const byKind = (kind: string) => {
-    const subset = results.filter((r) => r.kind === kind);
+    const subset = results.filter((r) => kind === "real-ph" ? r.id.startsWith(PH_RF) : kind === "real" ? r.kind === kind && !r.id.startsWith(PH_RF) : r.kind === kind);
     return { kind, n: subset.length, ...{
       date: tally(subset, "date"),
       vendor: tally(subset, "vendor"),
@@ -239,11 +242,15 @@ function tally(results: Result[], field: "date" | "vendor" | "amount") {
   lines.push("");
   lines.push("| Category | Images | Date | Vendor | Amount |");
   lines.push("|---|---|---|---|---|");
-  for (const kind of ["real", "synthetic", "degraded"]) {
+  const KIND_LABEL: Record<string, string> = {
+    real: "real (earlier public-dataset photos)",
+    "real-ph": "real-ph (Philippine phone photos, single AI review, 800 px)",
+  };
+  for (const kind of ["real", "real-ph", "synthetic", "degraded"]) {
     const k = byKind(kind);
     if (k.n === 0) continue;
     lines.push(
-      `| ${kind} | ${k.n} | ${pct(k.date.correct, k.date.scored)} | ${pct(k.vendor.correct, k.vendor.scored)} | ${pct(k.amount.correct, k.amount.scored)} |`
+      `| ${KIND_LABEL[kind] ?? kind} | ${k.n} | ${pct(k.date.correct, k.date.scored)} | ${pct(k.vendor.correct, k.vendor.scored)} | ${pct(k.amount.correct, k.amount.scored)} |`
     );
   }
   lines.push("");

@@ -25,4 +25,22 @@ describe("anomaly evaluation metrics", () => {
     expect(metrics.findingsPer100Transactions).toBe(100);
     expect(metrics.detectors).toContainEqual(expect.objectContaining({ method: "trend-test", confirmationRate: 1 }));
   });
+
+  it("counts a shadow record two rules also flagged as one overlap", async () => {
+    const stock = { businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!, date: utcDayString(), amount: 100, description: "Stock" };
+    const both = await expenses.createExpenseRecord(ctx.user.id, stock);
+    const mlOnly = await expenses.createExpenseRecord(ctx.user.id, { ...stock, description: "Other stock" });
+    const finding = { businessProfileId: ctx.profile.id, severity: AnomalyFindingSeverity.MEDIUM, title: "Finding", reasons: ["Reason"], detectorVersion: "v1" };
+    for (const expenseRecordId of [both.id, mlOnly.id]) {
+      await saveFinding({
+        ...finding, fingerprint: `shadow:${expenseRecordId}`, expenseRecordId, type: AnomalyFindingType.ML_OUTLIER,
+        method: "isolation-forest", status: AnomalyFindingStatus.SHADOW,
+      });
+    }
+    await saveFinding({ ...finding, fingerprint: "rule-a", expenseRecordId: both.id, type: AnomalyFindingType.AMOUNT_OUTLIER, method: "z-score-iqr" });
+    await saveFinding({ ...finding, fingerprint: "rule-b", expenseRecordId: both.id, type: AnomalyFindingType.BEHAVIORAL_NOVELTY, method: "behavioral-novelty" });
+
+    const metrics = await anomalyEvaluation(ctx.user.id, ctx.profile.id);
+    expect(metrics.shadow).toEqual({ mlShadowFindings: 2, overlappingWithRules: 1, mlOnly: 1 });
+  });
 });

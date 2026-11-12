@@ -93,6 +93,43 @@ to any one country's receipt format), not as a claim of Philippine-market repres
 The corpus's three original real photos (`real-01`..`real-03`) remain the only genuinely
 Philippine real photos in the set; this addition does not change that.
 
+## Philippine phone photos (`real-ph-rf-*`, added 2026-11-12)
+
+**Source.** A Roboflow public export (`_annotations.coco.json`, created 2024-11-09) of 278
+Philippine receipt photos, most from Quezon City and Makati shops: Wendy's, Jollibee, McDonald's, Mercury Drug, Watsons,
+7-Eleven, Puregold, Robinsons, Starbucks and others. The export's license block says
+**CC BY 4.0**. It does **not** name the creator or the Roboflow project, so CC BY attribution
+cannot be completed from what we have. The entries are therefore labelled
+`EXISTING_REAL_UNKNOWN_CONSENT` (`sourceAttributionRecorded: false`), not
+`PUBLIC_LICENSED_REAL_SINGLE_REVIEW`. Record the creator and project URL before any of these
+images leaves this machine. The images stay in the git-ignored `images/` folder and are not
+committed.
+
+**Sampling.** Every fifth file in name order (50 images), with no selection by quality. One
+(`ph-rf-45`) was dropped because the total could not be read at all, which leaves 49. Several
+pieces of paper appear twice, once as a CamScanner scan and once as a phone photo (for
+example `ph-rf-05`/`ph-rf-29`). The `conditions` field records each pair.
+
+**Ground truth.** One AI reviewer transcribed vendor, date and total once, from the 800 px
+images. The source annotation has bounding boxes only, so there was nothing to cross-check
+against. No person has checked these values. Items are not scored (`items: null`). Fields
+that cannot be read in the frame are `null`, with a `note`.
+
+- **Vendor:** the first business-name line on the paper. On Wendy's receipts that is
+  `WENPHIL CORPORATION`, with `WENDY'S HAMBURGER RESTAURANT` on the next line. The parser
+  picks the trade name, which is scored wrong here even though an owner would accept it. The
+  Panda Express receipts (`JBPX FOODS INC.`) lose the same way. That accounts for 8 of the
+  44 vendor misses; the rest are OCR noise or a wrong line.
+- **`uploaded`:** the capture date from the photo's filename (`IMG_20240706_…` gives
+  2024-07-06). `run-assessment.ts` passes it as `referenceDate`, as production does with the
+  upload day, so ambiguous MM/DD dates resolve the way they would in the app. Entries without
+  it behave as before.
+
+**Use.** The 49 count as evidence about local OCR on downscaled Philippine phone photos. They
+are not a representative-receipt sample: the readiness gate
+(`receipt-scanner-evaluation/readiness-cohort.test.ts`) excludes all of them as unknown
+consent.
+
 ## Housekeeping
 
 The full upstream archive (~2,780 images, ~930MB) was downloaded to a scratch directory

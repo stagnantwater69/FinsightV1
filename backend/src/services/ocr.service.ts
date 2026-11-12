@@ -33,7 +33,9 @@ export type { PageSeam, Reconciliation, ReconciliationReason } from "../lib/rece
 // "T" VAT flag, so long supermarket receipts in those layouts return items.
 // v6 settles a date whose day and month could be either way round against the
 // scan's upload date instead of always reading it day-first (lib/receiptDates).
-export const PARSER_VERSION = "ocr-parser-v6";
+// v7 replaces the read total when the VAT breakdown and tender minus change
+// agree on a different figure (corroboratedTotal).
+export const PARSER_VERSION = "ocr-parser-v7";
 /**
  * v2: the downscale cap follows the SHORT edge on an elongated LANDSCAPE image
  * (a long receipt lying along the frame's long axis) instead of always the
@@ -720,6 +722,48 @@ function parseAmount(text: string): number | null {
  * the most expensive purchase.
  */
 function readReceiptTotal(text: string): { value: number; labelled: boolean } | null {
+  const read = readPrintedTotal(text);
+  const corroborated = corroboratedTotal(text);
+  return corroborated !== null && corroborated !== read?.value ? { value: corroborated, labelled: true } : read;
+}
+
+const RECEIPT_MONEY = /(?<![\d.,])(\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2})(?![\d.,])/g;
+
+function lastMoneyOn(lines: string[], label: RegExp, exclude?: RegExp): number | null {
+  for (const line of lines) {
+    if (!label.test(line) || exclude?.test(line)) continue;
+    const amounts = [...line.matchAll(RECEIPT_MONEY)];
+    if (amounts.length > 0) return Number(amounts.at(-1)![1]!.replace(/,/g, ""));
+  }
+  return null;
+}
+
+/**
+ * The total two independent printed sums agree on, or null.
+ *
+ * A BIR receipt prints the total three times over: the TOTAL line, the VAT
+ * breakdown (VATable + VAT + exempt + zero-rated) and the tender (cash minus
+ * change). Tesseract drops a leading digit off a faint TOTAL line ("TOTAL
+ * 10.25" for 70.25) far more often than it misreads two other lines into the
+ * same wrong figure, so when both sums agree they outrank the TOTAL line.
+ * One sum alone is not enough: a misread CASH line produced a wrong 398
+ * against a correct 298 on a real Wendy's receipt.
+ */
+function corroboratedTotal(text: string): number | null {
+  const lines = text.split("\n");
+  const vatable = lastMoneyOn(lines, /\bvat\s*-?\s*able\b/i);
+  const vat = lastMoneyOn(lines, /\b(12\s*%\s*vat|vat\s*amount|vat\s*-?\s*12\s*%)/i, /vat\s*-?\s*able|exempt|zero|\breg\b|\btin\b/i);
+  const paid = lastMoneyOn(lines, /\b(cash|tendered|total\s+payment|amount\s+paid)\b/i, /\bchange\b/i);
+  const change = lastMoneyOn(lines, /\bchange\b/i);
+  if (vatable === null || vat === null || paid === null || change === null || paid <= change) return null;
+  const centavos = (amount: number) => Math.round(amount * 100);
+  const exempt = lastMoneyOn(lines, /\bvat\s*-?\s*exempt/i) ?? 0;
+  const zeroRated = lastMoneyOn(lines, /\bzero\s*-?\s*rated/i) ?? 0;
+  const breakdown = centavos(vatable) + centavos(vat) + centavos(exempt) + centavos(zeroRated);
+  return breakdown > 0 && breakdown === centavos(paid) - centavos(change) ? breakdown / 100 : null;
+}
+
+function readPrintedTotal(text: string): { value: number; labelled: boolean } | null {
   const lines = text.split("\n");
   // Require two decimal digits in both locale formats, including OCR-inserted spaces.
   // The lookarounds prevent partial matches inside dates and longer decimals.

@@ -90,10 +90,38 @@ services:
       WORKER_LANES: csv,analysis,maintenance
       DATABASE_POOL_SIZE: "4"
       RECEIPT_WORKER_HEALTH_DIR: /run/finsight/jobs-worker-health
+      # Called only when ANOMALY_ISOLATION_FOREST_ENABLED="true" in
+      # backend/.env; with the flag off (the default) nothing reaches it.
+      ML_WORKER_URL: http://ml:8321
     tmpfs:
       - /run/finsight/jobs-worker-health:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000
     restart: unless-stopped
     stop_grace_period: 35s
+
+  ml:
+    # Isolation Forest scoring sidecar for the shadow detector (ml/README.md).
+    # `expose`, not `ports`: it has no authentication, so only the compose
+    # network may reach it. It receives numbers and opaque row ids only.
+    build:
+      context: ./ml
+    expose:
+      - "8321"
+    # The README's comfortable cap. A fit is at most 5,000 x 32 float64.
+    mem_limit: 512m
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8321/health', timeout=4).status == 200 else 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # The server fits a tiny forest once at boot before it listens.
+      start_period: 20s
 
   nginx:
     image: nginx:1.30-alpine

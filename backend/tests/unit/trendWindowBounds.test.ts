@@ -70,10 +70,11 @@ describe("trend detector window load", () => {
   });
 
   it("still reports a category whose spending jumped, with the same figures", async () => {
-    // 7-day window: PHP 4,000 this week against PHP 1,000 the week before.
+    // 7-day window: PHP 4,000 this week against PHP 1,000 the week before,
+    // in a category bought every week.
     expenseFindMany.mockResolvedValue([
       { categoryId: 1, amount: 4_000, date: daysAgo(2) },
-      { categoryId: 1, amount: 1_000, date: daysAgo(9) },
+      ...[9, 16, 23, 30, 37, 44, 51].map((day) => ({ categoryId: 1, amount: 1_000, date: daysAgo(day) })),
     ]);
 
     const findings = await refreshTrendFindings(1, 1, TODAY, CONFIG);
@@ -96,5 +97,17 @@ describe("trend detector window load", () => {
     const findings = await refreshTrendFindings(1, 1, TODAY, CONFIG);
 
     expect(findings.every((f) => (f.metadata as { categoryId: number }).categoryId === 1)).toBe(true);
+  });
+
+  it("does not compare weeks for a bill paid once a month", async () => {
+    // Rent last week and the month before: the old 7-day window read this
+    // week as "decreased 100%". The 30-day windows each hold one payment.
+    categoryFindMany.mockResolvedValue([{ id: 4, name: "Rent" }]);
+    expenseFindMany.mockResolvedValue([
+      { categoryId: 4, amount: 15_000, date: daysAgo(9) },
+      { categoryId: 4, amount: 15_000, date: daysAgo(39) },
+    ]);
+
+    expect(await refreshTrendFindings(1, 1, TODAY, CONFIG)).toEqual([]);
   });
 });

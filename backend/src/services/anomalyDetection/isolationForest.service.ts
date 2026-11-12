@@ -42,7 +42,7 @@ const HISTORY_DAYS = 365;
 const MAX_RECORDS = 2_000;
 
 /**
- * Alert budget (ADR-2): at most 2 shadow findings per 100 scored records,
+ * Alert budget (ADR-2): at most 2 shadow findings per 100 eligible records,
  * capped at 10 per pass, and only for records the forest itself put on the
  * anomalous side (decisionValue < 0) in the top percentile band.
  */
@@ -82,8 +82,15 @@ export async function refreshIsolationForestFindings(
   if (!response) return null; // sidecar unavailable — fail open, no opinion
 
   const byId = new Map(matrix.map((entry) => [entry.id, entry.features]));
-  const budget = Math.min(Math.max(Math.floor((records.length / 100) * BUDGET_PER_100), 1), MAX_FINDINGS_PER_PASS);
+  // WARM-UP. Each row is featured against only the rows before it, so the
+  // oldest rows carry "no history" sentinels (new vendor, rare category,
+  // nothing similar) and look maximally unusual for that reason alone. The
+  // forest still fits on every row; findings come only from the newer half,
+  // which is also the half ml/experiment/run_experiment.py evaluates.
+  const eligibleIds = new Set(matrix.slice(Math.floor(matrix.length / 2)).map((entry) => entry.id));
+  const budget = Math.min(Math.max(Math.floor((eligibleIds.size / 100) * BUDGET_PER_100), 1), MAX_FINDINGS_PER_PASS);
   const selected = response.scores
+    .filter((score) => eligibleIds.has(score.id))
     .filter((score) => score.decisionValue < 0 && score.normalizedScore >= MIN_NORMALIZED_SCORE)
     .sort((a, b) => b.normalizedScore - a.normalizedScore)
     .slice(0, budget);

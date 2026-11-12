@@ -1128,6 +1128,32 @@ export function deviationFraction(amount: number, stats: CategoryStats): number 
   return Math.abs(amount - stats.mean) / Math.abs(stats.mean);
 }
 
+/** Modified z-score cutoff (Iglewicz & Hoaglin's scale) for a HIGH amount finding. */
+export const HIGH_SEVERITY_MODIFIED_Z = 5;
+
+/**
+ * Whether an amount `isUnusualExpense` already reported is HIGH, the severity
+ * that notifies the owner.
+ *
+ * Measured against the median and MAD, not the mean and standard deviation:
+ * expense amounts are right-skewed, and "|z| >= 3 or twice the mean" called
+ * ordinary large purchases in a wide category HIGH. On the skewed synthetic
+ * corpus in ml/experiment/amount_rules.py this cut false HIGH findings from
+ * 5.3 to 1.9 per 100 normal records and kept 35 of 39 tenfold errors HIGH.
+ * Flagging itself is unchanged, so the Insights list and this agree.
+ *
+ * HIGH needs both: at least double the median, and a modified z-score of 5.
+ * A category with no spread (MAD 0) has only the first test to go on.
+ */
+export function isHighSeverityAmount(amount: number, baseline: number[]): boolean {
+  const sorted = [...baseline].sort((a, b) => a - b);
+  const median = percentile(sorted, 0.5);
+  if (median === 0) return false;
+  const mad = percentile(sorted.map((value) => Math.abs(value - median)).sort((a, b) => a - b), 0.5);
+  if (Math.abs(amount - median) / Math.abs(median) < 1) return false;
+  return mad === 0 || Math.abs((0.6745 * (amount - median)) / mad) >= HIGH_SEVERITY_MODIFIED_Z;
+}
+
 // ============================================================
 // The second detector: interquartile range
 // ============================================================

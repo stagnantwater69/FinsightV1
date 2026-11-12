@@ -16,6 +16,15 @@ const TREND_WINDOWS = [7, 30] as const;
 /** Shared with insights.service's dashboard behaviour query, which bounds the same way. */
 export const MAXIMUM_WINDOW_RECORDS = 10_000;
 const MINIMUM_PERCENT_CHANGE = 0.25;
+/**
+ * A week-over-week comparison means something only for a category bought
+ * most weeks. Rent or a utility bill lands in one week of the month, so its
+ * 7-day window read "decreased 100%" the week after every payment. Such a
+ * category keeps the 30-day comparison, which sees one payment on each side.
+ */
+const WEEKLY_CADENCE_WEEKS = 8;
+const WEEKLY_CADENCE_MINIMUM_ACTIVE = 5;
+const DAY_MS = 86_400_000;
 
 export async function refreshTrendFindings(
   userId: number,
@@ -51,7 +60,11 @@ export async function refreshTrendFindings(
 
   for (const category of categories) {
     const categoryRecords = recordsByCategory.get(category.id) ?? [];
+    const activeWeeks = new Set(categoryRecords
+      .map((record) => Math.floor((today.getTime() - record.date.getTime()) / (7 * DAY_MS)))
+      .filter((week) => week >= 0 && week < WEEKLY_CADENCE_WEEKS)).size;
     for (const windowDays of TREND_WINDOWS) {
+      if (windowDays === 7 && activeWeeks < WEEKLY_CADENCE_MINIMUM_ACTIVE) continue;
       const currentStart = utcAddDays(today, -(windowDays - 1));
       const previousEnd = utcAddDays(currentStart, -1);
       const previousStart = utcAddDays(previousEnd, -(windowDays - 1));

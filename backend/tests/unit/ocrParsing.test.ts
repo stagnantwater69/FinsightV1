@@ -110,6 +110,26 @@ describe("date parsing", () => {
 });
 
 describe("amount parsing", () => {
+  // OCR text from a real Mercury Drug photo whose faint TOTAL lost its leading 7.
+  const droppedDigit = [
+    "MERCURY DRUG",
+    "TOTAL 10.25",
+    "TOTAL PAYMENT 1000.00",
+    "CHANGE 929.75",
+    "VaTable (1) 62.72",
+    "VAT Zero-Rated Sale(Z) 0.00",
+    "VAT - 12% 7.53",
+  ];
+
+  it("takes the total the VAT breakdown and tender minus change agree on", () => {
+    expect(receipt(droppedDigit).amount).toBe(70.25);
+  });
+
+  it("keeps the TOTAL line when only one printed sum disagrees with it", () => {
+    expect(receipt(droppedDigit.map((line) => line.replace("VAT - 12% 7.53", "VAT - 12% 7.58"))).amount).toBe(10.25);
+    expect(receipt(droppedDigit.filter((line) => !line.startsWith("CHANGE"))).amount).toBe(10.25);
+  });
+
   it("prefers the TOTAL line", () => {
     expect(receipt(["MY STORE", "Item 5000.00", "TOTAL 1220.00"]).amount).toBe(1220);
   });

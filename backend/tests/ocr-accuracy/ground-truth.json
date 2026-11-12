@@ -12,17 +12,17 @@
     "expected": {
       "date": "2026-07-11",
       "vendor": null,
-      "amount": 188.0,
+      "amount": 188,
       "items": [
         {
           "name": "Spareribs Meal",
           "quantity": null,
-          "amount": 129.0
+          "amount": 129
         },
         {
           "name": "Iced Latte 16oz",
           "quantity": null,
-          "amount": 59.0
+          "amount": 59
         }
       ]
     },
@@ -75,47 +75,47 @@
     "expected": {
       "date": "2026-04-06",
       "vendor": null,
-      "amount": 2180.0,
+      "amount": 2180,
       "items": [
         {
           "name": "338 CANISTER STUFF EM ALL 1.6L LARGE",
           "quantity": 2,
-          "amount": 110.0
+          "amount": 110
         },
         {
           "name": "0921 45CM BASIN 555 MAKAPAL",
           "quantity": 1,
-          "amount": 225.0
+          "amount": 225
         },
         {
           "name": "348 TRAY (HI-TOP)",
           "quantity": 1,
-          "amount": 65.0
+          "amount": 65
         },
         {
           "name": "804 STOCK BOX W/ HANDLE 10L",
           "quantity": 8,
-          "amount": 1480.0
+          "amount": 1480
         },
         {
           "name": "2010 XL WATER DIPPER MOCHA",
           "quantity": 1,
-          "amount": 40.0
+          "amount": 40
         },
         {
           "name": "8742 PEELER",
           "quantity": 1,
-          "amount": 55.0
+          "amount": 55
         },
         {
           "name": "1133 14INCH FOOD TONG (245)",
           "quantity": 1,
-          "amount": 60.0
+          "amount": 60
         },
         {
           "name": "HX116/CFZ-15 CHOPPING BOARD",
           "quantity": 1,
-          "amount": 145.0
+          "amount": 145
         }
       ]
     },
@@ -129,17 +129,17 @@
     "expected": {
       "date": "2026-07-20",
       "vendor": "ALING NENA SARI-SARI STORE",
-      "amount": 1220.0,
+      "amount": 1220,
       "items": [
         {
           "name": "Rice 25kg",
           "quantity": null,
-          "amount": 1050.0
+          "amount": 1050
         },
         {
           "name": "Cooking oil 1L",
           "quantity": null,
-          "amount": 170.0
+          "amount": 170
         }
       ]
     }
@@ -157,7 +157,7 @@
         {
           "name": "Softdrinks case",
           "quantity": null,
-          "amount": 540.0
+          "amount": 540
         },
         {
           "name": "Bread",
@@ -194,12 +194,12 @@
     "expected": {
       "date": "2026-07-05",
       "vendor": "BARANGAY SUPPLY DEPOT",
-      "amount": 675.0,
+      "amount": 675,
       "items": [
         {
           "name": "Cleaning supplies",
           "quantity": null,
-          "amount": 675.0
+          "amount": 675
         }
       ]
     }
@@ -212,12 +212,12 @@
     "expected": {
       "date": "2026-07-12",
       "vendor": "METRO WHOLESALE TRADING",
-      "amount": 12450.0,
+      "amount": 12450,
       "items": [
         {
           "name": "Bulk inventory",
           "quantity": null,
-          "amount": 12450.0
+          "amount": 12450
         }
       ]
     }
@@ -230,12 +230,12 @@
     "expected": {
       "date": "2026-07-14",
       "vendor": "SARI-SARI EXPRESS",
-      "amount": 1120.0,
+      "amount": 1120,
       "items": [
         {
           "name": "Goods",
           "quantity": null,
-          "amount": 1000.0
+          "amount": 1000
         }
       ]
     }
@@ -248,12 +248,12 @@
     "expected": {
       "date": "2026-07-16",
       "vendor": "JAH GENERAL MERCHANDISE",
-      "amount": 3400.0,
+      "amount": 3400,
       "items": [
         {
           "name": "Stock purchase",
           "quantity": null,
-          "amount": 3400.0
+          "amount": 3400
         }
       ]
     }
@@ -284,12 +284,12 @@
     "expected": {
       "date": "2026-07-22",
       "vendor": "QUICK MART APAS",
-      "amount": 455.0,
+      "amount": 455,
       "items": [
         {
           "name": "Snacks",
           "quantity": null,
-          "amount": 455.0
+          "amount": 455
         }
       ]
     }
@@ -302,12 +302,12 @@
     "expected": {
       "date": "2026-07-25",
       "vendor": "MANDAUE DRY GOODS",
-      "amount": 1875.0,
+      "amount": 1875,
       "items": [
         {
           "name": "Dry goods",
           "quantity": null,
-          "amount": 1875.0
+          "amount": 1875
         }
       ]
     }
@@ -320,12 +320,12 @@
     "expected": {
       "date": "2026-07-21",
       "vendor": "LAPU-LAPU TRADING CO",
-      "amount": 5600.0,
+      "amount": 5600,
       "items": [
         {
           "name": "Hardware",
           "quantity": null,
-          "amount": 5600.0
+          "amount": 5600
         }
       ]
     },
@@ -357,42 +357,42 @@
     "expected": {
       "date": "2026-07-24",
       "vendor": "PUREGOLD APAS BRANCH",
-      "amount": 1147.0,
+      "amount": 1147,
       "items": [
         {
           "name": "Buns",
           "quantity": null,
-          "amount": 60.0
+          "amount": 60
         },
         {
           "name": "Ground beef patty",
           "quantity": null,
-          "amount": 320.0
+          "amount": 320
         },
         {
           "name": "Eggs tray",
           "quantity": null,
-          "amount": 215.0
+          "amount": 215
         },
         {
           "name": "Lettuce",
           "quantity": null,
-          "amount": 85.0
+          "amount": 85
         },
         {
           "name": "Cheese slices",
           "quantity": null,
-          "amount": 175.0
+          "amount": 175
         },
         {
           "name": "Cooking oil 1L",
           "quantity": null,
-          "amount": 172.0
+          "amount": 172
         },
         {
           "name": "Dishwashing liquid",
           "quantity": null,
-          "amount": 120.0
+          "amount": 120
         }
       ]
     }
@@ -405,22 +405,22 @@
     "expected": {
       "date": "2026-07-26",
       "vendor": "CEBU MEAT SUPPLY",
-      "amount": 1450.0,
+      "amount": 1450,
       "items": [
         {
           "name": "Chicken whole",
           "quantity": 2,
-          "amount": 300.0
+          "amount": 300
         },
         {
           "name": "Pork belly kg",
           "quantity": 3,
-          "amount": 900.0
+          "amount": 900
         },
         {
           "name": "Beef cubes kg",
           "quantity": 1,
-          "amount": 250.0
+          "amount": 250
         }
       ]
     }
@@ -433,17 +433,17 @@
     "expected": {
       "date": "2026-07-27",
       "vendor": "MANDAUE FOOD HAUS",
-      "amount": 188.0,
+      "amount": 188,
       "items": [
         {
           "name": "Spareribs Meal",
           "quantity": null,
-          "amount": 129.0
+          "amount": 129
         },
         {
           "name": "Iced Latte 16oz",
           "quantity": null,
-          "amount": 59.0
+          "amount": 59
         }
       ]
     }
@@ -456,22 +456,22 @@
     "expected": {
       "date": "2026-07-28",
       "vendor": "TALAMBAN BEVERAGE CENTER",
-      "amount": 465.0,
+      "amount": 465,
       "items": [
         {
           "name": "Softdrinks 1.5L",
           "quantity": 3,
-          "amount": 195.0
+          "amount": 195
         },
         {
           "name": "Bottled water",
           "quantity": 4,
-          "amount": 120.0
+          "amount": 120
         },
         {
           "name": "Juice pack",
           "quantity": 2,
-          "amount": 150.0
+          "amount": 150
         }
       ]
     }
@@ -484,7 +484,7 @@
     "expected": {
       "date": "2026-07-29",
       "vendor": "MANG JOSE HANDWRITTEN",
-      "amount": 750.0,
+      "amount": 750,
       "items": []
     }
   },
@@ -496,37 +496,37 @@
     "expected": {
       "date": "2026-07-26",
       "vendor": "SAVEMORE MARKET",
-      "amount": 371.0,
+      "amount": 371,
       "items": [
         {
           "name": "COKE MISMO 300ML",
           "quantity": null,
-          "amount": 45.0
+          "amount": 45
         },
         {
           "name": "SKYFLAKES CRACKERS",
           "quantity": null,
-          "amount": 38.0
+          "amount": 38
         },
         {
           "name": "TISSUE 2PLY 12S",
           "quantity": null,
-          "amount": 89.0
+          "amount": 89
         },
         {
           "name": "GARDENIA WHITE BREAD",
           "quantity": null,
-          "amount": 72.0
+          "amount": 72
         },
         {
           "name": "SPRITE 1.5L",
           "quantity": null,
-          "amount": 85.0
+          "amount": 85
         },
         {
           "name": "CENTURY TUNA 155G",
           "quantity": null,
-          "amount": 42.0
+          "amount": 42
         }
       ]
     }
@@ -539,17 +539,17 @@
     "expected": {
       "date": "2026-07-30",
       "vendor": "SOUTH CITY PHARMACY",
-      "amount": 430.0,
+      "amount": 430,
       "items": [
         {
           "name": "Paracetamol box",
           "quantity": null,
-          "amount": 250.0
+          "amount": 250
         },
         {
           "name": "Vitamins bottle",
           "quantity": null,
-          "amount": 230.0
+          "amount": 230
         }
       ]
     }
@@ -563,17 +563,17 @@
     "expected": {
       "date": "2026-07-20",
       "vendor": "ALING NENA SARI-SARI STORE",
-      "amount": 1220.0,
+      "amount": 1220,
       "items": [
         {
           "name": "Rice 25kg",
           "quantity": null,
-          "amount": 1050.0
+          "amount": 1050
         },
         {
           "name": "Cooking oil 1L",
           "quantity": null,
-          "amount": 170.0
+          "amount": 170
         }
       ]
     }
@@ -587,17 +587,17 @@
     "expected": {
       "date": "2026-07-20",
       "vendor": "ALING NENA SARI-SARI STORE",
-      "amount": 1220.0,
+      "amount": 1220,
       "items": [
         {
           "name": "Rice 25kg",
           "quantity": null,
-          "amount": 1050.0
+          "amount": 1050
         },
         {
           "name": "Cooking oil 1L",
           "quantity": null,
-          "amount": 170.0
+          "amount": 170
         }
       ]
     }
@@ -611,12 +611,12 @@
     "expected": {
       "date": "2026-07-12",
       "vendor": "METRO WHOLESALE TRADING",
-      "amount": 12450.0,
+      "amount": 12450,
       "items": [
         {
           "name": "Bulk inventory",
           "quantity": null,
-          "amount": 12450.0
+          "amount": 12450
         }
       ]
     }
@@ -630,12 +630,12 @@
     "expected": {
       "date": "2026-07-12",
       "vendor": "METRO WHOLESALE TRADING",
-      "amount": 12450.0,
+      "amount": 12450,
       "items": [
         {
           "name": "Bulk inventory",
           "quantity": null,
-          "amount": 12450.0
+          "amount": 12450
         }
       ]
     }
@@ -649,12 +649,12 @@
     "expected": {
       "date": "2026-07-14",
       "vendor": "SARI-SARI EXPRESS",
-      "amount": 1120.0,
+      "amount": 1120,
       "items": [
         {
           "name": "Goods",
           "quantity": null,
-          "amount": 1000.0
+          "amount": 1000
         }
       ]
     }
@@ -668,12 +668,12 @@
     "expected": {
       "date": "2026-07-14",
       "vendor": "SARI-SARI EXPRESS",
-      "amount": 1120.0,
+      "amount": 1120,
       "items": [
         {
           "name": "Goods",
           "quantity": null,
-          "amount": 1000.0
+          "amount": 1000
         }
       ]
     }
@@ -687,42 +687,42 @@
     "expected": {
       "date": "2026-07-24",
       "vendor": "PUREGOLD APAS BRANCH",
-      "amount": 1147.0,
+      "amount": 1147,
       "items": [
         {
           "name": "Buns",
           "quantity": null,
-          "amount": 60.0
+          "amount": 60
         },
         {
           "name": "Ground beef patty",
           "quantity": null,
-          "amount": 320.0
+          "amount": 320
         },
         {
           "name": "Eggs tray",
           "quantity": null,
-          "amount": 215.0
+          "amount": 215
         },
         {
           "name": "Lettuce",
           "quantity": null,
-          "amount": 85.0
+          "amount": 85
         },
         {
           "name": "Cheese slices",
           "quantity": null,
-          "amount": 175.0
+          "amount": 175
         },
         {
           "name": "Cooking oil 1L",
           "quantity": null,
-          "amount": 172.0
+          "amount": 172
         },
         {
           "name": "Dishwashing liquid",
           "quantity": null,
-          "amount": 120.0
+          "amount": 120
         }
       ]
     }
@@ -736,42 +736,42 @@
     "expected": {
       "date": "2026-07-24",
       "vendor": "PUREGOLD APAS BRANCH",
-      "amount": 1147.0,
+      "amount": 1147,
       "items": [
         {
           "name": "Buns",
           "quantity": null,
-          "amount": 60.0
+          "amount": 60
         },
         {
           "name": "Ground beef patty",
           "quantity": null,
-          "amount": 320.0
+          "amount": 320
         },
         {
           "name": "Eggs tray",
           "quantity": null,
-          "amount": 215.0
+          "amount": 215
         },
         {
           "name": "Lettuce",
           "quantity": null,
-          "amount": 85.0
+          "amount": 85
         },
         {
           "name": "Cheese slices",
           "quantity": null,
-          "amount": 175.0
+          "amount": 175
         },
         {
           "name": "Cooking oil 1L",
           "quantity": null,
-          "amount": 172.0
+          "amount": 172
         },
         {
           "name": "Dishwashing liquid",
           "quantity": null,
-          "amount": 120.0
+          "amount": 120
         }
       ]
     }
@@ -785,22 +785,22 @@
     "expected": {
       "date": "2026-07-26",
       "vendor": "CEBU MEAT SUPPLY",
-      "amount": 1450.0,
+      "amount": 1450,
       "items": [
         {
           "name": "Chicken whole",
           "quantity": 2,
-          "amount": 300.0
+          "amount": 300
         },
         {
           "name": "Pork belly kg",
           "quantity": 3,
-          "amount": 900.0
+          "amount": 900
         },
         {
           "name": "Beef cubes kg",
           "quantity": 1,
-          "amount": 250.0
+          "amount": 250
         }
       ]
     }
@@ -819,12 +819,12 @@
     "expected": {
       "date": null,
       "vendor": null,
-      "amount": 6000.0,
+      "amount": 6000,
       "items": [
         {
           "name": "Nu Greentea 330",
           "quantity": 1,
-          "amount": 6000.0
+          "amount": 6000
         }
       ]
     },
@@ -844,17 +844,17 @@
     "expected": {
       "date": "2019-08-01",
       "vendor": "BINTANG JUICE",
-      "amount": 20000.0,
+      "amount": 20000,
       "items": [
         {
           "name": "SIRSAK",
           "quantity": 1,
-          "amount": 10000.0
+          "amount": 10000
         },
         {
           "name": "SUNKIST",
           "quantity": 1,
-          "amount": 10000.0
+          "amount": 10000
         }
       ]
     },
@@ -875,12 +875,12 @@
     "expected": {
       "date": "2017-11-24",
       "vendor": null,
-      "amount": 22000.0,
+      "amount": 22000,
       "items": [
         {
           "name": "MACARON BLUE",
           "quantity": 2,
-          "amount": 22000.0
+          "amount": 22000
         }
       ]
     },
@@ -900,12 +900,12 @@
     "expected": {
       "date": null,
       "vendor": "TOUS LES JOURS",
-      "amount": 32500.0,
+      "amount": 32500,
       "items": [
         {
           "name": "Ganache Mousse Piece",
           "quantity": 1,
-          "amount": 32500.0
+          "amount": 32500
         }
       ]
     },
@@ -926,12 +926,12 @@
     "expected": {
       "date": null,
       "vendor": null,
-      "amount": 24000.0,
+      "amount": 24000,
       "items": [
         {
           "name": "SmokeBeef + NuTea",
           "quantity": 1,
-          "amount": 21818.0
+          "amount": 21818
         }
       ]
     },
@@ -952,17 +952,17 @@
     "expected": {
       "date": null,
       "vendor": null,
-      "amount": 138600.0,
+      "amount": 138600,
       "items": [
         {
           "name": "WARISAN 2 FREE DRINK",
           "quantity": 1,
-          "amount": 63000.0
+          "amount": 63000
         },
         {
           "name": "WARISAN 2 FREE DRINK",
           "quantity": 1,
-          "amount": 63000.0
+          "amount": 63000
         }
       ]
     },
@@ -983,12 +983,12 @@
     "expected": {
       "date": null,
       "vendor": null,
-      "amount": 53999.0,
+      "amount": 53999,
       "items": [
         {
           "name": "HAI CMP SPC",
           "quantity": 1,
-          "amount": 49090.0
+          "amount": 49090
         }
       ]
     },
@@ -1009,12 +1009,12 @@
     "expected": {
       "date": null,
       "vendor": null,
-      "amount": 975000.0,
+      "amount": 975000,
       "items": [
         {
           "name": "WACOM BAMBOO PEN",
           "quantity": 1,
-          "amount": 975000.0
+          "amount": 975000
         }
       ]
     },
@@ -1034,72 +1034,72 @@
     "expected": {
       "date": null,
       "vendor": null,
-      "amount": 1802900.0,
+      "amount": 1802900,
       "items": [
         {
           "name": "Angus Striploin",
           "quantity": 1,
-          "amount": 295000.0
+          "amount": 295000
         },
         {
           "name": "Chicken Steak",
           "quantity": 1,
-          "amount": 140000.0
+          "amount": 140000
         },
         {
           "name": "CK Redvelvet",
           "quantity": 1,
-          "amount": 65000.0
+          "amount": 65000
         },
         {
           "name": "Creamed Spinach",
           "quantity": 1,
-          "amount": 40000.0
+          "amount": 40000
         },
         {
           "name": "F Squeeze Orange",
           "quantity": 1,
-          "amount": 60000.0
+          "amount": 60000
         },
         {
           "name": "House Blend",
           "quantity": 1,
-          "amount": 40000.0
+          "amount": 40000
         },
         {
           "name": "Ice Tea Peach",
           "quantity": 1,
-          "amount": 45000.0
+          "amount": 45000
         },
         {
           "name": "Ice Tea Rasp",
           "quantity": 2,
-          "amount": 90000.0
+          "amount": 90000
         },
         {
           "name": "Jasmine Tea",
           "quantity": 1,
-          "amount": 40000.0
+          "amount": 40000
         },
         {
           "name": "Roasted Chicken",
           "quantity": 2,
-          "amount": 300000.0
+          "amount": 300000
         },
         {
           "name": "Salmon",
           "quantity": 1,
-          "amount": 170000.0
+          "amount": 170000
         },
         {
           "name": "Salmon Seaweed Bowl",
           "quantity": 1,
-          "amount": 150000.0
+          "amount": 150000
         },
         {
           "name": "Sorbet",
           "quantity": 1,
-          "amount": 55000.0
+          "amount": 55000
         }
       ]
     },
@@ -1120,17 +1120,17 @@
     "expected": {
       "date": null,
       "vendor": null,
-      "amount": 159638.0,
+      "amount": 159638,
       "items": [
         {
           "name": "mush pasta",
           "quantity": 1,
-          "amount": 80000.0
+          "amount": 80000
         },
         {
           "name": "chic ques",
           "quantity": 1,
-          "amount": 55000.0
+          "amount": 55000
         }
       ]
     },
@@ -1151,12 +1151,12 @@
     "expected": {
       "date": null,
       "vendor": null,
-      "amount": 12600.0,
+      "amount": 12600,
       "items": [
         {
           "name": "Risol Rogut",
           "quantity": 2,
-          "amount": 18000.0
+          "amount": 18000
         }
       ]
     },
@@ -1233,7 +1233,7 @@
         {
           "name": "w. Chicken Fried Rice",
           "quantity": 1,
-          "amount": 2.0
+          "amount": 2
         },
         {
           "name": "Sweet / Sour Chicken",
@@ -1294,7 +1294,7 @@
         {
           "name": "Lunta",
           "quantity": 1,
-          "amount": 39.0
+          "amount": 39
         }
       ]
     }
@@ -1352,17 +1352,17 @@
         {
           "name": "Tikka Masala",
           "quantity": 1,
-          "amount": 20.0
+          "amount": 20
         },
         {
           "name": "Palak (Spinach) Paneer (Cheese)",
           "quantity": 1,
-          "amount": 18.0
+          "amount": 18
         },
         {
           "name": "Vegan Bengan Bharta",
           "quantity": 1,
-          "amount": 17.0
+          "amount": 17
         }
       ]
     },
@@ -1482,47 +1482,47 @@
         {
           "name": "Hamachi Collar",
           "quantity": 1,
-          "amount": 12.0
+          "amount": 12
         },
         {
           "name": "Mega Poke Bowl",
           "quantity": 1,
-          "amount": 17.0
+          "amount": 17
         },
         {
           "name": "Hamachi - Sashimi",
           "quantity": 1,
-          "amount": 12.0
+          "amount": 12
         },
         {
           "name": "Maguro - Sashimi",
           "quantity": 1,
-          "amount": 11.0
+          "amount": 11
         },
         {
           "name": "Salmon - Sashimi",
           "quantity": 1,
-          "amount": 10.0
+          "amount": 10
         },
         {
           "name": "3 Sockeye Salmon - Sashimi",
           "quantity": 1,
-          "amount": 36.0
+          "amount": 36
         },
         {
           "name": "Hamachi Japapeno",
           "quantity": 1,
-          "amount": 12.0
+          "amount": 12
         },
         {
           "name": "Salmon Collar",
           "quantity": 1,
-          "amount": 10.0
+          "amount": 10
         },
         {
           "name": "Escolar - Sashimi",
           "quantity": 1,
-          "amount": 11.0
+          "amount": 11
         }
       ]
     },
@@ -1548,7 +1548,7 @@
         {
           "name": "Tender Branch Hibiscus",
           "quantity": 1,
-          "amount": 8.0
+          "amount": 8
         },
         {
           "name": "Seafood Puff",
@@ -1583,7 +1583,7 @@
         {
           "name": "Tea Smoked Pork Ribs",
           "quantity": 1,
-          "amount": 22.0
+          "amount": 22
         }
       ]
     }
@@ -1607,12 +1607,12 @@
         {
           "name": "Crab Cake",
           "quantity": 1,
-          "amount": 15.0
+          "amount": 15
         },
         {
           "name": "Skirt Stk Lunch",
           "quantity": 1,
-          "amount": 28.0
+          "amount": 28
         }
       ]
     }
@@ -1636,27 +1636,27 @@
         {
           "name": "Cadillac Margarita",
           "quantity": 2,
-          "amount": 28.0
+          "amount": 28
         },
         {
           "name": "Patron Silver",
           "quantity": 1,
-          "amount": 14.0
+          "amount": 14
         },
         {
           "name": "Maryland Crab Cakes",
           "quantity": 1,
-          "amount": 12.0
+          "amount": 12
         },
         {
           "name": "Chicken Caprese",
           "quantity": 1,
-          "amount": 12.0
+          "amount": 12
         },
         {
           "name": "Chix Parm Sandwich",
           "quantity": 1,
-          "amount": 10.0
+          "amount": 10
         },
         {
           "name": "Bud Light",
@@ -1721,7 +1721,7 @@
         {
           "name": "All Star Meal #1",
           "quantity": 1,
-          "amount": 1.0
+          "amount": 1
         }
       ]
     },
@@ -1747,42 +1747,42 @@
         {
           "name": "Draft Blackhouse",
           "quantity": 1,
-          "amount": 7.0
+          "amount": 7
         },
         {
           "name": "\"Cowboy\" 16oz Ribeye",
           "quantity": 1,
-          "amount": 45.0
+          "amount": 45
         },
         {
           "name": "Make It Blue",
           "quantity": 1,
-          "amount": 5.0
+          "amount": 5
         },
         {
           "name": "Add Lobster",
           "quantity": 1,
-          "amount": 21.0
+          "amount": 21
         },
         {
           "name": "CK Manhattan",
           "quantity": 2,
-          "amount": 10.0
+          "amount": 10
         },
         {
           "name": "Whistle Pig Rye 10yr",
           "quantity": 2,
-          "amount": 40.0
+          "amount": 40
         },
         {
           "name": "\"Duke\" 16oz Top Sirloin",
           "quantity": 1,
-          "amount": 34.0
+          "amount": 34
         },
         {
           "name": "Make It Blue",
           "quantity": 1,
-          "amount": 5.0
+          "amount": 5
         }
       ]
     },
@@ -1884,12 +1884,12 @@
     "expected": {
       "date": "2018-03-23",
       "vendor": "myNEWS.com",
-      "amount": 10.0,
+      "amount": 10,
       "items": [
         {
           "name": "JALAN JALAN (Majalah)",
           "quantity": 2,
-          "amount": 10.0
+          "amount": 10
         }
       ]
     }
@@ -1908,12 +1908,12 @@
     "expected": {
       "date": "2018-05-30",
       "vendor": "McDonald's",
-      "amount": 19.0,
+      "amount": 19,
       "items": [
         {
           "name": "M McChicken",
           "quantity": 2,
-          "amount": 19.0
+          "amount": 19
         }
       ]
     },
@@ -1934,7 +1934,7 @@
     "expected": {
       "date": "2017-04-30",
       "vendor": "Amano Malaysia Sdn Bhd",
-      "amount": 3.0,
+      "amount": 3,
       "items": [
         {
           "name": "Parking Fee",
@@ -2100,7 +2100,7 @@
         {
           "name": "NANGKA 1 PINGGAN",
           "quantity": 1,
-          "amount": 2.0
+          "amount": 2
         },
         {
           "name": "KIMBALL TOMATO PUREE 430G",
@@ -2220,7 +2220,7 @@
         {
           "name": "Cafe",
           "quantity": 3,
-          "amount": 3.0
+          "amount": 3
         },
         {
           "name": "Pudin Flan",
@@ -2275,12 +2275,12 @@
     "expected": {
       "date": "2019-10-30",
       "vendor": "PMRP Unipessoal, Lda.",
-      "amount": 40.0,
+      "amount": 40,
       "items": [
         {
           "name": "Gasoleo Bomba Nr 1",
           "quantity": 1,
-          "amount": 40.0
+          "amount": 40
         }
       ]
     },
@@ -2327,12 +2327,12 @@
     "expected": {
       "date": "2019-07-14",
       "vendor": "Oriente Perfeito",
-      "amount": 6.0,
+      "amount": 6,
       "items": [
         {
           "name": "Tapete De Ban",
           "quantity": 1,
-          "amount": 6.0
+          "amount": 6
         }
       ]
     }
@@ -2361,5 +2361,990 @@
       ]
     },
     "vendor_note": "Only the recipient block ('FEELSLIKEHOME. LDA') is visible in frame; the actual issuing vendor's name is above the photographed area and not recoverable from this image. Left null rather than mistaking the client name for the vendor. No date is visible in the visible portion either."
+  },
+  {
+    "id": "real-ph-rf-01-02",
+    "file": "ph-rf-01-02.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, Jollibee franchise, handwritten marks top right, slight tilt. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-08-18",
+      "vendor": "CUISINE ALA MORE INC.",
+      "amount": 227.0,
+      "items": null
+    }
+  },
+  {
+    "id": "real-ph-rf-02-07",
+    "file": "ph-rf-02-07.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, text logo header, slight fold. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-08-13",
+      "vendor": "southstardrug",
+      "amount": 608.0,
+      "items": null
+    }
+  },
+  {
+    "id": "real-ph-rf-03-13",
+    "file": "ph-rf-03-13.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, faint print, date printed as 29JUL2024. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-29",
+      "vendor": "watsons",
+      "amount": 349.0,
+      "items": null
+    }
+  },
+  {
+    "id": "real-ph-rf-04-19",
+    "file": "ph-rf-04-19.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, clean, ISO date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-25",
+      "vendor": "Jollibee Foods Corp.",
+      "amount": 322.0,
+      "items": null
+    }
+  },
+  {
+    "id": "real-ph-rf-05-camscanner-07-07-2024-23",
+    "file": "ph-rf-05-camscanner-07-07-2024-23.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, Wendy's, MM/DD date; same paper as ph-rf-29. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 235.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-06-camscanner-07-07-2024-23",
+    "file": "ph-rf-06-camscanner-07-07-2024-23.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, Panda Express, TAX INVOICE banner above the name; same paper as ph-rf-23. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "JBPX FOODS INC.",
+      "amount": 354.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-07-camscanner-07-07-2024-23",
+    "file": "ph-rf-07-camscanner-07-07-2024-23.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, Wendy's; same paper as ph-rf-31. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 298.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-08-camscanner-07-07-2024-23",
+    "file": "ph-rf-08-camscanner-07-07-2024-23.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, MM/DD date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-03",
+      "vendor": "KYU KYU RAMEN 99",
+      "amount": 327.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-09-camscanner-07-07-2024-23",
+    "file": "ph-rf-09-camscanner-07-07-2024-23.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, Wendy's. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 135.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-10-camscanner-07-07-2024-23",
+    "file": "ph-rf-10-camscanner-07-07-2024-23.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, Wendy's; same paper as ph-rf-21 and ph-rf-30. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 251.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-11-camscanner-07-07-2024-23",
+    "file": "ph-rf-11-camscanner-07-07-2024-23.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, date line below the crop; same paper as ph-rf-40. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "MERCURY DRUG - QC ARANETA CENTER GEN. ROMU",
+      "amount": 91.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07",
+    "note": "No date in the frame."
+  },
+  {
+    "id": "real-ph-rf-12-camscanner-07-07-2024-23",
+    "file": "ph-rf-12-camscanner-07-07-2024-23.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, single item. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "MERCURY DRUG - QC ARANETA CENTER GEN. ROMU",
+      "amount": 28.75,
+      "items": null
+    },
+    "uploaded": "2024-07-07",
+    "note": "No date in the frame."
+  },
+  {
+    "id": "real-ph-rf-13-camscanner-07-07-2024-23",
+    "file": "ph-rf-13-camscanner-07-07-2024-23.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "CamScanner flatbed-style scan, white background, high contrast, clothing store, DD/MM date (31/01/2024), customer and card details printed. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-01-31",
+      "vendor": "Guess?",
+      "amount": 7497.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-14-img-20240616-032703",
+    "file": "ph-rf-14-img-20240616-032703.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, header cut at the left edge, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-06-11",
+      "vendor": "MERCURY DRUG - MKTI LEGASPI VLG SALCEDO",
+      "amount": 70.25,
+      "items": null
+    },
+    "uploaded": "2024-06-16"
+  },
+  {
+    "id": "real-ph-rf-15-img-20240616-033147",
+    "file": "ph-rf-15-img-20240616-033147.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, heavily faded fuel receipt, low contrast, logo header. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "PETRON",
+      "amount": 284.44,
+      "items": null
+    },
+    "uploaded": "2024-06-16",
+    "note": "Date line is too faded to read at this resolution."
+  },
+  {
+    "id": "real-ph-rf-16-img-20240616-033229",
+    "file": "ph-rf-16-img-20240616-033229.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, crumpled, bent across the total. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-05-31",
+      "vendor": "RED RIBBON QUIRINO HIWAY BARTOLOME",
+      "amount": 450.0,
+      "items": null
+    },
+    "uploaded": "2024-06-16"
+  },
+  {
+    "id": "real-ph-rf-17-img-20240616-034047",
+    "file": "ph-rf-17-img-20240616-034047.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, debit card payment, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-05-27",
+      "vendor": "MERCURY DRUG - ARTC FARMERS MARKET ARCADE",
+      "amount": 269.5,
+      "items": null
+    },
+    "uploaded": "2024-06-16"
+  },
+  {
+    "id": "real-ph-rf-18-storage-emulated-0-dcim",
+    "file": "ph-rf-18--storage-emulated-0-dcim.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, rotated 90 degrees, heavily crumpled, McDonald's. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-05-28",
+      "vendor": "GOLDEN ARCHES DEVELOPMENT CORPORATION",
+      "amount": 89.0,
+      "items": null
+    },
+    "note": "Date read from the same paper photographed flat as ph-rf-36; illegible in this capture."
+  },
+  {
+    "id": "real-ph-rf-19-img-20240706-204424",
+    "file": "ph-rf-19-img-20240706-204424.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, clean, MM/DD/YY date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "Starbucks Coffee",
+      "amount": 85.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-20-img-20240706-204827",
+    "file": "ph-rf-20-img-20240706-204827.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, dim lighting. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 85.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-21-img-20240706-204911",
+    "file": "ph-rf-21-img-20240706-204911.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, dim, slight curl; same paper as ph-rf-10. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 251.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-22-img-20240706-204955",
+    "file": "ph-rf-22-img-20240706-204955.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, GCash payment. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 398.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-23-img-20240706-205109",
+    "file": "ph-rf-23-img-20240706-205109.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, rotated 90 degrees, Panda Express; same paper as ph-rf-06. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "JBPX FOODS INC.",
+      "amount": 354.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-24-img-20240706-205335",
+    "file": "ph-rf-24-img-20240706-205335.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, clean, MM/DD date with time. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-03",
+      "vendor": "BONCHON GATEWAY MALL",
+      "amount": 275.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-25-img-20240706-205715",
+    "file": "ph-rf-25-img-20240706-205715.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, rotated 90 degrees, restaurant with service charge, many items. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-01-22",
+      "vendor": "ROTI SHOP",
+      "amount": 3064.25,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-26-img-20240706-233645",
+    "file": "ph-rf-26-img-20240706-233645.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, Jollibee, dark background, handwritten number, ISO date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-05",
+      "vendor": "Quest Food Corporation",
+      "amount": 245.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-27-img-20240706-233901",
+    "file": "ph-rf-27-img-20240706-233901.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, dark background, date near the bottom. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "DAVAO TUNA GRILL",
+      "amount": 185.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-28-img-20240706-234012",
+    "file": "ph-rf-28-img-20240706-234012.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, Panda Express, TAX INVOICE banner, bottom cut. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "JBPX FOODS INC.",
+      "amount": 918.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-29-img-20240706-234532",
+    "file": "ph-rf-29-img-20240706-234532.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, small in frame on a dark background; same paper as ph-rf-05. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 235.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-30-img-20240706-234647",
+    "file": "ph-rf-30-img-20240706-234647.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, small in frame; same paper as ph-rf-10. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 251.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-31-img-20240706-234913",
+    "file": "ph-rf-31-img-20240706-234913.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, Wendy's, tilted; same paper as ph-rf-07. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "WENPHIL CORPORATION",
+      "amount": 298.0,
+      "items": null
+    },
+    "uploaded": "2024-07-06"
+  },
+  {
+    "id": "real-ph-rf-32-img-20240707-002102",
+    "file": "ph-rf-32-img-20240707-002102.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, ink stamp across the header, discount lines, card payment. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-01-31",
+      "vendor": "CHARLES & KEITH",
+      "amount": 25834.3,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-33-img-20240707-002809",
+    "file": "ph-rf-33-img-20240707-002809.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, faint print, text logo. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-06-18",
+      "vendor": "7-ELEVEN",
+      "amount": 46.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-34-img-20240707-002918",
+    "file": "ph-rf-34-img-20240707-002918.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, clean, text logo. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-06-26",
+      "vendor": "7-ELEVEN",
+      "amount": 10.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-35-img-20240707-081542",
+    "file": "ph-rf-35-img-20240707-081542.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, McDonald's, slight crumple, order-number banner above the name. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-05",
+      "vendor": "MCROMESON FOOD CORP.",
+      "amount": 124.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-36-img-20240707-081701",
+    "file": "ph-rf-36-img-20240707-081701.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, McDonald's, heavily crumpled, faint lower half; same paper as ph-rf-18. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-05-28",
+      "vendor": "GOLDEN ARCHES DEVELOPMENT CORPORATION",
+      "amount": 89.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-37-img-20240707-081901",
+    "file": "ph-rf-37-img-20240707-081901.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, dot-matrix print, faded header, MM/DD/YY date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-06-16",
+      "vendor": "DUNKIN' DONUTS",
+      "amount": 377.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-38-img-20240707-082642",
+    "file": "ph-rf-38-img-20240707-082642.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, crumpled, bottom cut before the date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "MERCURY DRUG - ARTC FARMERS MARKET ARCADE",
+      "amount": 269.5,
+      "items": null
+    },
+    "uploaded": "2024-07-07",
+    "note": "No date in the frame."
+  },
+  {
+    "id": "real-ph-rf-39-img-20240707-110605",
+    "file": "ph-rf-39-img-20240707-110605.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, clean, struck-through handwritten cash figures. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-06",
+      "vendor": "Starbucks Coffee",
+      "amount": 445.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-40-img-20240707-111613",
+    "file": "ph-rf-40-img-20240707-111613.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, flat and clean; same paper as ph-rf-11. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "MERCURY DRUG - QC ARANETA CENTER GEN. ROMU",
+      "amount": 91.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07",
+    "note": "No date in the frame."
+  },
+  {
+    "id": "real-ph-rf-41-img-20240707-111647",
+    "file": "ph-rf-41-img-20240707-111647.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, flat and clean, single item. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "MERCURY DRUG - ARANETA CTR FARMER'S PLAZA",
+      "amount": 41.75,
+      "items": null
+    },
+    "uploaded": "2024-07-07",
+    "note": "No date in the frame."
+  },
+  {
+    "id": "real-ph-rf-42-img-20240707-112117",
+    "file": "ph-rf-42-img-20240707-112117.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, text logo, faint, date cut at the bottom edge. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "watsons",
+      "amount": 42.5,
+      "items": null
+    },
+    "uploaded": "2024-07-07",
+    "note": "Only '...JUL 2024' is visible; the day is cut off."
+  },
+  {
+    "id": "real-ph-rf-43-img-20240707-123525",
+    "file": "ph-rf-43-img-20240707-123525.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, mobile-load purchase, faint. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "PUREGOLD PRICE CLUB, INC.",
+      "amount": 150.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07",
+    "note": "No date in the frame."
+  },
+  {
+    "id": "real-ph-rf-44-img-20240707-123635",
+    "file": "ph-rf-44-img-20240707-123635.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, 'SECOND RECEIPT', points redeemed, small in frame. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": null,
+      "vendor": "PUREGOLD PRICE CLUB, INC.",
+      "amount": 3838.72,
+      "items": null
+    },
+    "uploaded": "2024-07-07",
+    "note": "TOTAL is 3,838.72; 69.00 was paid in points, so BAL DUE is 3,769.72. The printed TOTAL is used. No date in the frame."
+  },
+  {
+    "id": "real-ph-rf-46-img-20240707-124504",
+    "file": "ph-rf-46-img-20240707-124504.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, Robinsons-run supermarket, card payment, MM/DD date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-01-25",
+      "vendor": "THE MARKETPLACE",
+      "amount": 505.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-47-img-20240707-124604",
+    "file": "ph-rf-47-img-20240707-124604.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, logo header, MM/DD date. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-02-01",
+      "vendor": "Robinsons Supermarket",
+      "amount": 62.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-48-img-20240707-124658",
+    "file": "ph-rf-48-img-20240707-124658.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, GCash top-up acknowledgement receipt, high contrast. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-01-30",
+      "vendor": "Robinsons Supermarket",
+      "amount": 3000.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-49-img-20240707-124737",
+    "file": "ph-rf-49-img-20240707-124737.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, small in frame on a dark background. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-07-03",
+      "vendor": "Robinsons Supermarket",
+      "amount": 11.0,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
+  },
+  {
+    "id": "real-ph-rf-50-img-20240707-124832",
+    "file": "ph-rf-50-img-20240707-124832.jpg",
+    "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
+    "source": "Roboflow public receipt export dated 2024-11-09, CC BY 4.0; creator and project name not included in the export",
+    "groundTruthReview": "Single AI reviewer, read once from the 800 px image; not cross-checked by a person.",
+    "conditions": "Phone photo of a thermal receipt, weighed items, card payment, small in frame. Downscaled to 800 px tall by the dataset export.",
+    "expected": {
+      "date": "2024-02-02",
+      "vendor": "Robinsons Supermarket",
+      "amount": 511.34,
+      "items": null
+    },
+    "uploaded": "2024-07-07"
   }
 ]
