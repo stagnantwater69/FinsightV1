@@ -91,7 +91,8 @@ describe("isolation forest shadow detector", () => {
 
   it("persists SHADOW findings that never notify and never reach the findings API", async () => {
     const ids = await seedHistory(110);
-    const anomalousId = ids.at(-1)!;
+    // seedHistory dates run backwards, so ids[0] is the newest record.
+    const anomalousId = ids[0]!;
     mockScore.mockResolvedValue(sidecarResponse(ids, anomalousId));
 
     const saved = await refreshIsolationForestFindings(ctx.user.id, ctx.profile.id, enabled);
@@ -124,8 +125,8 @@ describe("isolation forest shadow detector", () => {
 
   it("re-running supersedes records that left the anomalous band (idempotent view)", async () => {
     const ids = await seedHistory(110);
-    const first = ids.at(-1)!;
-    const second = ids.at(-2)!;
+    const first = ids[0]!;
+    const second = ids[1]!;
     mockScore.mockResolvedValueOnce(sidecarResponse(ids, first));
     await refreshIsolationForestFindings(ctx.user.id, ctx.profile.id, enabled);
     mockScore.mockResolvedValueOnce(sidecarResponse(ids, second));
@@ -148,9 +149,17 @@ describe("isolation forest shadow detector", () => {
       scores: ids.map((id) => ({ id, decisionValue: -0.3, normalizedScore: 1 })),
     });
     const saved = await refreshIsolationForestFindings(ctx.user.id, ctx.profile.id, enabled);
-    // 110 records × 2 per 100 → budget of 2.
-    expect(saved).toBe(2);
-    expect(await prisma.anomalyFinding.count({ where: { status: AnomalyFindingStatus.SHADOW } })).toBe(2);
+    // 110 records → 55 eligible (newer half) × 2 per 100 → budget of 1.
+    expect(saved).toBe(1);
+    expect(await prisma.anomalyFinding.count({ where: { status: AnomalyFindingStatus.SHADOW } })).toBe(1);
+  });
+
+  it("never reports the oldest half, whose features have no history to compare against", async () => {
+    const ids = await seedHistory(110);
+    // The oldest record is the one the sidecar calls most anomalous.
+    mockScore.mockResolvedValue(sidecarResponse(ids, ids.at(-1)!));
+    expect(await refreshIsolationForestFindings(ctx.user.id, ctx.profile.id, enabled)).toBe(0);
+    expect(await prisma.anomalyFinding.count()).toBe(0);
   });
 
   it("never crosses business-profile boundaries", async () => {
