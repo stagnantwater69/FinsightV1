@@ -4,6 +4,7 @@ import {
   computeQuartiles,
   deviationFraction,
   detectionMethod,
+  isHighSeverityAmount,
   isOutsideIqrFence,
   isUnusualExpense,
   zScore,
@@ -351,5 +352,32 @@ describe("blind spots the z-score cannot cover", () => {
         computeQuartiles(ORDINARY_INVENTORY),
       ),
     ).toBe("both");
+  });
+});
+
+describe("HIGH severity for a reported amount", () => {
+  it("is HIGH for a tenfold error in a steady category", () => {
+    expect(isHighSeverityAmount(PLANTED_OUTLIER, ORDINARY_INVENTORY)).toBe(true);
+  });
+
+  it("is not HIGH below double the median, however unusual", () => {
+    // 11,000 is far outside this tight category but under 2x its 5,900 median.
+    expect(reportsUnusual(11_000, ORDINARY_INVENTORY)).toBe(true);
+    expect(isHighSeverityAmount(11_000, ORDINARY_INVENTORY)).toBe(false);
+  });
+
+  it("is not HIGH for an ordinary big purchase in a wide category", () => {
+    // Mixed supply runs (median 850, mean 1,105). 3,000 is past the IQR fence
+    // and over twice the mean, so the old rule called it HIGH and notified the
+    // owner; against this category's own spread its modified z is only ~3.9.
+    const supplies = [300, 450, 600, 800, 1_200, 1_500, 2_000, 2_600, 900, 700];
+    expect(reportsUnusual(3_000, supplies)).toBe(true);
+    expect(isHighSeverityAmount(3_000, supplies)).toBe(false);
+  });
+
+  it("is HIGH for a large jump in a category with no spread", () => {
+    const rent = Array.from({ length: 10 }, () => 5_000);
+    expect(isHighSeverityAmount(50_000, rent)).toBe(true);
+    expect(isHighSeverityAmount(9_000, rent)).toBe(false);
   });
 });

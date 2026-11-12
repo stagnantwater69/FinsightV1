@@ -76,6 +76,27 @@ describe("durable analysis jobs", () => {
     expect(await prisma.notification.count({ where: { expenseRecordId: candidate.id, type: "Anomaly Finding" } })).toBe(1);
   });
 
+  it("reports a big purchase in a wide category as MEDIUM, without notifying", async () => {
+    const amounts = [300, 450, 600, 800, 1_200, 1_500, 2_000, 2_600, 900, 700];
+    for (let index = 0; index < amounts.length; index++) {
+      await expenses.createExpenseRecord(ctx.user.id, {
+        businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!,
+        date: utcDayString(-amounts.length + index), amount: amounts[index]!, description: `Supply run ${index}`,
+      });
+    }
+    const candidate = await expenses.createExpenseRecord(ctx.user.id, {
+      businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!,
+      date: utcDayString(), amount: 3_000, description: "Large supply run",
+    });
+    while (await runAnalysisWorkerOnce());
+
+    const finding = await prisma.anomalyFinding.findFirstOrThrow({ where: { expenseRecordId: candidate.id, type: "AMOUNT_OUTLIER" } });
+    expect(finding.severity).toBe("MEDIUM");
+    expect(finding.detectorVersion).toBe("amount-outlier-v2");
+    expect(finding.fingerprint).toBe(`amount-outlier-v1:${candidate.id}`);
+    expect(await prisma.notification.count({ where: { expenseRecordId: candidate.id, type: "Anomaly Finding" } })).toBe(0);
+  });
+
   it("saves the finding for an imported outlier without notifying the owner", async () => {
     const amounts = [1_000, 980, 1_020, 950, 1_050, 990, 1_010];
     for (let index = 0; index < amounts.length; index++) {

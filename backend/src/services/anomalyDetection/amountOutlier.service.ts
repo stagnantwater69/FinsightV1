@@ -4,6 +4,7 @@ import {
   computeCategoryStats,
   computeQuartiles,
   detectionMethod,
+  isHighSeverityAmount,
   isUnusualExpense,
   zScore,
   type CategoryQuartiles,
@@ -14,7 +15,11 @@ import { DEFAULT_DETECTION_CONFIG, type DetectionConfig } from "./config";
 import { saveFinding } from "./finding.service";
 import { runAnalysisMutation, type AnalysisMutationGuard } from "./mutationGuard";
 
-export const AMOUNT_OUTLIER_VERSION = "amount-outlier-v1";
+// v2: HIGH severity uses the median and MAD (isHighSeverityAmount).
+export const AMOUNT_OUTLIER_VERSION = "amount-outlier-v2";
+// Stays at v1 across versions: a new fingerprint would open a second finding
+// beside the old one and bring back findings the owner already dismissed.
+const FINGERPRINT_PREFIX = "amount-outlier-v1";
 
 // A daily-refreshed summary can only stand in for the live query when the
 // candidate is provably absent from it (the summary predates the record)
@@ -60,16 +65,19 @@ export async function detectAmountOutlierForExpense(
   if (!config.featureFlags.amountOutlier) return null;
   const candidate = await prisma.expenseRecord.findUnique({ where: { id: expenseRecordId }, include: { category: true } });
   if (!candidate) return null;
-  const fingerprint = `${AMOUNT_OUTLIER_VERSION}:${candidate.id}`;
+  const fingerprint = `${FINGERPRINT_PREFIX}:${candidate.id}`;
   const clear = () => mutate((db) => db.anomalyFinding.updateMany({
       where: { businessProfileId: candidate.businessProfileId, expenseRecordId: candidate.id, method: "z-score-iqr", status: AnomalyFindingStatus.OPEN },
       data: { status: AnomalyFindingStatus.SUPERSEDED },
     }));
+  const loadAmounts = async () => (await loadBoundedCategoryHistoryForCategories(
+    candidate.businessProfileId, candidate.date, [candidate.categoryId], config.baselineDays, config.maximumCategoryRecords,
+  )).filter((record) => record.id !== candidate.id).map((record) => Number(record.amount));
 
+  let amounts: number[] | null = null;
   let baseline = await loadCachedBaseline(candidate, config);
   if (!baseline) {
-    const history = await loadBoundedCategoryHistoryForCategories(candidate.businessProfileId, candidate.date, [candidate.categoryId], config.baselineDays, config.maximumCategoryRecords);
-    const amounts = history.filter((record) => record.id !== candidate.id).map((record) => Number(record.amount));
+    amounts = await loadAmounts();
     if (amounts.length + 1 < config.minimumCategoryHistory) { await clear(); return null; }
     baseline = { stats: computeCategoryStats(amounts), quartiles: computeQuartiles(amounts) };
   }
@@ -81,11 +89,12 @@ export async function detectAmountOutlierForExpense(
   };
   if (!isUnusualExpense(Number(candidate.amount), stats, quartiles, thresholds)) { await clear(); return null; }
   const z = zScore(Number(candidate.amount), stats);
+  // The cached summary has no median or MAD; flagged records are few, so read them live.
+  amounts ??= await loadAmounts();
   return mutate((db) => saveFinding({
     fingerprint, businessProfileId: candidate.businessProfileId, expenseRecordId: candidate.id,
     type: AnomalyFindingType.AMOUNT_OUTLIER,
-    severity: Math.abs(z) >= 3 || Math.abs(Number(candidate.amount) - stats.mean) / Math.max(Math.abs(stats.mean), 1) >= 1
-      ? AnomalyFindingSeverity.HIGH : AnomalyFindingSeverity.MEDIUM,
+    severity: isHighSeverityAmount(Number(candidate.amount), amounts) ? AnomalyFindingSeverity.HIGH : AnomalyFindingSeverity.MEDIUM,
     score: Math.min(Math.abs(z) / 4, 1), method: "z-score-iqr", title: `Unusual ${candidate.category.name} expense`,
     reasons: [`Detected by ${detectionMethod(Number(candidate.amount), stats, quartiles, thresholds)}`, `The category baseline average is ${stats.mean.toFixed(2)}`],
     metadata: { zScore: z, categoryMean: stats.mean, categoryStdDev: stats.stdDev, q1: quartiles.q1, q3: quartiles.q3, historyCount: stats.count },
