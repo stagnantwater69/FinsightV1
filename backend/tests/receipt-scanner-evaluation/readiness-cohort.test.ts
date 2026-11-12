@@ -54,11 +54,11 @@ function declaredEntry(overrides: Record<string, unknown> = {}): LocalCorpusEntr
 }
 
 describe("representative receipt readiness", () => {
-  it("reports the actual declared corpus as 73 excluded with no measured accuracy", () => {
+  it("reports the actual declared corpus as 122 excluded with no measured accuracy", () => {
     const entries = localCorpusEntrySchema.array().parse(JSON.parse(readFileSync(join(__dirname, "../ocr-accuracy/ground-truth.json"), "utf8")));
     const report = buildReadinessReport(entries);
-    expect(report.counts).toMatchObject({ totalManifestEntries: 73, eligibleSamples: 0, excludedSamples: 73, uniqueEligibleReceipts: 0 });
-    expect(report.counts.exclusionsByReason).toMatchObject({ SYNTHETIC_OR_DERIVED: 28, PUBLIC_SINGLE_REVIEW: 42, UNKNOWN_CONSENT: 3 });
+    expect(report.counts).toMatchObject({ totalManifestEntries: 122, eligibleSamples: 0, excludedSamples: 122, uniqueEligibleReceipts: 0 });
+    expect(report.counts.exclusionsByReason).toMatchObject({ SYNTHETIC_OR_DERIVED: 28, PUBLIC_SINGLE_REVIEW: 42, UNKNOWN_CONSENT: 52 });
     expect(report.status).toBe("BLOCKED_NO_ELIGIBLE_SAMPLES");
     expect(report.metrics.totalAccuracy).toBeNull();
     expect(report.metrics.failureRate).toBeNull();

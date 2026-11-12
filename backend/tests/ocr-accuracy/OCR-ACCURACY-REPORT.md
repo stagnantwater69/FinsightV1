@@ -1,8 +1,8 @@
 # FinSight OCR Accuracy Assessment
 
-Generated: 2026-08-31
+Generated: 2026-11-12
 
-Corpus: **73 receipt images**. Pipeline under test: `extractText()` (tesseract.js) followed by `parseReceiptFields()` and `parseLineItems()` — the same functions the receipt-scan endpoint calls.
+Corpus: **122 receipt images**. Pipeline under test: `extractText()` (tesseract.js) followed by `parseReceiptFields()` and `parseLineItems()` — the same functions the receipt-scan endpoint calls.
 
 A field is **correct** only on an exact match (amounts to the centavo, dates to the day). Vendor matching tolerates light OCR character noise but not a wrong line.
 
@@ -10,11 +10,11 @@ A field is **correct** only on an exact match (amounts to the centavo, dates to 
 
 | Field | Correct | Wrong | Not extracted | Scored | Accuracy |
 |---|---|---|---|---|---|
-| Date | 41 | 6 | 14 | 61 | **67%** |
-| Vendor | 44 | 16 | 0 | 60 | **73%** |
-| Amount | 49 | 13 | 11 | 73 | **67%** |
+| Date | 52 | 15 | 34 | 101 | **51%** |
+| Vendor | 52 | 57 | 0 | 109 | **48%** |
+| Amount | 70 | 30 | 22 | 122 | **57%** |
 
-All three fields correct on the same receipt: **37 of 73** (51%).
+All three fields correct on the same receipt: **42 of 122** (34%).
 
 `n/a` fields are excluded from the denominator — those are receipts where the information genuinely is not present in the image, so there is nothing to extract.
 
@@ -121,7 +121,8 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 
 | Category | Images | Date | Vendor | Amount |
 |---|---|---|---|---|
-| real | 45 | 39% | 50% | 47% |
+| real (earlier public-dataset photos) | 45 | 39% | 59% | 60% |
+| real-ph (Philippine phone photos, single AI review, 800 px) | 49 | 28% | 10% | 31% |
 | synthetic | 19 | 100% | 100% | 100% |
 | degraded | 9 | 100% | 100% | 100% |
 
@@ -160,7 +161,7 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 | 29 | `deg-07-many-items-blur` | 7-item receipt + Gaussian blur r=1.6 | ✅ | ✅ | ✅ |
 | 30 | `deg-08-many-items-low-contrast` | 7-item receipt + contrast reduced to 35% | ✅ | ✅ | ✅ |
 | 31 | `deg-09-qty-columns-rotated` | Quantity-column receipt + rotated 4 degrees | ✅ | ✅ | ✅ |
-| 32 | `real-04-cropped-vendor-glare` | Real phone photo, Indonesian drink-stall thermal receipt, header block blurred/illegible, single item, tight crop | — | — | ❌ |
+| 32 | `real-04-cropped-vendor-glare` | Real phone photo, Indonesian drink-stall thermal receipt, header block blurred/illegible, single item, tight crop | — | — | ⬜ |
 | 33 | `real-05-bintang-juice-camscan-watermark` | Real phone photo scanned through the CamScanner app (adds a small logo + 'Scanned with CamScanner' watermark, bottom-left), Indonesian juice stall, otherwise clear print | ⬜ | ❌ | ⬜ |
 | 34 | `real-06-severe-blur-curled-thermal` | Real phone photo, curled/perforated thermal receipt edge, out-of-focus capture, black background | ⬜ | — | ⬜ |
 | 35 | `real-07-glare-finger-obstruction` | Real phone photo, strong glare plus the photographer's own thumb partially covering the lower-right corner, single item, bakery chain receipt | — | ❌ | ⬜ |
@@ -178,12 +179,12 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 | 47 | `real-19-togo-banner-asterisks` | Real phone photo, decorative asterisk banner ('*** TO GO ***') above the vendor block, US date, unambiguous | ⬜ | — | ❌ |
 | 48 | `real-20-cluttered-menu-background-tilt` | Real phone photo, receipt photographed resting on top of a restaurant menu (cluttered background text behind/around it), slight tilt, US date | ⬜ | ❌ | ⬜ |
 | 49 | `real-21-jts-diner-clean` | Real phone photo, clean US diner receipt, US date with AM/PM time, a '(2 @2.95)' multiplier notation | ❌ | ✅ | ✅ |
-| 50 | `real-22-blank-total-field-curl` | Real phone photo, curled/curved credit-card slip photographed on a white envelope with shadow, 'Tip' and 'Total' lines printed but left BLANK for the customer to fill in — only 'AMOUNT' is printed | ⬜ | ❌ | ✅ |
+| 50 | `real-22-blank-total-field-curl` | Real phone photo, curled/curved credit-card slip photographed on a white envelope with shadow, 'Tip' and 'Total' lines printed but left BLANK for the customer to fill in — only 'AMOUNT' is printed | ⬜ | ✅ | ✅ |
 | 51 | `real-23-handwritten-total-override` | Real phone photo, US sushi restaurant receipt, printed itemised total, PLUS a handwritten total ('153.71') pen-written over/near the printed total ($143.71) — apparently a tip-adjusted figure added by hand | ❌ | ✅ | ✅ |
-| 52 | `real-24-yauatcha-no-date` | Real phone photo on a dark wood table, upscale restaurant (Honolulu, HI), 8 items, no date visible anywhere in the visible receipt body | — | ❌ | ✅ |
-| 53 | `real-25-boa-dark-background` | Real phone photo against a near-black tablecloth (low background/receipt contrast in the photo, though the print itself is clean), suggested-gratuity lines below the total | ⬜ | ❌ | ❌ |
+| 52 | `real-24-yauatcha-no-date` | Real phone photo on a dark wood table, upscale restaurant (Honolulu, HI), 8 items, no date visible anywhere in the visible receipt body | — | ✅ | ✅ |
+| 53 | `real-25-boa-dark-background` | Real phone photo against a near-black tablecloth (low background/receipt contrast in the photo, though the print itself is clean), suggested-gratuity lines below the total | ⬜ | ✅ | ✅ |
 | 54 | `real-26-friendly-reds-clean` | Real phone photo, clean US restaurant receipt, '(2 @14.00)' multiplier notation, unambiguous US date | ✅ | ❌ | ✅ |
-| 55 | `real-27-pappadeaux-ambiguous-us-date` | Real phone photo, US restaurant receipt (Houston, TX), date printed as '01/07/17' — both components <=12, genuinely ambiguous without locale context | ❌ | ❌ | ❌ |
+| 55 | `real-27-pappadeaux-ambiguous-us-date` | Real phone photo, US restaurant receipt (Houston, TX), date printed as '01/07/17' — both components <=12, genuinely ambiguous without locale context | ❌ | ❌ | ✅ |
 | 56 | `real-28-carls-jr-translucent-bleed` | Real phone photo, thin/translucent thermal paper on a reflective wood table — a promotional background pattern printed on the paper's reverse bleeds through faintly behind the text, several $0.00 combo-modifier lines | ✅ | ✅ | ❌ |
 | 57 | `real-29-saska-paperclip-clipboard` | Real phone photo, receipt held to a wooden clipboard by a large metal binder clip whose reflective wire partially crosses the header text, US date, suggested-tip lines | ✅ | ✅ | ✅ |
 | 58 | `real-30-wings-things-over-menu-crumple` | Real phone photo, crumpled receipt resting on top of a bright yellow/red takeout menu (cluttered, high-contrast background bleeding into the frame around the receipt edges), no date visible in the photographed portion | — | ✅ | ❌ |
@@ -191,17 +192,66 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 | 60 | `real-32-mynews-handwritten-margin` | Real phone photo, Malaysian convenience-store tax invoice, a handwritten alphanumeric code ('A03115') pen-written in the top-right margin (unrelated to the transaction), GST columns | ✅ | ✅ | ✅ |
 | 61 | `real-33-mcdonalds-my-combo-submenu` | Real phone photo, clean scan-quality Malaysian McDonald's receipt, a combo-meal line with indented sub-components (Coke, Fries) printed with no individual price of their own | ✅ | ❌ | ✅ |
 | 62 | `real-34-parking-ticket-stamped-redacted` | Real phone photo, Malaysian parking-garage tax invoice (not a merchandise receipt), a black circular redaction mark over part of the GST ID, a 'POSTED' rubber stamp printed diagonally across the fee amount, entry/paid timestamps rather than a single transaction time | ❌ | ❌ | ✅ |
-| 63 | `real-35-kings-confectionery-discount-column` | Real phone photo, Malaysian bakery tax invoice, Code/Description/Qty/Price/Discount%/Amount column layout, one item carries a 30% line-level discount already applied to its Amount | ✅ | ✅ | ❌ |
+| 63 | `real-35-kings-confectionery-discount-column` | Real phone photo, Malaysian bakery tax invoice, Code/Description/Qty/Price/Discount%/Amount column layout, one item carries a 30% line-level discount already applied to its Amount | ✅ | ✅ | ✅ |
 | 64 | `real-36-mrdiy-multiline-item-layout` | Real phone photo, Malaysian hardware-store tax invoice, each item spans THREE printed lines (name, size/SKU code line, then quantity x unit-price = amount on a separate line) rather than one line per item | ✅ | ✅ | ✅ |
 | 65 | `real-37-gardenia-torn-multi-subtotal` | Real phone photo, top-left corner of the receipt physically torn off, a small paper/sticker patch obscuring part of one line, TWO separate zero-rated and standard-rated subtotals before the final Total Payable | ❌ | ✅ | ✅ |
 | 66 | `real-38-super-seven-dot-noise-duplicate-lines` | Real phone photo, scattered small dark speckle/dot noise across the whole image (dust or a dirty lens), a duplicate item line (same SKU/product printed twice, two separate purchases of the same item), a handwritten total ('18.30') and checkmarks added over the printed Net Total | ✅ | ✅ | ✅ |
 | 67 | `real-39-sanyu-stationery-clean` | Real phone photo, clean Malaysian stationery-shop tax invoice, a single SKU line with an inline '3 x 2.9000' quantity/unit-price notation, faint decorative background pattern printed on the paper itself | ✅ | ✅ | ✅ |
 | 68 | `real-40-portugalia-euro-redaction-dots` | Real phone photo, Portuguese restaurant receipt (Lisbon), Euro currency, ISO date-time already printed, hand-applied black circular redaction dots over the customer tax-ID and part of the payment-method breakdown, a two-tier IVA(VAT)-rate breakdown table | ⬜ | ❌ | ❌ |
 | 69 | `real-41-caravela-simple-euro` | Real phone photo, Portuguese shopping-mall food-court receipt, single item, Euro, ISO date already printed | ⬜ | ❌ | ⬜ |
-| 70 | `real-42-fuel-pump-receipt-redaction` | Real phone photo, Portuguese fuel-pump receipt (not a merchandise purchase — litres of diesel at a per-litre rate), a black circular redaction mark over part of the total, an IVA/net breakdown table | ⬜ | ❌ | ⬜ |
-| 71 | `real-43-pollux-torn-skew-barcode` | Real phone photo, long Portuguese invoice photographed at a skewed angle, a black circular redaction dot over part of the quantity/description column, a printed barcode near the footer, single low-value item | ⬜ | ❌ | ❌ |
-| 72 | `real-44-oriente-perfeito-handwritten-note` | Real phone photo, Portuguese small-business invoice, a handwritten note ('#788 Rueb') pen-written in the right margin next to the vendor block — unrelated to the transaction, does not overlap any printed field | ⬜ | ❌ | ❌ |
+| 70 | `real-42-fuel-pump-receipt-redaction` | Real phone photo, Portuguese fuel-pump receipt (not a merchandise purchase — litres of diesel at a per-litre rate), a black circular redaction mark over part of the total, an IVA/net breakdown table | ⬜ | ❌ | ✅ |
+| 71 | `real-43-pollux-torn-skew-barcode` | Real phone photo, long Portuguese invoice photographed at a skewed angle, a black circular redaction dot over part of the quantity/description column, a printed barcode near the footer, single low-value item | ⬜ | ❌ | ✅ |
+| 72 | `real-44-oriente-perfeito-handwritten-note` | Real phone photo, Portuguese small-business invoice, a handwritten note ('#788 Rueb') pen-written in the right margin next to the vendor block — unrelated to the transaction, does not overlap any printed field | ⬜ | ❌ | ✅ |
 | 73 | `real-45-sticker-obstruction-cropped-vendor` | Real phone photo, an orange adhesive tab/sticker (unrelated object) overlapping the top-left corner of the frame, the issuing vendor's own name is above the top edge of the photographed area (only the recipient/client block is visible), a black redaction dot over part of a payment line | — | — | ✅ |
+| 74 | `real-ph-rf-01-02` | Phone photo of a thermal receipt, Jollibee franchise, handwritten marks top right, slight tilt. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ⬜ |
+| 75 | `real-ph-rf-02-07` | Phone photo of a thermal receipt, text logo header, slight fold. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ⬜ |
+| 76 | `real-ph-rf-03-13` | Phone photo of a thermal receipt, faint print, date printed as 29JUL2024. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ⬜ |
+| 77 | `real-ph-rf-04-19` | Phone photo of a thermal receipt, clean, ISO date. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 78 | `real-ph-rf-05-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, Wendy's, MM/DD date; same paper as ph-rf-29. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 79 | `real-ph-rf-06-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, Panda Express, TAX INVOICE banner above the name; same paper as ph-rf-23. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ✅ |
+| 80 | `real-ph-rf-07-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, Wendy's; same paper as ph-rf-31. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ✅ |
+| 81 | `real-ph-rf-08-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, MM/DD date. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ✅ |
+| 82 | `real-ph-rf-09-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, Wendy's. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ❌ |
+| 83 | `real-ph-rf-10-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, Wendy's; same paper as ph-rf-21 and ph-rf-30. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 84 | `real-ph-rf-11-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, date line below the crop; same paper as ph-rf-40. Downscaled to 800 px tall by the dataset export. | — | ✅ | ✅ |
+| 85 | `real-ph-rf-12-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, single item. Downscaled to 800 px tall by the dataset export. | — | ❌ | ✅ |
+| 86 | `real-ph-rf-13-camscanner-07-07-2024-23` | CamScanner flatbed-style scan, white background, high contrast, clothing store, DD/MM date (31/01/2024), customer and card details printed. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ✅ |
+| 87 | `real-ph-rf-14-img-20240616-032703` | Phone photo of a thermal receipt, header cut at the left edge, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ❌ |
+| 88 | `real-ph-rf-15-img-20240616-033147` | Phone photo of a thermal receipt, heavily faded fuel receipt, low contrast, logo header. Downscaled to 800 px tall by the dataset export. | — | ❌ | ⬜ |
+| 89 | `real-ph-rf-16-img-20240616-033229` | Phone photo of a thermal receipt, crumpled, bent across the total. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 90 | `real-ph-rf-17-img-20240616-034047` | Phone photo of a thermal receipt, debit card payment, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ❌ |
+| 91 | `real-ph-rf-18-storage-emulated-0-dcim` | Phone photo of a thermal receipt, rotated 90 degrees, heavily crumpled, McDonald's. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ⬜ |
+| 92 | `real-ph-rf-19-img-20240706-204424` | Phone photo of a thermal receipt, clean, MM/DD/YY date. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ⬜ |
+| 93 | `real-ph-rf-20-img-20240706-204827` | Phone photo of a thermal receipt, Wendy's, dim lighting. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 94 | `real-ph-rf-21-img-20240706-204911` | Phone photo of a thermal receipt, Wendy's, dim, slight curl; same paper as ph-rf-10. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ❌ |
+| 95 | `real-ph-rf-22-img-20240706-204955` | Phone photo of a thermal receipt, Wendy's, GCash payment. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ❌ |
+| 96 | `real-ph-rf-23-img-20240706-205109` | Phone photo of a thermal receipt, rotated 90 degrees, Panda Express; same paper as ph-rf-06. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ⬜ |
+| 97 | `real-ph-rf-24-img-20240706-205335` | Phone photo of a thermal receipt, clean, MM/DD date with time. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ✅ |
+| 98 | `real-ph-rf-25-img-20240706-205715` | Phone photo of a thermal receipt, rotated 90 degrees, restaurant with service charge, many items. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ⬜ |
+| 99 | `real-ph-rf-26-img-20240706-233645` | Phone photo of a thermal receipt, Jollibee, dark background, handwritten number, ISO date. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 100 | `real-ph-rf-27-img-20240706-233901` | Phone photo of a thermal receipt, dark background, date near the bottom. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ✅ |
+| 101 | `real-ph-rf-28-img-20240706-234012` | Phone photo of a thermal receipt, Panda Express, TAX INVOICE banner, bottom cut. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ✅ |
+| 102 | `real-ph-rf-29-img-20240706-234532` | Phone photo of a thermal receipt, Wendy's, small in frame on a dark background; same paper as ph-rf-05. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 103 | `real-ph-rf-30-img-20240706-234647` | Phone photo of a thermal receipt, Wendy's, small in frame; same paper as ph-rf-10. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 104 | `real-ph-rf-31-img-20240706-234913` | Phone photo of a thermal receipt, Wendy's, tilted; same paper as ph-rf-07. Downscaled to 800 px tall by the dataset export. | ✅ | ✅ | ❌ |
+| 105 | `real-ph-rf-32-img-20240707-002102` | Phone photo of a thermal receipt, ink stamp across the header, discount lines, card payment. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 106 | `real-ph-rf-33-img-20240707-002809` | Phone photo of a thermal receipt, faint print, text logo. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 107 | `real-ph-rf-34-img-20240707-002918` | Phone photo of a thermal receipt, clean, text logo. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ✅ |
+| 108 | `real-ph-rf-35-img-20240707-081542` | Phone photo of a thermal receipt, McDonald's, slight crumple, order-number banner above the name. Downscaled to 800 px tall by the dataset export. | ✅ | ✅ | ❌ |
+| 109 | `real-ph-rf-36-img-20240707-081701` | Phone photo of a thermal receipt, McDonald's, heavily crumpled, faint lower half; same paper as ph-rf-18. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
+| 110 | `real-ph-rf-37-img-20240707-081901` | Phone photo of a thermal receipt, dot-matrix print, faded header, MM/DD/YY date. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ❌ |
+| 111 | `real-ph-rf-38-img-20240707-082642` | Phone photo of a thermal receipt, crumpled, bottom cut before the date. Downscaled to 800 px tall by the dataset export. | — | ✅ | ✅ |
+| 112 | `real-ph-rf-39-img-20240707-110605` | Phone photo of a thermal receipt, clean, struck-through handwritten cash figures. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ⬜ |
+| 113 | `real-ph-rf-40-img-20240707-111613` | Phone photo of a thermal receipt, flat and clean; same paper as ph-rf-11. Downscaled to 800 px tall by the dataset export. | — | ❌ | ✅ |
+| 114 | `real-ph-rf-41-img-20240707-111647` | Phone photo of a thermal receipt, flat and clean, single item. Downscaled to 800 px tall by the dataset export. | — | ❌ | ✅ |
+| 115 | `real-ph-rf-42-img-20240707-112117` | Phone photo of a thermal receipt, text logo, faint, date cut at the bottom edge. Downscaled to 800 px tall by the dataset export. | — | ❌ | ❌ |
+| 116 | `real-ph-rf-43-img-20240707-123525` | Phone photo of a thermal receipt, mobile-load purchase, faint. Downscaled to 800 px tall by the dataset export. | — | ✅ | ✅ |
+| 117 | `real-ph-rf-44-img-20240707-123635` | Phone photo of a thermal receipt, 'SECOND RECEIPT', points redeemed, small in frame. Downscaled to 800 px tall by the dataset export. | — | ❌ | ❌ |
+| 118 | `real-ph-rf-46-img-20240707-124504` | Phone photo of a thermal receipt, Robinsons-run supermarket, card payment, MM/DD date. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ✅ |
+| 119 | `real-ph-rf-47-img-20240707-124604` | Phone photo of a thermal receipt, logo header, MM/DD date. Downscaled to 800 px tall by the dataset export. | ❌ | ❌ | ⬜ |
+| 120 | `real-ph-rf-48-img-20240707-124658` | Phone photo of a thermal receipt, GCash top-up acknowledgement receipt, high contrast. Downscaled to 800 px tall by the dataset export. | ✅ | ❌ | ❌ |
+| 121 | `real-ph-rf-49-img-20240707-124737` | Phone photo of a thermal receipt, small in frame on a dark background. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ⬜ |
+| 122 | `real-ph-rf-50-img-20240707-124832` | Phone photo of a thermal receipt, weighed items, card payment, small in frame. Downscaled to 800 px tall by the dataset export. | ⬜ | ❌ | ❌ |
 
 ✅ correct · ❌ wrong value returned · ⬜ nothing extracted · — not applicable (not present in image)
 
@@ -221,7 +271,7 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 
 | Field | Expected | Got | |
 |---|---|---|---|
-| amount | `6000` | `6.6` | ❌ |
+| amount | `6000` | `null` | ⬜ |
 
 ### `real-05-bintang-juice-camscan-watermark`
 
@@ -281,7 +331,7 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 
 | Field | Expected | Got | |
 |---|---|---|---|
-| amount | `1802900` | `150` | ❌ |
+| amount | `1802900` | `215` | ❌ |
 
 ### `real-13-blur-vendor-two-item`
 
@@ -366,7 +416,6 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 | Field | Expected | Got | |
 |---|---|---|---|
 | date | `"2017-06-05"` | `null` | ⬜ |
-| vendor | `"Hedleys"` | `"| WEST HOLLYWOOD CA 9006"` | ❌ |
 
 ### `real-23-handwritten-total-override`
 
@@ -376,14 +425,6 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 |---|---|---|---|
 | date | `"2018-05-11"` | `"2018-11-05"` | ❌ |
 
-### `real-24-yauatcha-no-date`
-
-*Real phone photo on a dark wood table, upscale restaurant (Honolulu, HI), 8 items, no date visible anywhere in the visible receipt body*
-
-| Field | Expected | Got | |
-|---|---|---|---|
-| vendor | `"YAUATCHA"` | `"2 International Market Place"` | ❌ |
-
 ### `real-25-boa-dark-background`
 
 *Real phone photo against a near-black tablecloth (low background/receipt contrast in the photo, though the print itself is clean), suggested-gratuity lines below the total*
@@ -391,8 +432,6 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 | Field | Expected | Got | |
 |---|---|---|---|
 | date | `"2017-12-20"` | `null` | ⬜ |
-| vendor | `"BOA"` | `"Separate checks: 1-of-3"` | ❌ |
-| amount | `47.09` | `43` | ❌ |
 
 ### `real-26-friendly-reds-clean`
 
@@ -410,7 +449,6 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 |---|---|---|---|
 | date | `"2017-01-07"` | `"2017-07-01"` | ❌ |
 | vendor | `"Pappadeaux Seafood Kitchen"` | `"P SEAFOOD KITCHEN X"` | ❌ |
-| amount | `42.16` | `38.95` | ❌ |
 
 ### `real-28-carls-jr-translucent-bleed`
 
@@ -434,7 +472,7 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 
 | Field | Expected | Got | |
 |---|---|---|---|
-| amount | `75.15` | `973.77` | ❌ |
+| amount | `75.15` | `18.95` | ❌ |
 
 ### `real-33-mcdonalds-my-combo-submenu`
 
@@ -453,14 +491,6 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 | date | `"2017-04-30"` | `"2017-08-30"` | ❌ |
 | vendor | `"Amano Malaysia Sdn Bhd"` | `"TEMASYA INDUSTRIAL PARK"` | ❌ |
 
-### `real-35-kings-confectionery-discount-column`
-
-*Real phone photo, Malaysian bakery tax invoice, Code/Description/Qty/Price/Discount%/Amount column layout, one item carries a 30% line-level discount already applied to its Amount*
-
-| Field | Expected | Got | |
-|---|---|---|---|
-| amount | `25.15` | `29.15` | ❌ |
-
 ### `real-37-gardenia-torn-multi-subtotal`
 
 *Real phone photo, top-left corner of the receipt physically torn off, a small paper/sticker patch obscuring part of one line, TWO separate zero-rated and standard-rated subtotals before the final Total Payable*
@@ -477,7 +507,7 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 |---|---|---|---|
 | date | `"2017-11-20"` | `null` | ⬜ |
 | vendor | `"Portugália"` | `"Wyily Prt ya par progr ana"` | ❌ |
-| amount | `54.8` | `48.07` | ❌ |
+| amount | `54.8` | `164.5` | ❌ |
 
 ### `real-41-caravela-simple-euro`
 
@@ -497,7 +527,6 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 |---|---|---|---|
 | date | `"2019-10-30"` | `null` | ⬜ |
 | vendor | `"PMRP Unipessoal, Lda."` | `"be bp 11Y ET i1Geira"` | ❌ |
-| amount | `40` | `null` | ⬜ |
 
 ### `real-43-pollux-torn-skew-barcode`
 
@@ -507,7 +536,6 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 |---|---|---|---|
 | date | `"2019-10-15"` | `null` | ⬜ |
 | vendor | `"Pollux Lisboa"` | `"—— potLUK | ISBUA"` | ❌ |
-| amount | `4.15` | `19.1` | ❌ |
 
 ### `real-44-oriente-perfeito-handwritten-note`
 
@@ -517,17 +545,445 @@ Receipts with **no itemised lines at all** (2): 1 of 2 correctly extracted nothi
 |---|---|---|---|
 | date | `"2019-07-14"` | `null` | ⬜ |
 | vendor | `"Oriente Perfeito"` | `"Entreposto Serva Bloco 1 Fracao F"` | ❌ |
-| amount | `6` | `0` | ❌ |
+
+### `real-ph-rf-01-02`
+
+*Phone photo of a thermal receipt, Jollibee franchise, handwritten marks top right, slight tilt. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-08-18"` | `null` | ⬜ |
+| vendor | `"CUISINE ALA MORE INC."` | `"CUTS INE ALA more"` | ❌ |
+| amount | `227` | `null` | ⬜ |
+
+### `real-ph-rf-02-07`
+
+*Phone photo of a thermal receipt, text logo header, slight fold. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-08-13"` | `null` | ⬜ |
+| vendor | `"southstardrug"` | `"iodouill, 1 1T CO"` | ❌ |
+| amount | `608` | `null` | ⬜ |
+
+### `real-ph-rf-03-13`
+
+*Phone photo of a thermal receipt, faint print, date printed as 29JUL2024. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-29"` | `null` | ⬜ |
+| vendor | `"watsons"` | `"COA ety esse Pac. ¥"` | ❌ |
+| amount | `349` | `null` | ⬜ |
+
+### `real-ph-rf-04-19`
+
+*Phone photo of a thermal receipt, clean, ISO date. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-25"` | `null` | ⬜ |
+| vendor | `"Jollibee Foods Corp."` | `"ole Food Core"` | ❌ |
+| amount | `322` | `162` | ❌ |
+
+### `real-ph-rf-05-camscanner-07-07-2024-23`
+
+*CamScanner flatbed-style scan, white background, high contrast, Wendy's, MM/DD date; same paper as ph-rf-29. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-06"` | `null` | ⬜ |
+| vendor | `"WENPHIL CORPORATION"` | `"WENDY'S HAMBURGER RESTAURANT"` | ❌ |
+| amount | `235` | `209.82` | ❌ |
+
+### `real-ph-rf-06-camscanner-07-07-2024-23`
+
+*CamScanner flatbed-style scan, white background, high contrast, Panda Express, TAX INVOICE banner above the name; same paper as ph-rf-23. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-06"` | `"2024-07-08"` | ❌ |
+| vendor | `"JBPX FOODS INC."` | `"Panda Fxpros Gateway Hal 2"` | ❌ |
+
+### `real-ph-rf-07-camscanner-07-07-2024-23`
+
+*CamScanner flatbed-style scan, white background, high contrast, Wendy's; same paper as ph-rf-31. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"WENPHIL CORPORATION"` | `"WENDY'S HAMBURGER RESTAURANT"` | ❌ |
+
+### `real-ph-rf-08-camscanner-07-07-2024-23`
+
+*CamScanner flatbed-style scan, white background, high contrast, MM/DD date. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-03"` | `"2024-03-01"` | ❌ |
+| vendor | `"KYU KYU RAMEN 99"` | `"FENPOOSS LEVEL 3 GATENAY Not FOOD"` | ❌ |
+
+### `real-ph-rf-09-camscanner-07-07-2024-23`
+
+*CamScanner flatbed-style scan, white background, high contrast, Wendy's. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"WENPHIL CORPORATION"` | `"WENDY'S HAMBURGER RESTAURANT"` | ❌ |
+| amount | `135` | `136` | ❌ |
+
+### `real-ph-rf-10-camscanner-07-07-2024-23`
+
+*CamScanner flatbed-style scan, white background, high contrast, Wendy's; same paper as ph-rf-21 and ph-rf-30. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-06"` | `null` | ⬜ |
+| vendor | `"WENPHIL CORPORATION"` | `"WENDY'S HAMBURGER RESTAURANT"` | ❌ |
+| amount | `251` | `224.11` | ❌ |
+
+### `real-ph-rf-12-camscanner-07-07-2024-23`
+
+*CamScanner flatbed-style scan, white background, high contrast, single item. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"MERCURY DRUG - QC ARANETA CENTER GEN. ROMU"` | `"fieceived Merchandise in Good Condition"` | ❌ |
+
+### `real-ph-rf-13-camscanner-07-07-2024-23`
+
+*CamScanner flatbed-style scan, white background, high contrast, clothing store, DD/MM date (31/01/2024), customer and card details printed. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-01-31"` | `"7020-01-31"` | ❌ |
+| vendor | `"Guess?"` | `"STORE CODE + 442 TRANS © 7081"` | ❌ |
+
+### `real-ph-rf-14-img-20240616-032703`
+
+*Phone photo of a thermal receipt, header cut at the left edge, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"MERCURY DRUG - MKTI LEGASPI VLG SALCEDO"` | `"Rece1ved Merchandise In Good Condit on"` | ❌ |
+| amount | `70.25` | `10.25` | ❌ |
+
+### `real-ph-rf-15-img-20240616-033147`
+
+*Phone photo of a thermal receipt, heavily faded fuel receipt, low contrast, logo header. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"PETRON"` | `"| = SY MOSES ©"` | ❌ |
+| amount | `284.44` | `null` | ⬜ |
+
+### `real-ph-rf-16-img-20240616-033229`
+
+*Phone photo of a thermal receipt, crumpled, bent across the total. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-05-31"` | `null` | ⬜ |
+| vendor | `"RED RIBBON QUIRINO HIWAY BARTOLOME"` | `"7D REGAN ATRIND | Tu gro oe"` | ❌ |
+| amount | `450` | `50.1` | ❌ |
+
+### `real-ph-rf-17-img-20240616-034047`
+
+*Phone photo of a thermal receipt, debit card payment, MM-DD-YY date at the bottom. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-05-27"` | `"2024-05-21"` | ❌ |
+| vendor | `"MERCURY DRUG - ARTC FARMERS MARKET ARCADE"` | `"#1 FIRIERS WRKET ARCADE ARANETA CENTER"` | ❌ |
+| amount | `269.5` | `9.5` | ❌ |
+
+### `real-ph-rf-18-storage-emulated-0-dcim`
+
+*Phone photo of a thermal receipt, rotated 90 degrees, heavily crumpled, McDonald's. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-05-28"` | `null` | ⬜ |
+| vendor | `"GOLDEN ARCHES DEVELOPMENT CORPORATION"` | `"ED HEPES chin =i gesiSasuinon"` | ❌ |
+| amount | `89` | `null` | ⬜ |
+
+### `real-ph-rf-19-img-20240706-204424`
+
+*Phone photo of a thermal receipt, clean, MM/DD/YY date. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"Starbucks Coffee"` | `"OFD by: Rustan Coffee Corp."` | ❌ |
+| amount | `85` | `null` | ⬜ |
+
+### `real-ph-rf-20-img-20240706-204827`
+
+*Phone photo of a thermal receipt, Wendy's, dim lighting. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-06"` | `null` | ⬜ |
+| vendor | `"WENPHIL CORPORATION"` | `"WENDY'S HAMBURGER RESTAURANT"` | ❌ |
+| amount | `85` | `76.89` | ❌ |
+
+### `real-ph-rf-21-img-20240706-204911`
+
+*Phone photo of a thermal receipt, Wendy's, dim, slight curl; same paper as ph-rf-10. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"WENPHIL CORPORATION"` | `"'s MAMBLIRGER RESTAURANT"` | ❌ |
+| amount | `251` | `24.11` | ❌ |
+
+### `real-ph-rf-22-img-20240706-204955`
+
+*Phone photo of a thermal receipt, Wendy's, GCash payment. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"WENPHIL CORPORATION"` | `"WENDY'S HAMBURGER RESTAURANT"` | ❌ |
+| amount | `398` | `98` | ❌ |
+
+### `real-ph-rf-23-img-20240706-205109`
+
+*Phone photo of a thermal receipt, rotated 90 degrees, Panda Express; same paper as ph-rf-06. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-06"` | `null` | ⬜ |
+| vendor | `"JBPX FOODS INC."` | `"iE Ek in"` | ❌ |
+| amount | `354` | `null` | ⬜ |
+
+### `real-ph-rf-24-img-20240706-205335`
+
+*Phone photo of a thermal receipt, clean, MM/DD date with time. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"BONCHON GATEWAY MALL"` | `"operated by: Scot and Food Grow"` | ❌ |
+
+### `real-ph-rf-25-img-20240706-205715`
+
+*Phone photo of a thermal receipt, rotated 90 degrees, restaurant with service charge, many items. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-01-22"` | `null` | ⬜ |
+| vendor | `"ROTI SHOP"` | `"INA ra CET Re"` | ❌ |
+| amount | `3064.25` | `null` | ⬜ |
+
+### `real-ph-rf-26-img-20240706-233645`
+
+*Phone photo of a thermal receipt, Jollibee, dark background, handwritten number, ISO date. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-05"` | `null` | ⬜ |
+| vendor | `"Quest Food Corporation"` | `"STORE #044"` | ❌ |
+| amount | `245` | `24` | ❌ |
+
+### `real-ph-rf-27-img-20240706-233901`
+
+*Phone photo of a thermal receipt, dark background, date near the bottom. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-06"` | `null` | ⬜ |
+| vendor | `"DAVAO TUNA GRILL"` | `"Corporation"` | ❌ |
+
+### `real-ph-rf-28-img-20240706-234012`
+
+*Phone photo of a thermal receipt, Panda Express, TAX INVOICE banner, bottom cut. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-06"` | `"2024-06-11"` | ❌ |
+| vendor | `"JBPX FOODS INC."` | `"Panda Express Gateuay Hal)"` | ❌ |
+
+### `real-ph-rf-29-img-20240706-234532`
+
+*Phone photo of a thermal receipt, Wendy's, small in frame on a dark background; same paper as ph-rf-05. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-06"` | `null` | ⬜ |
+| vendor | `"WENPHIL CORPORATION"` | `"Bon a hoe arasanns"` | ❌ |
+| amount | `235` | `1228.1` | ❌ |
+
+### `real-ph-rf-30-img-20240706-234647`
+
+*Phone photo of a thermal receipt, Wendy's, small in frame; same paper as ph-rf-10. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-06"` | `null` | ⬜ |
+| vendor | `"WENPHIL CORPORATION"` | `"(GENIE TECHNOLOGIES INC"` | ❌ |
+| amount | `251` | `224.11` | ❌ |
+
+### `real-ph-rf-31-img-20240706-234913`
+
+*Phone photo of a thermal receipt, Wendy's, tilted; same paper as ph-rf-07. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| amount | `298` | `31.93` | ❌ |
+
+### `real-ph-rf-32-img-20240707-002102`
+
+*Phone photo of a thermal receipt, ink stamp across the header, discount lines, card payment. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-01-31"` | `null` | ⬜ |
+| vendor | `"CHARLES & KEITH"` | `"oe IE rR"` | ❌ |
+| amount | `25834.3` | `2306.3` | ❌ |
+
+### `real-ph-rf-33-img-20240707-002809`
+
+*Phone photo of a thermal receipt, faint print, text logo. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-06-18"` | `null` | ⬜ |
+| vendor | `"7-ELEVEN"` | `"VAT Exempted 0"` | ❌ |
+| amount | `46` | `6` | ❌ |
+
+### `real-ph-rf-34-img-20240707-002918`
+
+*Phone photo of a thermal receipt, clean, text logo. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-06-26"` | `"2020-08-01"` | ❌ |
+| vendor | `"7-ELEVEN"` | `"HUIPPING SLVER CORPORATION"` | ❌ |
+
+### `real-ph-rf-35-img-20240707-081542`
+
+*Phone photo of a thermal receipt, McDonald's, slight crumple, order-number banner above the name. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| amount | `124` | `124.8` | ❌ |
+
+### `real-ph-rf-36-img-20240707-081701`
+
+*Phone photo of a thermal receipt, McDonald's, heavily crumpled, faint lower half; same paper as ph-rf-18. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-05-28"` | `null` | ⬜ |
+| vendor | `"GOLDEN ARCHES DEVELOPMENT CORPORATION"` | `"OLDEN ARCHES DEUSLOPHENT CORPORATION"` | ❌ |
+| amount | `89` | `100.09` | ❌ |
+
+### `real-ph-rf-37-img-20240707-081901`
+
+*Phone photo of a thermal receipt, dot-matrix print, faded header, MM/DD/YY date. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-06-16"` | `"2025-06-16"` | ❌ |
+| vendor | `"DUNKIN' DONUTS"` | `"Tam TOUT FoARe SARRARATTON"` | ❌ |
+| amount | `377` | `397.9` | ❌ |
+
+### `real-ph-rf-39-img-20240707-110605`
+
+*Phone photo of a thermal receipt, clean, struck-through handwritten cash figures. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"Starbucks Coffee"` | `"UPD by: Rustan Cotfee Corp"` | ❌ |
+| amount | `445` | `null` | ⬜ |
+
+### `real-ph-rf-40-img-20240707-111613`
+
+*Phone photo of a thermal receipt, flat and clean; same paper as ph-rf-11. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"MERCURY DRUG - QC ARANETA CENTER GEN. ROMU"` | `"Received Merchandise in Goo"` | ❌ |
+
+### `real-ph-rf-41-img-20240707-111647`
+
+*Phone photo of a thermal receipt, flat and clean, single item. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"MERCURY DRUG - ARANETA CTR FARMER'S PLAZA"` | `"Received Merchandise in Good Condition"` | ❌ |
+
+### `real-ph-rf-42-img-20240707-112117`
+
+*Phone photo of a thermal receipt, text logo, faint, date cut at the bottom edge. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"watsons"` | `"PRED IY FAMILYHEAL TI & BEAUTY COMP"` | ❌ |
+| amount | `42.5` | `0.01` | ❌ |
+
+### `real-ph-rf-44-img-20240707-123635`
+
+*Phone photo of a thermal receipt, 'SECOND RECEIPT', points redeemed, small in frame. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"PUREGOLD PRICE CLUB, INC."` | `"Turrent Tan ptanill be credited ton"` | ❌ |
+| amount | `3838.72` | `7.08` | ❌ |
+
+### `real-ph-rf-46-img-20240707-124504`
+
+*Phone photo of a thermal receipt, Robinsons-run supermarket, card payment, MM/DD date. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-01-25"` | `"2005-12-30"` | ❌ |
+| vendor | `"THE MARKETPLACE"` | `"HON § SUPERMARKET CORPORATLL"` | ❌ |
+
+### `real-ph-rf-47-img-20240707-124604`
+
+*Phone photo of a thermal receipt, logo header, MM/DD date. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-02-01"` | `"2012-08-25"` | ❌ |
+| vendor | `"Robinsons Supermarket"` | `"robs Supermarket Corporatio"` | ❌ |
+| amount | `62` | `null` | ⬜ |
+
+### `real-ph-rf-48-img-20240707-124658`
+
+*Phone photo of a thermal receipt, GCash top-up acknowledgement receipt, high contrast. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| vendor | `"Robinsons Supermarket"` | `"fobinson's Supermarket Corporation"` | ❌ |
+| amount | `3000` | `73000` | ❌ |
+
+### `real-ph-rf-49-img-20240707-124737`
+
+*Phone photo of a thermal receipt, small in frame on a dark background. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-07-03"` | `null` | ⬜ |
+| vendor | `"Robinsons Supermarket"` | `"io anryen. mm you Salts. uate"` | ❌ |
+| amount | `11` | `null` | ⬜ |
+
+### `real-ph-rf-50-img-20240707-124832`
+
+*Phone photo of a thermal receipt, weighed items, card payment, small in frame. Downscaled to 800 px tall by the dataset export.*
+
+| Field | Expected | Got | |
+|---|---|---|---|
+| date | `"2024-02-02"` | `null` | ⬜ |
+| vendor | `"Robinsons Supermarket"` | `"BINGON'S SUPERMARKET CORPCRATION"` | ❌ |
+| amount | `511.34` | `15.2` | ❌ |
 
 ## Corpus composition and what it does and does not prove
 
 | Category | Count | What it tests |
 |---|---|---|
-| real | 45 | Genuine receipt photographs — 3 Philippine, the remaining 42 sourced from a licensed public dataset (CORD/SROIE/ExpressExpense/Zenodo, see CORPUS-ATTRIBUTION.md), independently hand-verified against the image rather than trusting that dataset's own AI-assisted annotations |
+| real | 94 | Genuine receipt photographs — 3 Philippine, the remaining 91 sourced from a licensed public dataset (CORD/SROIE/ExpressExpense/Zenodo, see CORPUS-ATTRIBUTION.md), independently hand-verified against the image rather than trusting that dataset's own AI-assisted annotations |
 | synthetic | 19 | Parser robustness across layouts, date formats, amount formats, currency symbols, header styles |
 | degraded | 9 | Synthetic receipts degraded with blur, low contrast, rotation, downscaling, darkness and JPEG artifacts |
 
-**This corpus over-states robustness to real-world photo quality.** Only 45 of the 73 images are real photographs. The 9 degraded images are *rendered* receipts with uniform, synthetic degradation applied programmatically — real phone captures have uneven lighting, curled thermal paper, motion blur, shadows and fold creases that are not reproduced here. Tesseract handled every degraded image perfectly, which is a claim about clean-render-plus-filter, **not** about a shopkeeper photographing a crumpled receipt in a dim store.
+**This corpus over-states robustness to real-world photo quality.** Only 94 of the 122 images are real photographs. The 9 degraded images are *rendered* receipts with uniform, synthetic degradation applied programmatically — real phone captures have uneven lighting, curled thermal paper, motion blur, shadows and fold creases that are not reproduced here. Tesseract handled every degraded image perfectly, which is a claim about clean-render-plus-filter, **not** about a shopkeeper photographing a crumpled receipt in a dim store.
 
 **No handwritten receipts are included.** None were available. Handwritten *resibo* are common in sari-sari stores, and tesseract's default model is trained on printed text — accuracy on handwriting should be assumed poor until measured. This is an untested gap, not a passing case.
 
@@ -606,7 +1062,7 @@ Measured effect across all five: date accuracy 90% → **100%**, vendor accuracy
 
 ## Bottom line
 
-Once the corpus stopped being 90% clean renders, the headline numbers dropped hard: date 67%, vendor 73%, amount 67% overall (see "Results by image category" above for the real-only breakdown, which is materially lower than the synthetic/degraded rows). Synthetic and degraded images still score ~100% — that number was never wrong, it was just describing a narrow slice of conditions (clean renders, and uniform programmatic degradation of clean renders) that most real phone photos of a crumpled or glare-lit thermal receipt do not resemble. **The corpus was the thing hiding the gap, not the parser being newly broken.**
+Once the corpus stopped being 90% clean renders, the headline numbers dropped hard: date 51%, vendor 48%, amount 57% overall (see "Results by image category" above for the real-only breakdown, which is materially lower than the synthetic/degraded rows). Synthetic and degraded images still score ~100% — that number was never wrong, it was just describing a narrow slice of conditions (clean renders, and uniform programmatic degradation of clean renders) that most real phone photos of a crumpled or glare-lit thermal receipt do not resemble. **The corpus was the thing hiding the gap, not the parser being newly broken.**
 
 This is not read as "the parser regressed" — nothing in `ocr.service.ts` changed between the 31-image and 73-image runs. It is read as "the 31-image number was measuring the wrong thing." See the failure taxonomy in the plan/PR notes for this corpus-expansion pass for the specific, evidenced categories behind these numbers (blur/glare/obstruction, non-PH date locales, vendor-in-footer-or-cropped, unreconciled real subtotals, and more) — that taxonomy, not this summary paragraph, is the actionable input for Phase 3 fixes.
 
