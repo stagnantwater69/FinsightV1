@@ -331,36 +331,81 @@ function CategoryRow({
 }) {
   const t = useTheme();
   const { brand, ink, paper } = t;
+  const { updateCategory } = useBusinessProfiles();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function changeCostBehavior(value: ExpenseCostBehavior) {
+    setSaving(true);
+    setError(null);
+    try {
+      await updateCategory(category.id, { costBehavior: value });
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // The chips sit outside the row's Pressable: nested inside it they would be
+  // swallowed into its single accessible element and unreachable by a reader.
   return (
-    <Pressable
-      onPress={onOpenRecords}
-      accessibilityRole="button"
-      // The visible label is the category name; the action is opening its
-      // records, and a reader that only hears "Rent" would not know that.
-      accessibilityLabel={`${category.name}, view records`}
-      accessibilityHint="Opens the records filed under this category"
-      style={({ pressed }) => ({
-        flexDirection: "row",
-        alignItems: "center",
-        gap: space.md,
-        minHeight: TAP_FLOOR,
+    <View
+      style={{
         borderWidth: 1,
         borderColor: ink[200],
         borderRadius: radius.md,
-        backgroundColor: pressed ? brand[50] : paper.DEFAULT,
-        padding: space.md,
+        backgroundColor: paper.DEFAULT,
         marginBottom: space.sm,
-      })}
+        overflow: "hidden",
+      }}
     >
-      <View style={{ flex: 1 }}>
-        <T style={{ fontSize: typeScale.body, color: ink[900], fontFamily: font.sansMedium }}>{category.name}</T>
-        {category.description ? (
-          <T variant="caption" style={{ marginTop: 2 }}>
-            {category.description}
-          </T>
-        ) : null}
+      <Pressable
+        onPress={onOpenRecords}
+        accessibilityRole="button"
+        // The visible label is the category name; the action is opening its
+        // records, and a reader that only hears "Rent" would not know that.
+        accessibilityLabel={`${category.name}, view records`}
+        accessibilityHint="Opens the records filed under this category"
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          gap: space.md,
+          minHeight: TAP_FLOOR,
+          backgroundColor: pressed ? brand[50] : paper.DEFAULT,
+          padding: space.md,
+        })}
+      >
+        <View style={{ flex: 1 }}>
+          <T style={{ fontSize: typeScale.body, color: ink[900], fontFamily: font.sansMedium }}>{category.name}</T>
+          {category.description ? (
+            <T variant="caption" style={{ marginTop: 2 }}>
+              {category.description}
+            </T>
+          ) : null}
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={ink[400]} />
+      </Pressable>
+      <View style={{ paddingHorizontal: space.md, paddingBottom: space.md }}>
+        <T variant="caption" style={{ marginBottom: 6 }}>How this cost behaves</T>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
+          {COST_BEHAVIOR_OPTIONS.map((option) => {
+            const selected = category.costBehavior === option.value;
+            return (
+              <SelectChip
+                key={option.value}
+                label={option.label}
+                selected={selected}
+                disabled={saving}
+                // Same toggle-to-clear as the create form: a second tap means "not set".
+                onPress={() => void changeCostBehavior(selected ? "UNCLASSIFIED" : option.value)}
+                accessibilityLabel={`${option.label} cost for ${category.name}`}
+              />
+            );
+          })}
+        </View>
+        {error ? <ErrorNote>{error}</ErrorNote> : null}
       </View>
-      <Ionicons name="chevron-forward" size={18} color={ink[400]} />
-    </Pressable>
+    </View>
   );
 }
