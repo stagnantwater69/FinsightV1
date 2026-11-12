@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "../../src/config/prisma";
 import * as expenses from "../../src/services/expenseRecord.service";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "../../src/services/anomalyDetection/job.service";
+import { reviewFinding, saveFinding } from "../../src/services/anomalyDetection/finding.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDay, utcDayString } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
@@ -95,6 +96,48 @@ describe("durable analysis jobs", () => {
     expect(finding.detectorVersion).toBe("amount-outlier-v2");
     expect(finding.fingerprint).toBe(`amount-outlier-v1:${candidate.id}`);
     expect(await prisma.notification.count({ where: { expenseRecordId: candidate.id, type: "Anomaly Finding" } })).toBe(0);
+  });
+
+  describe("after the owner has answered earlier amount findings", () => {
+    // Candidate 1,270: z ~ 2.2 and just past the 1.5 IQR fence (1,250), but
+    // inside the stricter z of 3 and 3 IQR fence (1,437.50).
+    async function answeredThreeTimes(feedback: "EXPECTED_TRANSACTION" | "CONFIRMED_UNUSUAL") {
+      const amounts = [800, 900, 1_000, 1_100, 1_200, 950, 1_050, 1_000];
+      const baseline = [];
+      for (let index = 0; index < amounts.length; index++) {
+        baseline.push(await expenses.createExpenseRecord(ctx.user.id, {
+          businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!,
+          date: utcDayString(-amounts.length + index), amount: amounts[index]!, description: `Restock ${index}`,
+        }));
+      }
+      while (await runAnalysisWorkerOnce());
+      for (const record of baseline.slice(0, 3)) {
+        const finding = await saveFinding({
+          fingerprint: `answered:${record.id}`, businessProfileId: ctx.profile.id, expenseRecordId: record.id,
+          type: "AMOUNT_OUTLIER", severity: "MEDIUM", method: "z-score-iqr", title: "Unusual Inventory expense",
+          reasons: ["Earlier finding"], detectorVersion: "amount-outlier-v2",
+        });
+        await reviewFinding(ctx.user.id, finding.id, {
+          status: feedback === "EXPECTED_TRANSACTION" ? "DISMISSED" : "CONFIRMED", feedback,
+        });
+      }
+      const candidate = await expenses.createExpenseRecord(ctx.user.id, {
+        businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!,
+        date: utcDayString(), amount: 1_270, description: "Bigger restock",
+      });
+      while (await runAnalysisWorkerOnce());
+      return prisma.anomalyFinding.findFirst({ where: { expenseRecordId: candidate.id, method: "z-score-iqr" } });
+    }
+
+    it("raises the category's bar when the owner kept saying normal", async () => {
+      expect(await answeredThreeTimes("EXPECTED_TRANSACTION")).toBeNull();
+    });
+
+    it("keeps the usual bar when the owner said unusual", async () => {
+      const finding = await answeredThreeTimes("CONFIRMED_UNUSUAL");
+      expect(finding).not.toBeNull();
+      expect(finding!.metadata).toMatchObject({ stricterAfterFeedback: false });
+    });
   });
 
   it("saves the finding for an imported outlier without notifying the owner", async () => {
