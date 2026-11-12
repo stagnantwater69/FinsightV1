@@ -9,7 +9,7 @@ import {
   type CategoryQuartiles,
   type CategoryStats,
 } from "../analysis.service";
-import { loadBoundedCategoryHistory } from "./categoryStatistics.service";
+import { loadBoundedCategoryHistoryForCategories } from "./categoryStatistics.service";
 import { DEFAULT_DETECTION_CONFIG, type DetectionConfig } from "./config";
 import { saveFinding } from "./finding.service";
 import { runAnalysisMutation, type AnalysisMutationGuard } from "./mutationGuard";
@@ -68,8 +68,8 @@ export async function detectAmountOutlierForExpense(
 
   let baseline = await loadCachedBaseline(candidate, config);
   if (!baseline) {
-    const history = await loadBoundedCategoryHistory(candidate.businessProfileId, candidate.date, config.baselineDays, config.maximumCategoryRecords);
-    const amounts = history.filter((record) => record.categoryId === candidate.categoryId && record.id !== candidate.id).map((record) => Number(record.amount));
+    const history = await loadBoundedCategoryHistoryForCategories(candidate.businessProfileId, candidate.date, [candidate.categoryId], config.baselineDays, config.maximumCategoryRecords);
+    const amounts = history.filter((record) => record.id !== candidate.id).map((record) => Number(record.amount));
     if (amounts.length + 1 < config.minimumCategoryHistory) { await clear(); return null; }
     baseline = { stats: computeCategoryStats(amounts), quartiles: computeQuartiles(amounts) };
   }

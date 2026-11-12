@@ -75,4 +75,23 @@ describe("durable analysis jobs", () => {
     while (await runAnalysisWorkerOnce());
     expect(await prisma.notification.count({ where: { expenseRecordId: candidate.id, type: "Anomaly Finding" } })).toBe(1);
   });
+
+  it("saves the finding for an imported outlier without notifying the owner", async () => {
+    const amounts = [1_000, 980, 1_020, 950, 1_050, 990, 1_010];
+    for (let index = 0; index < amounts.length; index++) {
+      await expenses.createExpenseRecord(ctx.user.id, {
+        businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!,
+        date: utcDayString(-amounts.length + index), amount: amounts[index]!, description: `Baseline ${index}`,
+      });
+    }
+    const candidate = await expenses.createExpenseRecord(ctx.user.id, {
+      businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!,
+      date: utcDayString(), amount: 30_000, description: "Imported extreme purchase",
+    });
+    await prisma.expenseRecord.update({ where: { id: candidate.id }, data: { source: "CSV_UPLOAD" } });
+    while (await runAnalysisWorkerOnce());
+
+    expect(await prisma.anomalyFinding.count({ where: { expenseRecordId: candidate.id, type: "AMOUNT_OUTLIER" } })).toBe(1);
+    expect(await prisma.notification.count({ where: { expenseRecordId: candidate.id, type: "Anomaly Finding" } })).toBe(0);
+  });
 });

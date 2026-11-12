@@ -48,15 +48,17 @@ export async function anomalyEvaluation(userId: number, businessProfileId: numbe
     select: { expenseRecordId: true },
   });
   const shadowIds = shadowRecords.map((finding) => finding.expenseRecordId!) ;
+  // Distinct records, not findings: a record two rules flagged is one overlap.
   const overlapping = shadowIds.length
-    ? await prisma.anomalyFinding.count({
+    ? (await prisma.anomalyFinding.groupBy({
+        by: ["expenseRecordId"],
         where: {
           businessProfileId,
           expenseRecordId: { in: shadowIds },
           method: { not: "isolation-forest" },
           status: { not: "SUPERSEDED" },
         },
-      })
+      })).length
     : 0;
 
   return {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { AnalysisJobKind, AnalysisJobStatus, Prisma } from "@prisma/client";
+import { AnalysisJobKind, AnalysisJobStatus, ExpenseRecordSource, Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { logger } from "../../config/logger";
 import { resolveBusinessToday, utcToday } from "../../lib/dates";
@@ -192,11 +192,18 @@ async function processJob(job: ClaimedJob, mutate: AnalysisMutationGuard) {
       detectVelocityForExpense(job.expenseRecordId, RUNTIME_DETECTION_CONFIG, mutate),
       detectBehavioralNoveltyForExpense(job.expenseRecordId, RUNTIME_DETECTION_CONFIG, mutate),
     ]);
-    const owner = await prisma.businessProfile.findUnique({ where: { id: job.businessProfileId }, select: { userId: true } });
     const notifiable = findings
       .filter((value): value is NonNullable<typeof value> => value !== null)
       .filter((finding) => meetsNotificationSeverity(finding.severity, RUNTIME_DETECTION_CONFIG));
-    if (owner && notifiable.length > 0) {
+    if (notifiable.length === 0) return;
+    const [owner, record] = await Promise.all([
+      prisma.businessProfile.findUnique({ where: { id: job.businessProfileId }, select: { userId: true } }),
+      prisma.expenseRecord.findUnique({ where: { id: job.expenseRecordId }, select: { source: true } }),
+    ]);
+    // An import analyses every row it created, so a historical file would send
+    // one notification per old outlier. The findings are still saved and shown
+    // in Expense Insights; they just do not interrupt the owner.
+    if (owner && record && record.source !== ExpenseRecordSource.CSV_UPLOAD) {
       await mutate(async (db) => {
         for (const finding of notifiable) {
           const message = `${finding.title}: review this transaction in Expense Insights`.slice(0, 255);

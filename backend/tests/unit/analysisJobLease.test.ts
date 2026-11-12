@@ -38,6 +38,8 @@ vi.mock("../../src/config/prisma", () => ({
       updateMany: (...args: unknown[]) => analysisJobUpdateMany(...args),
     },
     businessProfile: { findUnique: (...args: unknown[]) => businessProfileFindUnique(...args) },
+    // Notifications are skipped for imported rows, so the job reads the source.
+    expenseRecord: { findUnique: async () => ({ source: "MANUAL" }) },
     $queryRaw: (...args: unknown[]) => queryRaw(...args),
     $transaction: (...args: unknown[]) => transaction(...args),
   },
