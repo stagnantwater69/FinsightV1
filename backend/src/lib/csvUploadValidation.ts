@@ -32,8 +32,17 @@ function startsWith(buffer: Buffer, signature: Buffer): boolean {
   return buffer.length >= signature.length && buffer.subarray(0, signature.length).equals(signature);
 }
 
-/** CSV has no magic number, so reject known binary containers and require valid UTF-8 text bytes. */
-export function validateCsvUploadBytes(buffer: Buffer): void {
+/**
+ * CSV has no magic number, so reject known binary containers and control
+ * bytes, then return the file as UTF-8.
+ *
+ * Excel on Windows saves "CSV (Comma delimited)" as Windows-1252, not UTF-8,
+ * so a file holding "Niño" or "Peñafrancia" used to be refused outright.
+ * Bytes that are valid UTF-8 are returned unchanged; anything else is read as
+ * Windows-1252, which assigns a character to every byte, so the binary
+ * checks above are what keep non-text files out.
+ */
+export function decodeCsvUploadBytes(buffer: Buffer): Buffer {
   const content = buffer.subarray(buffer.subarray(0, UTF8_BOM.length).equals(UTF8_BOM) ? UTF8_BOM.length : 0);
   if (
     BINARY_SIGNATURES.some((signature) => startsWith(content, signature))
@@ -53,7 +62,8 @@ export function validateCsvUploadBytes(buffer: Buffer): void {
 
   try {
     new TextDecoder("utf-8", { fatal: true }).decode(content);
+    return buffer;
   } catch {
-    throw csvTypeError();
+    return Buffer.from(new TextDecoder("windows-1252").decode(content), "utf8");
   }
 }

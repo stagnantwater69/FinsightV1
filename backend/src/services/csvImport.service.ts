@@ -50,7 +50,7 @@ import {
   type ImportCategoryDecision,
 } from "../lib/importCategoriser";
 import { expenseDuplicateKeysOf } from "../lib/expenseDuplicateIdentity";
-import { CSV_MAX_FILE_BYTES, validateCsvUploadBytes } from "../lib/csvUploadValidation";
+import { CSV_MAX_FILE_BYTES, decodeCsvUploadBytes } from "../lib/csvUploadValidation";
 import { lockExpenseDuplicateWriteGate, lockSalesDuplicateWriteGate } from "../lib/recordLock";
 import { resolveAvailableFundsClassification } from "./availableFundsBaseline.service";
 
@@ -521,13 +521,14 @@ interface ParsedCsv {
   headers: string[];
 }
 
-function parseCsv(buffer: Buffer): ParsedCsv {
-  if (buffer.byteLength > CSV_MAX_FILE_BYTES) {
+function parseCsv(upload: Buffer): ParsedCsv {
+  if (upload.byteLength > CSV_MAX_FILE_BYTES) {
     throw new ApiError(413, "This file is larger than 5 MB. Split it into smaller files and import them one at a time.", {
       code: "CSV_FILE_TOO_LARGE",
     });
   }
-  validateCsvUploadBytes(buffer);
+  // Only the parse sees the decoded text; the stored file and its hash keep the uploaded bytes.
+  const buffer = decodeCsvUploadBytes(upload);
 
   const delimiter = detectDelimiter(buffer);
   let headers: string[] = [];
