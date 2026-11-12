@@ -274,11 +274,6 @@ export async function findings(req: Request, res: Response) {
   });
 }
 
-export async function findingsSummary(req: Request, res: Response) {
-  const query = z.object({ businessProfileId: z.coerce.number().int().positive().max(2147483647) }).parse(req.query);
-  res.status(200).json(await findingService.findingSummary(req.user!.id, query.businessProfileId));
-}
-
 export async function reviewFinding(req: Request, res: Response) {
   const id = z.coerce.number().int().positive().max(2147483647).parse(req.params.id);
   const input = findingReviewSchema.parse(req.body);

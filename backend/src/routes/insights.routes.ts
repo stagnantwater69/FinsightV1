@@ -58,7 +58,6 @@ insightsRouter.get("/recovery", asyncHandler(insightsController.recoveryInsight)
 insightsRouter.get("/recovery/month-end-review", asyncHandler(insightsController.monthEndReview));
 insightsRouter.get("/spending-impact", asyncHandler(insightsController.spendingImpact));
 insightsRouter.get("/findings", asyncHandler(insightsController.findings));
-insightsRouter.get("/findings/summary", asyncHandler(insightsController.findingsSummary));
 insightsRouter.get("/findings/metrics", asyncHandler(insightsController.findingsMetrics));
 insightsRouter.patch("/findings/:id/review", asyncHandler(insightsController.reviewFinding));
 insightsRouter.get("/recurring-patterns", asyncHandler(insightsController.recurringPatterns));

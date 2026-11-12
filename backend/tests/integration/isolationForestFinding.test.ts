@@ -4,7 +4,7 @@ import { prisma } from "../../src/config/prisma";
 import * as expenses from "../../src/services/expenseRecord.service";
 import { detectionConfig, DEFAULT_DETECTION_CONFIG } from "../../src/services/anomalyDetection/config";
 import { refreshIsolationForestFindings } from "../../src/services/anomalyDetection/isolationForest.service";
-import { listFindings, findingSummary } from "../../src/services/anomalyDetection/finding.service";
+import { listFindings } from "../../src/services/anomalyDetection/finding.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
 
 /**
@@ -110,16 +110,14 @@ describe("isolation forest shadow detector", () => {
     });
     expect((finding.reasons as string[]).length).toBeGreaterThan(0);
 
-    // Invisible to the owner: not listed (even when asked for), not summarised,
-    // and no notification was created.
+    // Invisible to the owner: not listed (even when asked for), and no
+    // notification was created.
     const listed = await listFindings(ctx.user.id, ctx.profile.id, {});
     expect(listed.find((entry) => entry.method === "isolation-forest")).toBeUndefined();
     const listedExplicit = await listFindings(ctx.user.id, ctx.profile.id, {
       status: AnomalyFindingStatus.SHADOW,
     });
     expect(listedExplicit).toHaveLength(0);
-    const summary = await findingSummary(ctx.user.id, ctx.profile.id);
-    expect(summary.byType.ML_OUTLIER).toBeUndefined();
     expect(await prisma.notification.count()).toBe(0);
   });
 
