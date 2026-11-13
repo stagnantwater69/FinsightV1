@@ -31,12 +31,19 @@ export async function ensureUncategorised(
     where: { businessProfileId, name: { equals: UNCATEGORISED, mode: "insensitive" } },
   });
   if (existing) return existing.id;
-  const created = await db.expenseCategory.create({
+  // skipDuplicates, not create: two receipts reaching here at once would
+  // otherwise both insert and one would fail on the unique name.
+  await db.expenseCategory.createMany({
     data: {
       businessProfileId,
       name: UNCATEGORISED,
       description: "Items FinSight could not confidently categorise. Reassign them as you review.",
     },
+    skipDuplicates: true,
+  });
+  const created = await db.expenseCategory.findFirstOrThrow({
+    where: { businessProfileId, name: UNCATEGORISED },
+    select: { id: true },
   });
   return created.id;
 }

@@ -1,5 +1,6 @@
 import { prisma } from "../config/prisma";
 import { resolveBusinessToday, utcAddDays, utcDateKey, utcEndOfDay, utcIsoWeekday } from "../lib/dates";
+import { lockDuplicateKey } from "../lib/recordLock";
 import { COUNTED_EXPENSE } from "./financialPosition.service";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 
@@ -13,10 +14,10 @@ import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
  * from the last six days is skipped, so the hourly sweep sends at most one.
  * A week with no records at all sends nothing.
  *
- * shortcut: the skip check and the insert are not one transaction, so two
- * workers sweeping in the same instant could both send. The maintenance lane
- * runs once per deployment today; add an advisory lock if that changes.
+ * The check and the insert run under a per-business advisory lock, because a
+ * local dev worker and the deployed one can sweep the same database at once.
  */
+const WEEKLY_SUMMARY_LOCK = "weekly-summary:v1";
 const MESSAGE_LIMIT = 255;
 
 export interface WeeklySummaryResult {
@@ -50,40 +51,44 @@ export async function sendWeeklySummaries(now: Date = new Date()): Promise<Weekl
     const today = resolveBusinessToday(profile.timezone, now);
     if (utcIsoWeekday(today) !== 1) continue;
 
-    const recent = await prisma.notification.findFirst({
-      where: { businessProfileId: profile.id, type: NOTIFICATION_TYPES.WEEKLY_SUMMARY, dateCreated: { gte: alreadySentSince } },
-      select: { id: true },
-    });
-    if (recent) continue;
+    const didSend = await prisma.$transaction(async (tx) => {
+      await lockDuplicateKey(tx, profile.id, WEEKLY_SUMMARY_LOCK);
+      const recent = await tx.notification.findFirst({
+        where: { businessProfileId: profile.id, type: NOTIFICATION_TYPES.WEEKLY_SUMMARY, dateCreated: { gte: alreadySentSince } },
+        select: { id: true },
+      });
+      if (recent) return false;
 
-    const week = { start: utcAddDays(today, -7), end: utcAddDays(today, -1) };
-    const date = { gte: week.start, lte: utcEndOfDay(week.end) };
-    const [expenses, sales] = await Promise.all([
-      prisma.expenseRecord.aggregate({
+      const week = { start: utcAddDays(today, -7), end: utcAddDays(today, -1) };
+      const date = { gte: week.start, lte: utcEndOfDay(week.end) };
+      const expenses = await tx.expenseRecord.aggregate({
         where: { businessProfileId: profile.id, ...COUNTED_EXPENSE, date },
         _sum: { amount: true },
         _count: { _all: true },
-      }),
-      prisma.salesReferenceRecord.aggregate({
+      });
+      const sales = await tx.salesReferenceRecord.aggregate({
         where: { businessProfileId: profile.id, date },
         _sum: { amount: true },
         _count: { _all: true },
-      }),
-    ]);
-    if (expenses._count._all === 0 && sales._count._all === 0) continue;
+      });
+      if (expenses._count._all === 0 && sales._count._all === 0) return false;
 
-    await createNotification(
-      profile.userId,
-      profile.id,
-      NOTIFICATION_TYPES.WEEKLY_SUMMARY,
-      weeklySummaryMessage(week, {
-        expenses: Number(expenses._sum.amount ?? 0),
-        expenseCount: expenses._count._all,
-        sales: Number(sales._sum.amount ?? 0),
-        salesCount: sales._count._all,
-      }),
-    );
-    sent += 1;
+      await createNotification(
+        profile.userId,
+        profile.id,
+        NOTIFICATION_TYPES.WEEKLY_SUMMARY,
+        weeklySummaryMessage(week, {
+          expenses: Number(expenses._sum.amount ?? 0),
+          expenseCount: expenses._count._all,
+          sales: Number(sales._sum.amount ?? 0),
+          salesCount: sales._count._all,
+        }),
+        undefined,
+        tx,
+      );
+      return true;
+    });
+    if (didSend) sent += 1;
   }
   return { sent };
 }

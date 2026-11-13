@@ -428,6 +428,15 @@ describe("recurring schedule watchdog", () => {
     expect((finding.reasons as string[])[0]).toBe("Monthly electricity is due today (2026-04-01) and has not been recorded yet");
   });
 
+  it("notifies once when two workers refresh the same profile at the same moment", async () => {
+    await declareSchedule({ nextDueDate: "2026-04-01" });
+    await Promise.all([
+      refreshRecurringPatterns(ctx.user.id, ctx.profile.id, RECURRING_ENABLED_CONFIG, utc("2026-03-30")),
+      refreshRecurringPatterns(ctx.user.id, ctx.profile.id, RECURRING_ENABLED_CONFIG, utc("2026-03-30")),
+    ]);
+    expect(await prisma.notification.count({ where: { type: "Recurring Schedule" } })).toBe(1);
+  });
+
   it("notifies about a missing schedule and does not duplicate on re-run", async () => {
     await declareSchedule({ nextDueDate: "2026-04-01" });
     await refreshRecurringPatterns(ctx.user.id, ctx.profile.id, RECURRING_ENABLED_CONFIG, utc("2026-04-10"));

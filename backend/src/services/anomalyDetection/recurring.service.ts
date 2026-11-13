@@ -163,6 +163,8 @@ async function notifyScheduleFinding(
   // that one reminder was not enough is easy; removing it after owners complain
   // about noise is the worse path. So: do not "unify" the notification string
   // with the finding's reason text.
+  // Race-safe only because callers upsert the finding first in this same
+  // transaction: that row lock makes a concurrent refresh wait, then see this row.
   const existing = await db.notification.findFirst({
     where: { businessProfileId, type: NOTIFICATION_TYPES.RECURRING_SCHEDULE, message },
     select: { id: true },
