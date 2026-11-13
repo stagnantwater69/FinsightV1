@@ -272,6 +272,7 @@ function DashboardContent({ navigation }: DashboardScreenProps<"DashboardHome">)
           onSwitch={selectProfile}
           unreadCount={unreadCount}
           onBellPress={() => navigation.navigate("Notifications")}
+          onCalendarPress={() => navigation.navigate("PaymentCalendar")}
         />
 
         {/*

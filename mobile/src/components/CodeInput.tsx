@@ -1,8 +1,9 @@
-import { forwardRef, useCallback, useRef, useState } from "react";
-import { type TextInputInstance, Platform, StyleSheet, TextInput, View, useWindowDimensions, type LayoutRectangle, type TextInputProps } from "react-native";
+import { forwardRef, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { type TextInputInstance, Animated, Platform, StyleSheet, TextInput, View, useWindowDimensions, type LayoutRectangle, type TextInputProps } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "../context/ThemeContext";
 import { MIN_RECOVERY_CODE_LENGTH, normaliseRecoveryCode } from "../lib/authValidation";
+import { useReducedMotion } from "../lib/useReducedMotion";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { TAP_FLOOR } from "./touchTarget";
 import { T } from "./ui";
@@ -12,10 +13,21 @@ type CodeInputProps = Omit<TextInputProps, "value" | "onChangeText" | "style" | 
   value: string;
   onChangeText: (value: string) => void;
   error?: string | null;
+  /** Called once each time the last box is filled with a digit. */
+  onComplete?: (code: string) => void;
 };
 
+/** A digit that pops into its box when typed. Still under Reduce Motion. */
+function PopDigit({ animate, children }: { animate: boolean; children: ReactNode }) {
+  const scale = useRef(new Animated.Value(animate ? 0.5 : 1)).current;
+  useEffect(() => {
+    if (animate) Animated.spring(scale, { toValue: 1, friction: 6, tension: 220, useNativeDriver: true }).start();
+  }, [animate, scale]);
+  return <Animated.View style={{ transform: [{ scale }] }}>{children}</Animated.View>;
+}
+
 export const CodeInput = forwardRef<TextInputInstance, CodeInputProps>(function CodeInput(
-  { label, value, onChangeText, error, onFocus, onBlur, onSelectionChange, onTouchStart, onTouchEnd, editable = true, testID, ...rest },
+  { label, value, onChangeText, error, onComplete, onFocus, onBlur, onSelectionChange, onTouchStart, onTouchEnd, editable = true, testID, ...rest },
   ref,
 ) {
   const t = useTheme();
@@ -33,6 +45,16 @@ export const CodeInput = forwardRef<TextInputInstance, CodeInputProps>(function 
   }, [ref]);
   const characters = Array.from(normaliseRecoveryCode(value));
   const count = Math.max(MIN_RECOVERY_CODE_LENGTH, characters.length);
+  const reduceMotion = useReducedMotion();
+  // The last box filled: tell the screen so it can check the code without a
+  // tap on Continue. Runs after the render, so the screen already holds the
+  // full value. Editing a digit and filling the box again fires it again.
+  const digits = characters.join("");
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+  useEffect(() => {
+    if (digits.length === MIN_RECOVERY_CODE_LENGTH && /^\d+$/.test(digits)) onCompleteRef.current?.(digits);
+  }, [digits]);
   const activeIndex = Math.min(Array.from(normaliseRecoveryCode(value.slice(0, selection.start))).length, count - 1);
   const selectedEnd = Array.from(normaliseRecoveryCode(value.slice(0, selection.end))).length;
   const minimumCellWidth = Math.max(32, typeScale.subpageTitle * fontScale * 0.7 + space.md);
@@ -121,9 +143,11 @@ export const CodeInput = forwardRef<TextInputInstance, CodeInputProps>(function 
                   opacity: editable ? 1 : 0.6,
                 }}
               >
-                <T style={{ fontFamily: font.displayBold, fontSize: typeScale.subpageTitle, color: t.textPrimary, textAlign: "center" }}>
-                  {characters[index] || " "}
-                </T>
+                <PopDigit key={characters[index] ?? ""} animate={!reduceMotion && Boolean(characters[index])}>
+                  <T style={{ fontFamily: font.displayBold, fontSize: typeScale.subpageTitle, color: t.textPrimary, textAlign: "center" }}>
+                    {characters[index] || " "}
+                  </T>
+                </PopDigit>
               </View>
             );
           })}
@@ -169,7 +193,12 @@ export const CodeInput = forwardRef<TextInputInstance, CodeInputProps>(function 
             {
               minHeight: TAP_FLOOR,
               padding: 0,
-              color: "transparent",
+              // Android drew this input's own digits beside the cell digits:
+              // a fully transparent text colour was not honoured there. A
+              // near-zero opacity hides them whatever the colour does, and
+              // stays above zero so TalkBack still finds the field.
+              color: Platform.OS === "android" ? "rgba(0,0,0,0.01)" : "transparent",
+              opacity: Platform.OS === "android" ? 0.02 : 1,
               backgroundColor: "transparent",
               fontFamily: font.displayBold,
               fontSize: typeScale.subpageTitle,

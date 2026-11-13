@@ -77,7 +77,7 @@ export function AddExpenseScreen({ navigation, route }: RecordsScreenProps<"AddE
       // The calendar shows its own "Payment recorded" status, so no flash here.
       navigation.setParams({ from: undefined });
       navigation.goBack();
-      navigation.navigate("Insights", { screen: "PaymentCalendar", params: { recorded: true } });
+      navigation.navigate("Dashboard", { screen: "PaymentCalendar", params: { recorded: true } });
       return;
     }
     setFlash("Expense saved.");

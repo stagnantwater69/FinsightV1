@@ -107,7 +107,8 @@ describe("arriving with nothing in the URL", () => {
     verifyOtp.mockResolvedValue({ data: { session: null }, error: null });
     const user = userEvent.setup();
     renderPage({ email: EMAIL });
-    await user.type(await screen.findByLabelText(/recovery code/i), "75324744");
+    await user.click(await screen.findByLabelText(/recovery code/i));
+    await user.paste("75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
     expect(await screen.findByText(/that didn't work/i)).toBeInTheDocument();
     expect(disposeIsolatedAuthClient).toHaveBeenCalled();
@@ -119,7 +120,8 @@ describe("arriving with nothing in the URL", () => {
     verifyOtp.mockRejectedValueOnce(new Error("Unknown email owner@example.com"));
     const user = userEvent.setup();
     renderPage({ email: EMAIL });
-    await user.type(await screen.findByLabelText(/recovery code/i), "75324744");
+    await user.click(await screen.findByLabelText(/recovery code/i));
+    await user.paste("75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
     expect(await screen.findByText(/couldn't check that code/i)).toBeInTheDocument();
     expect(screen.queryByText(/unknown email/i)).toBeNull();
@@ -145,7 +147,8 @@ describe("arriving with nothing in the URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(screen.getByLabelText(/recovery code/i), "75324744");
+    await user.click(screen.getByLabelText(/recovery code/i));
+    await user.paste("75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
     expect(await screen.findByLabelText(/^new password/i)).toBeTruthy();
@@ -156,11 +159,22 @@ describe("arriving with nothing in the URL", () => {
   });
 
   /** People paste the code as it is grouped in the email. */
+  it("checks a six-digit code as soon as the last box is filled, without Continue", async () => {
+    verifyOtp.mockResolvedValue(sessionResult());
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.type(screen.getByLabelText(/recovery code/i), "082450");
+
+    expect(await screen.findByLabelText(/^new password/i)).toBeTruthy();
+    expect(verifyOtp).toHaveBeenCalledTimes(1);
+    expect(verifyOtp).toHaveBeenCalledWith({ email: EMAIL, token: "082450", type: "recovery" });
+  });
+
   it.each([
-    ["08 2450", "082450"],
     ["0753-2474", "07532474"],
     ["01234 56789", "0123456789"],
-  ])("submits the complete code %s only after Continue is pressed", async (raw, token) => {
+  ])("submits the longer pasted code %s only after Continue is pressed", async (raw, token) => {
     verifyOtp.mockResolvedValue(sessionResult());
     const user = userEvent.setup();
     renderPage();
@@ -189,7 +203,7 @@ describe("arriving with nothing in the URL", () => {
   it("requests another recovery code and disables repeat delivery during the cooldown", async () => {
     const user = userEvent.setup();
     renderPage({ email: EMAIL });
-    await user.click(await screen.findByRole("button", { name: "Get another code" }));
+    await user.click(await screen.findByRole("button", { name: "Resend code" }));
     expect(apiPost).toHaveBeenCalledWith("/auth/recover-password", { email: EMAIL, platform: "web" });
     const resend = await screen.findByRole("button", { name: /resend code in/i });
     expect(resend).toBeDisabled();
@@ -209,7 +223,8 @@ describe("arriving with nothing in the URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(screen.getByLabelText(/recovery code/i), "75324744");
+    await user.click(screen.getByLabelText(/recovery code/i));
+    await user.paste("75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
     expect(await screen.findByText(/that didn't work/i)).toBeTruthy();
@@ -231,7 +246,8 @@ describe("arriving with nothing in the URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(screen.getByLabelText(/recovery code/i), "75324744");
+    await user.click(screen.getByLabelText(/recovery code/i));
+    await user.paste("75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
     await user.type(await screen.findByLabelText(/^new password/i), NEW_PASSWORD);
@@ -260,7 +276,8 @@ describe("arriving with nothing in the URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(screen.getByLabelText(/recovery code/i), "75324744");
+    await user.click(screen.getByLabelText(/recovery code/i));
+    await user.paste("75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.type(await screen.findByLabelText(/^new password/i), NEW_PASSWORD);
     await user.type(screen.getByLabelText(/confirm new password/i), NEW_PASSWORD);
@@ -280,7 +297,8 @@ describe("arriving with nothing in the URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(screen.getByLabelText(/recovery code/i), "75324744");
+    await user.click(screen.getByLabelText(/recovery code/i));
+    await user.paste("75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.type(await screen.findByLabelText(/^new password/i), NEW_PASSWORD);
     await user.type(screen.getByLabelText(/confirm new password/i), NEW_PASSWORD);
@@ -320,7 +338,7 @@ describe("the handover from the request screen", () => {
   it("changes recipient through the email step and clears the previous code", async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.type(await screen.findByLabelText(/recovery code/i), "082450");
+    await user.type(await screen.findByLabelText(/recovery code/i), "08245");
     await user.click(screen.getByRole("button", { name: "Change email" }));
     const email = await screen.findByLabelText(/^email/i);
     expect(email).toHaveValue(EMAIL);
@@ -362,7 +380,8 @@ describe("a code that dies between the two steps", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(screen.getByLabelText(/recovery code/i), "75324744");
+    await user.click(screen.getByLabelText(/recovery code/i));
+    await user.paste("75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
     await user.type(await screen.findByLabelText(/^new password/i), NEW_PASSWORD);

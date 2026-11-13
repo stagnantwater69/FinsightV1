@@ -77,8 +77,8 @@ const RESEND_COOLDOWN_SECONDS = 60;
  * animation: Reduce Motion has no opinion about it, and the number is text,
  * which is why the label below reads it out rather than only showing a bar.
  */
-function useResendCooldown(seconds = RESEND_COOLDOWN_SECONDS) {
-  const [remaining, setRemaining] = useState(0);
+function useResendCooldown(seconds = RESEND_COOLDOWN_SECONDS, running = false) {
+  const [remaining, setRemaining] = useState(running ? seconds : 0);
 
   useEffect(() => {
     if (remaining <= 0) return;
@@ -279,11 +279,10 @@ function SuccessPanel({
  * button, because a disabled control with no stated reason is the version an
  * owner taps repeatedly and then reports as broken.
  */
-function resendLabel(remaining: number, sending: boolean, sent: boolean): string {
+function resendLabel(remaining: number, sending: boolean): string {
   if (sending) return "Sending…";
-  if (remaining > 0) return `Send again in ${remaining}s`;
-  if (sent) return "Send it again";
-  return "Didn't arrive? Send it again";
+  if (remaining > 0) return `Resend code in ${remaining}s`;
+  return "Resend code";
 }
 
 export function LoginScreen({ navigation }: any) {
@@ -686,6 +685,9 @@ export function RegisterScreen({ navigation }: any) {
           onSubmitEditing={() => {
             if (!verifying) confirmCode();
           }}
+          onComplete={() => {
+            if (!verifying) confirmCode();
+          }}
         />
         {codeError ? <ErrorNote>{codeError}</ErrorNote> : null}
         {/*
@@ -707,7 +709,7 @@ export function RegisterScreen({ navigation }: any) {
           style={{ marginTop: space.md }}
         />
         <Button
-          title={resent && cooldown.remaining === 0 ? "Sent — check your inbox" : resendLabel(cooldown.remaining, resending, resent)}
+          title={resent && cooldown.remaining === 0 ? "Sent — check your inbox" : resendLabel(cooldown.remaining, resending)}
           variant="ghost"
           disabled={resending || cooldown.remaining > 0}
           onPress={resend}
@@ -1009,7 +1011,7 @@ export function RecoverPasswordScreen({ navigation, route, initialEmail = "", on
             style={{ marginTop: space.md }}
           />
           <Button
-            title={resendLabel(cooldown.remaining, busy, true)}
+            title={resendLabel(cooldown.remaining, busy)}
             variant="secondary"
             disabled={busy || cooldown.remaining > 0}
             onPress={submit}
@@ -1083,14 +1085,11 @@ export function RecoverPasswordScreen({ navigation, route, initialEmail = "", on
 export function ResetPasswordScreen({
   email: sentTo = "",
   onDone,
-  onNewCode,
   onChangeEmail,
 }: {
   /** The address the code was sent to, when we know it. May be empty. */
   email?: string;
   onDone: () => void;
-  /** Back to the "email me a code" form. Absent when there is nowhere to go. */
-  onNewCode?: (email: string) => void;
   onChangeEmail?: (email: string) => void;
 }) {
   const t = useTheme();
@@ -1112,6 +1111,12 @@ export function ResetPasswordScreen({
   const [codeError, setCodeError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [newCodeFocused, setNewCodeFocused] = useState(false);
+  // Arriving with an address means a code has just been sent to it, so the
+  // resend starts on its countdown.
+  const cooldown = useResendCooldown(RESEND_COOLDOWN_SECONDS, Boolean(sentTo.trim()));
+  const [resending, setResending] = useState(false);
+  const [resentNotice, setResentNotice] = useState(false);
+  const resendInFlight = useRef(false);
   const verificationInFlight = useRef(false);
   /** What the verified code bought: the pair the link used to carry. */
   const [tokens, setTokens] = useState<{ accessToken: string; refreshToken: string } | null>(null);
@@ -1146,16 +1151,38 @@ export function ResetPasswordScreen({
     setCodeFieldErrors((prev) => (prev[k as RecoveryCodeField] ? { ...prev, [k]: undefined } : prev));
   };
 
-  function leaveCodeStep(changeEmail: boolean) {
+  /** Sends a fresh code to the same address, without leaving this screen. */
+  async function resend() {
+    if (resendInFlight.current || verificationInFlight.current || cooldown.remaining > 0) return;
+    resendInFlight.current = true;
+    setResending(true);
+    setCodeError(null);
+    setResentNotice(false);
+    try {
+      await api.post("/auth/recover-password", { email: codeForm.email.trim(), platform: "mobile" });
+      // The earlier code may no longer work, so what was typed goes with it.
+      setCodeForm((current) => ({ ...current, code: "" }));
+      setCodeFieldErrors({});
+      setResentNotice(true);
+      cooldown.start();
+    } catch (err) {
+      setCodeError(errorMessage(err));
+    } finally {
+      resendInFlight.current = false;
+      setResending(false);
+    }
+  }
+
+  function changeEmail() {
     if (verificationInFlight.current) return;
+    setResentNotice(false);
     setCodeForm((current) => ({ ...current, code: "" }));
     setCodeFieldErrors({});
     setCodeError(null);
     setForm({ newPassword: "", confirmPassword: "" });
     setFieldErrors({});
     setError(null);
-    if (changeEmail && onChangeEmail) onChangeEmail(codeForm.email);
-    else if (!changeEmail && onNewCode) onNewCode(codeForm.email);
+    if (onChangeEmail) onChangeEmail(codeForm.email);
     else setChoosingEmail(true);
   }
 
@@ -1344,12 +1371,14 @@ export function ResetPasswordScreen({
           setCodeFieldErrors({});
           setCodeError(null);
           setChoosingEmail(false);
+          cooldown.start();
         }}
       />
     );
   }
 
   if (!tokens) {
+    const resendBlocked = verifying || resending || cooldown.remaining > 0;
     return (
       <AuthShell
         title="Enter your recovery code"
@@ -1361,7 +1390,7 @@ export function ResetPasswordScreen({
           <T selectable style={{ textAlign: "center", color: t.textPrimary, fontFamily: font.sansSemibold }}>
             {codeForm.email}
           </T>
-          <Button title="Change email" variant="ghost" disabled={verifying} onPress={() => leaveCodeStep(true)} focusRingColor={t.brandText} />
+          <Button title="Change email" variant="ghost" disabled={verifying} onPress={changeEmail} focusRingColor={t.brandText} />
         </View>
         {/*
           A NUMBER PAD, and the OS's own one-time-code offer.
@@ -1396,15 +1425,18 @@ export function ResetPasswordScreen({
           onSubmitEditing={() => {
             if (!verifying) verify();
           }}
+          onComplete={() => {
+            if (!verifying) verify();
+          }}
         />
         <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center", columnGap: space.xs }}>
           <T variant="caption">Didn't receive it?</T>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Get another code"
-            onPress={() => leaveCodeStep(false)}
-            disabled={verifying}
-            accessibilityState={{ disabled: verifying }}
+            accessibilityLabel={resendLabel(cooldown.remaining, resending)}
+            onPress={resend}
+            disabled={resendBlocked}
+            accessibilityState={{ disabled: resendBlocked }}
             onFocus={() => setNewCodeFocused(true)}
             onBlur={() => setNewCodeFocused(false)}
             style={({ pressed }) => ({
@@ -1414,14 +1446,19 @@ export function ResetPasswordScreen({
               borderWidth: 1,
               borderColor: newCodeFocused ? t.brandText : "transparent",
               borderRadius: radius.sm,
-              opacity: verifying ? 0.6 : pressed ? 0.65 : 1,
+              opacity: resendBlocked ? 0.6 : pressed ? 0.65 : 1,
             })}
           >
-            <T variant="caption" style={{ color: t.brandText, fontFamily: font.sansSemibold, textDecorationLine: "underline" }}>
-              Get another code
+            <T variant="caption" style={{ color: resendBlocked ? t.textSecondary : t.brandText, fontFamily: font.sansSemibold, textDecorationLine: resendBlocked ? "none" : "underline" }}>
+              {resendLabel(cooldown.remaining, resending)}
             </T>
           </Pressable>
         </View>
+        {resentNotice ? (
+          <T variant="caption" accessibilityLiveRegion="polite" style={{ textAlign: "center" }}>
+            If that email is registered, a new code is on its way. Use the newest email.
+          </T>
+        ) : null}
         {codeError ? <ErrorNote>{codeError}</ErrorNote> : null}
         <Button
           title="Continue"

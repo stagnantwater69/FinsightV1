@@ -1,4 +1,4 @@
-import { useRef, useState, type InputHTMLAttributes, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type InputHTMLAttributes, type PointerEvent } from "react";
 import { MAX_RECOVERY_CODE_LENGTH, MIN_RECOVERY_CODE_LENGTH, normaliseRecoveryCode } from "../lib/authValidation";
 import { TextInput } from "./Field";
 import "./code-input.css";
@@ -12,6 +12,12 @@ export function CodeInput({ value, className = "", ...props }: CodeInputProps) {
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const characters = Array.from(normaliseRecoveryCode(value));
   const count = Math.max(MIN_RECOVERY_CODE_LENGTH, characters.length);
+  // The last box filled: submit the form, so the code is checked without a
+  // click on Continue. Editing a digit and filling the box again resubmits.
+  const digits = characters.join("");
+  useEffect(() => {
+    if (digits.length === MIN_RECOVERY_CODE_LENGTH && /^\d+$/.test(digits)) input.current?.form?.requestSubmit();
+  }, [digits]);
   const start = normaliseRecoveryCode(value.slice(0, selection.start)).length;
   const end = normaliseRecoveryCode(value.slice(0, selection.end)).length;
 
@@ -63,7 +69,7 @@ export function CodeInput({ value, className = "", ...props }: CodeInputProps) {
             data-active={focused && index === Math.min(start, count - 1)}
             data-selected={focused && index >= start && index < end}
           >
-            {characters[index] || (focused && index === start ? <span className="code-input__caret" /> : null)}
+            {characters[index] ? <span key={characters[index]} className="inline-block animate-pop-in">{characters[index]}</span> : (focused && index === start ? <span className="code-input__caret" /> : null)}
           </span>
         ))}
       </div>
@@ -86,7 +92,7 @@ export function CodeResend({ remaining, sending, disabled, onResend }: {
         onClick={onResend}
         className="min-h-tap rounded px-1 font-medium text-ink-800 underline underline-offset-2 hover:text-tone-brand disabled:cursor-not-allowed disabled:text-ink-500"
       >
-        {sending ? "Sending…" : remaining > 0 ? `Resend code in ${remaining}s` : "Get another code"}
+        {sending ? "Sending…" : remaining > 0 ? `Resend code in ${remaining}s` : "Resend code"}
       </button>
     </div>
   );

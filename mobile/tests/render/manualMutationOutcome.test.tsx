@@ -228,7 +228,7 @@ describe("recording a payment from the payment calendar", () => {
     expect(setParams).toHaveBeenCalledWith({ prefill: undefined });
     post.mockImplementation(async (_path: string, payload: { idempotencyKey: string }) => ({ ...result("expense"), payload }));
     await fireEvent.press(q.getByRole("button", { name: "Save expense" }));
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith("Insights", { screen: "PaymentCalendar", params: { recorded: true } }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("Dashboard", { screen: "PaymentCalendar", params: { recorded: true } }));
     expect(post).toHaveBeenCalledWith("/records/expenses", expect.objectContaining({ description: "Shop rent", vendor: "Landlord", categoryId: 10, amount: 12000 }), expect.anything());
     expect(goBack).toHaveBeenCalledTimes(1);
   });

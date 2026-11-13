@@ -4,7 +4,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { ContentScrollView } from "../components/ContentScrollView";
 import { FAB_CLEARANCE } from "../components/AskFinSightFab";
-import { InsightHeader } from "../components/InsightsShared";
+import { SubpageHeader } from "../components/SubpageKit";
 import { SkeletonCard } from "../components/Skeleton";
 import { TAP_FLOOR } from "../components/touchTarget";
 import { Button, Callout, Card, ConfirmSheet, EmptyState, ErrorNote, Money, Screen, T } from "../components/ui";
@@ -33,7 +33,7 @@ import type {
 } from "../lib/types";
 import type { Palette } from "../theme/palette";
 import { font, radius, space, typeScale } from "../theme/tokens";
-import type { InsightsScreenProps } from "../navigation/types";
+import type { DashboardScreenProps } from "../navigation/types";
 
 /*
  * The payment calendar, the phone version of web's /calendar.
@@ -105,7 +105,7 @@ type Confirming =
   | { kind: "skip"; schedule: RecurringSchedule; nextDue: string }
   | { kind: "again"; schedule: RecurringSchedule; last: string };
 
-export function PaymentCalendarScreen({ navigation, route }: InsightsScreenProps<"PaymentCalendar">) {
+export function PaymentCalendarScreen({ navigation, route }: DashboardScreenProps<"PaymentCalendar">) {
   const t = useTheme();
   const { selected, categories } = useBusinessProfiles();
   const today = businessToday(selected?.timezone);
@@ -384,38 +384,39 @@ export function PaymentCalendarScreen({ navigation, route }: InsightsScreenProps
   const openClosed = openDay ? isClosedDay(openDay, weekly, overrides) : false;
 
   return (
-    <Screen safeTop>
+    <Screen>
+      <SubpageHeader
+        title="Payment calendar"
+        onBack={() => {
+          if (navigation.canGoBack()) navigation.goBack();
+          else navigation.navigate("DashboardHome");
+        }}
+        right={
+          hasAnything ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add a recurring payment"
+              onPress={() => openSchedule()}
+              style={({ pressed }) => ({
+                width: TAP_FLOOR,
+                height: TAP_FLOOR,
+                borderRadius: radius.full,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: pressed ? t.surfaceStrong : t.surfaceRaised,
+                borderWidth: 1,
+                borderColor: t.border,
+              })}
+            >
+              <Ionicons name="add" size={22} color={t.brandHeading} />
+            </Pressable>
+          ) : undefined
+        }
+      />
       <ContentScrollView
         contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl + FAB_CLEARANCE, gap: space.lg }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} tintColor={t.brandFill} />}
       >
-        <InsightHeader
-          navigation={navigation}
-          active="PaymentCalendar"
-          title="Payment calendar"
-          right={
-            hasAnything ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Add a recurring payment"
-                onPress={() => openSchedule()}
-                style={({ pressed }) => ({
-                  width: TAP_FLOOR,
-                  height: TAP_FLOOR,
-                  borderRadius: radius.full,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: pressed ? t.surfaceStrong : t.surfaceRaised,
-                  borderWidth: 1,
-                  borderColor: t.border,
-                })}
-              >
-                <Ionicons name="add" size={22} color={t.brandHeading} />
-              </Pressable>
-            ) : undefined
-          }
-        />
-
         {loadError ? (
           <Callout tone="warn">
             <T variant="body" accessibilityRole="alert">Some payments couldn’t load. {loadError}</T>
