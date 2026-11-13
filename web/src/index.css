@@ -179,33 +179,30 @@
     --shadow-lg-a: 0.16;
   }
 
-  /* ---------------------------------------------------------------
-     LIGHT — cooler and crisper than Classic.
-     ---------------------------------------------------------------
-     Not a duplicate of Classic: the neutrals are true blue-greys rather than
-     teal-cooled, and the page sits a step brighter. For anyone who finds
-     Classic's warmth muddy, or who is reading in bright light. */
+  /* Light uses mint-neutral layers to separate white cards without a blue cast. */
   [data-theme="light"] {
-    --canvas-glow-a: 184 230 219;
-    --canvas-glow-b: 206 222 245;
+    /* Cool mint pools, no cream: the picker promises "cooler and brighter",
+       and a warm glow read as a yellow haze behind white cards. */
+    --canvas-glow-a: 214 241 233;
+    --canvas-glow-b: 233 244 240;
     --paper: 255 255 255;
     /* One step darker than white-on-near-white: the page sits under the
        cards instead of matching them, and hairlines are visible. */
-    --paper-50: 238 242 247;
-    --paper-100: 230 236 243;
-    --paper-200: 212 220 230;
+    --paper-50: 244 248 246;
+    --paper-100: 234 241 238;
+    --paper-200: 216 228 222;
 
-    --ink-50: 248 250 252;
-    --ink-100: 230 236 243;
-    --ink-200: 212 220 230;
-    --ink-300: 186 198 213;
-    --ink-400: 128 143 165;
-    --ink-500: 82 97 118;
-    --ink-600: 71 85 105;
-    --ink-700: 51 65 85;
-    --ink-800: 30 41 59;
-    --ink-900: 15 23 42;
-    --ink-950: 2 6 23;
+    --ink-50: 247 250 248;
+    --ink-100: 234 241 238;
+    --ink-200: 216 228 222;
+    --ink-300: 174 193 183;
+    --ink-400: 124 145 134;
+    --ink-500: 83 103 95;
+    --ink-600: 64 86 76;
+    --ink-700: 48 70 61;
+    --ink-800: 32 53 44;
+    --ink-900: 20 43 34;
+    --ink-950: 10 27 20;
 
     --tint-brand: 222 246 240;
     --tone-brand: 15 80 75;
@@ -219,9 +216,9 @@
     --tint-info: 225 241 254;
     --tone-info: 12 74 110;
     --edge-info: 160 212 245;
-    --tint-neutral: 226 232 240;
-    --tone-neutral: 71 85 105;
-    --edge-neutral: 206 214 225;
+    --tint-neutral: 234 241 238;
+    --tone-neutral: 64 86 76;
+    --edge-neutral: 216 228 222;
 
     --sev-critical-bg: 254 242 242;
     --sev-critical-edge: 254 226 226;
@@ -246,29 +243,26 @@
     --chart-emphasis: 13 127 114;
     --chart-muted: 205 213 215;
 
-    /* The one theme where the rail itself goes light rather than staying the
-       fixed dark teal — a near-white surface instead of the deep gradient,
-       so it reads as part of this theme's cooler, brighter surface rather
-       than a fixed dark panel bolted onto a light page. The gradient's foot
-       is brand-50 rather than a neutral grey — a faint mint wash top-to-
-       bottom is the "still FinSight" cue a flat white panel would lose. */
+    /* A near-white rail, framed by its brand hairline (see .surface-sidebar),
+       so navigation reads as clean chrome rather than a tinted panel. */
     --sidebar-from: 255 255 255;
-    --sidebar-to: 228 245 240;
+    --sidebar-to: 248 251 250;
 
-    /* Dark text and a dark wash source, because the rail is light here —
-       see the sidebar note in tailwind.config.js. sidebar-accent reuses the
-       same brand-600 the .eyebrow rule below already uses on light surfaces. */
-    --sidebar-ink: 15 23 42;
-    --sidebar-muted: 71 85 105;
+    /* Dark text, because the rail is light here — see the sidebar note in
+       tailwind.config.js. The wash source is brand-600, not the text colour:
+       a dark-ink wash turned the selected item grey, a brand wash keeps it
+       mint. sidebar-accent reuses the same brand-600 as .eyebrow. */
+    --sidebar-ink: 20 43 34;
+    --sidebar-muted: 64 86 76;
     --sidebar-accent: 13 127 114;
-    --sidebar-fg: 15 23 42;
+    --sidebar-fg: 13 127 114;
 
-    /* Neutral rather than green-tinted, to match the cooler neutrals. */
-    --shadow: 15 23 42;
-    --shadow-sm-a: 0.1;
-    --shadow-sm-b: 0.07;
-    --shadow-md-a: 0.13;
-    --shadow-lg-a: 0.16;
+    /* Quiet green shadows lift cards without darkening the canvas. */
+    --shadow: 20 43 34;
+    --shadow-sm-a: 0.06;
+    --shadow-sm-b: 0.04;
+    --shadow-md-a: 0.09;
+    --shadow-lg-a: 0.13;
   }
 
   /* ---------------------------------------------------------------
@@ -278,20 +272,24 @@
      and ink-50 is nearly black. That is the whole reason a component can say
      `text-ink-900` once and be correct in every theme.
 
-     Surfaces are lifted rather than pure black: #0e1415 page, #151d1e cards.
+     Surfaces are lifted rather than pure black: #0b1011 page, #172022 cards.
      Pure black plus a bright card is a harsher edge than an OLED saving is
      worth, and the near-black keeps the teal shadow from disappearing. */
   [data-theme="dark"] {
-    --paper: 21 29 30;
-    --paper-50: 14 20 21;
-    --paper-100: 29 39 41;
-    --paper-200: 43 55 57;
+    /* A wider step between page and card than before (it was ~3% lightness),
+       so cards lift off the page instead of blending into it, and borders
+       are visible without being bright. */
+    --paper: 23 32 34;
+    --paper-50: 11 16 17;
+    --paper-100: 32 43 45;
+    --paper-200: 47 61 63;
 
-    --ink-50: 14 20 21;
-    --ink-100: 29 39 41;
-    --ink-200: 43 55 57;
+    --ink-50: 11 16 17;
+    --ink-100: 32 43 45;
+    --ink-200: 47 61 63;
     --ink-300: 70 88 91;
-    --ink-400: 124 144 149;
+    /* 4.7:1 on paper-100, the lightest surface it sits on. */
+    --ink-400: 130 150 155;
     --ink-500: 156 175 179;
     --ink-600: 182 197 200;
     --ink-700: 204 216 218;
@@ -846,7 +844,8 @@
      the same brightness as the floor and the screen read as flat. Two soft
      radial pools of the brand's mint, fixed to the viewport so they stay put
      while the content scrolls, give the white cards something to sit above.
-     Dark keeps its plain surface: the glow is already there. */
+     Dark gets one faint teal pool at the top: on a flat near-black page the
+     screen had no sense of where light comes from. */
   [data-theme="classic"] .app-canvas,
   [data-theme="light"] .app-canvas {
     background-color: rgb(var(--paper-50));
@@ -855,6 +854,12 @@
       radial-gradient(56rem 34rem at 18% -6%, rgb(var(--canvas-glow-b) / 0.95), transparent 72%),
       radial-gradient(48rem 40rem at 6% 78%, rgb(var(--canvas-glow-a) / 0.32), transparent 70%),
       linear-gradient(180deg, rgb(var(--canvas-glow-b) / 0.45), transparent 32rem);
+    background-attachment: fixed;
+  }
+
+  [data-theme="dark"] .app-canvas {
+    background-color: rgb(var(--paper-50));
+    background-image: radial-gradient(70rem 32rem at 70% -10%, rgb(46 194 172 / 0.07), transparent 70%);
     background-attachment: fixed;
   }
 
@@ -960,6 +965,33 @@
     background-image: radial-gradient(circle, rgba(146, 238, 218, 0.18), transparent 70%);
   }
 
+  /* A fresh Ask FinSight answer settles in one block at a time, so the eye
+     reads it top to bottom instead of meeting a finished wall of text. Only
+     the reply that arrived while the drawer was open gets this; the global
+     reduced-motion rule below drops both the movement and the stagger. */
+  .chat-reveal > * > * {
+    animation: chat-reveal 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .chat-reveal > * > :nth-child(2) {
+    animation-delay: 90ms;
+  }
+  .chat-reveal > * > :nth-child(3) {
+    animation-delay: 180ms;
+  }
+  .chat-reveal > * > :nth-child(n + 4) {
+    animation-delay: 270ms;
+  }
+  @keyframes chat-reveal {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
   /* ---------------------------------------------------------------
      The confirmation dialog.
      ---------------------------------------------------------------
@@ -1056,9 +1088,9 @@
      The mockup leans on this to give each panel a two-level heading without
      spending a second line of large type on it.
 
-     brand-600 on a white card measures 4.89:1, but on the dark theme's #151d1e
-     card it is only 2.6:1 — so Dark steps up to brand-300, which measures
-     10.2:1 there. Same class, legible in both. */
+     brand-600 on a white card measures 4.89:1, but on the dark theme's #172022
+     card it is only 3.4:1, under the 4.5:1 small text needs — so Dark steps
+     up to brand-300, which measures 9.9:1 there. Same class, legible in both. */
   .eyebrow {
     @apply text-[11px] font-bold uppercase tracking-[0.14em] text-brand-600;
   }
