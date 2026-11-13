@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ThumbsDown, ThumbsUp } from "lucide-react";
+import { Copy, ThumbsDown, ThumbsUp } from "lucide-react";
 import { api } from "../../lib/api";
 import { getErrorMessage } from "../../lib/errors";
 import { CHAT_PAGE_ROUTES, recordHref } from "../../lib/chatLinks";
@@ -9,7 +9,7 @@ import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { watchRecurringPattern } from "../../pages/expenseInsight/reviewRequests";
 import { Button } from "../Button";
 import { Money } from "../Money";
-import { IconArrowRight } from "../icons";
+import { IconArrowRight, IconChevronDown } from "../icons";
 import type { ChatAction, ChatAnswerMetadata } from "../../lib/types";
 
 /**
@@ -22,89 +22,115 @@ import type { ChatAction, ChatAnswerMetadata } from "../../lib/types";
  * runs only when the owner presses it, through the same endpoint the review
  * queue's own buttons use.
  *
- * Follow-ups and actions are shown on the LATEST reply only: an older reply's
- * suggestions belong to a moment that has passed, and its flag may have been
- * reviewed since.
+ * Actions are shown on the LATEST reply only: an older reply's suggestions
+ * belong to a moment that has passed, and its flag may have been reviewed
+ * since. Follow-up questions are not drawn here at all; the drawer shows the
+ * latest reply's in one row above the composer.
  */
 
 interface Props {
   metadata: ChatAnswerMetadata;
+  /** The reply text, for Copy answer. */
+  content: string;
   latest: boolean;
   feedback: "up" | "down" | null;
-  onFollowUp: (question: string) => void;
   onRate: (feedback: "up" | "down" | null) => void;
   /** Leaving the drawer for a page closes it, so the page is not under a dialog. */
   onNavigate: () => void;
 }
 
-const chipClass =
-  "inline-flex min-h-tap items-center gap-2 rounded-lg border border-paper-200 bg-paper px-3 py-1.5 text-left text-xs text-ink-700 transition hover:border-brand-200 hover:bg-tint-brand";
+const linkCardClass =
+  "flex min-h-tap items-center gap-3 rounded-xl border border-paper-200 bg-paper px-3 py-2 text-left text-sm transition hover:border-brand-200 hover:bg-tint-brand";
 
-export function AnswerExtras({ metadata, latest, feedback, onFollowUp, onRate, onNavigate }: Props) {
-  const { references, pages, actions, followUps, period, amountCheck } = metadata;
+export function AnswerExtras({ metadata, content, latest, feedback, onRate, onNavigate }: Props) {
+  const { references, pages, actions, period, amountCheck } = metadata;
+  const toast = useToast();
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const recordCount = `${references.length} ${references.length === 1 ? "record" : "records"}`;
+
+  async function copyAnswer() {
+    try {
+      await navigator.clipboard.writeText(content);
+      toast("Answer copied");
+    } catch {
+      toast("Couldn't copy the answer. Select the text and copy it instead.");
+    }
+  }
 
   return (
-    <div className="ml-8 flex max-w-[85%] flex-col gap-2">
-      {references.length > 0 || pages.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {references.map((reference) => (
-            <Link
-              key={`${reference.recordType}-${reference.id}`}
-              to={recordHref(reference)}
-              onClick={onNavigate}
-              className={chipClass}
-            >
-              <span className="min-w-0">
-                <span className="block truncate font-medium text-ink-900">{reference.label}</span>
-                <span className="text-ink-500">
-                  <Money value={reference.amount} decimals /> · {reference.date}
-                </span>
-              </span>
-              <IconArrowRight className="h-4 w-4 shrink-0 text-tone-brand" />
-            </Link>
-          ))}
-          {pages.map((page) => (
-            <Link key={page.key} to={CHAT_PAGE_ROUTES[page.key]} onClick={onNavigate} className={chipClass}>
-              <span className="font-medium text-ink-900">Open {page.label}</span>
-              <IconArrowRight className="h-4 w-4 shrink-0 text-tone-brand" />
-            </Link>
-          ))}
+    <div className="flex flex-col gap-2">
+      {/*
+        Where the answer came from, collapsed to one line. The records are the
+        ones the server put in this message's context, so opening the list is
+        how an owner checks the answer against their own books.
+      */}
+      {references.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => setSourcesOpen((open) => !open)}
+            aria-expanded={sourcesOpen}
+            className="tap flex items-center gap-1.5 self-start rounded-lg text-xs font-semibold text-ink-600 transition hover:text-ink-900"
+          >
+            Based on {recordCount}
+            {period ? ` · ${period}` : null}
+            <IconChevronDown className={`h-4 w-4 transition-transform ${sourcesOpen ? "rotate-180" : ""}`} />
+          </button>
+          {sourcesOpen ? (
+            <div className="flex animate-pop-down flex-col gap-2">
+              {references.map((reference) => (
+                <Link
+                  key={`${reference.recordType}-${reference.id}`}
+                  to={recordHref(reference)}
+                  onClick={onNavigate}
+                  className={linkCardClass}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-ink-900">{reference.label}</span>
+                    <span className="text-xs text-ink-500">
+                      <Money value={reference.amount} decimals /> · {reference.date}
+                    </span>
+                  </span>
+                  <IconArrowRight className="h-4 w-4 shrink-0 text-tone-brand" />
+                </Link>
+              ))}
+            </div>
+          ) : null}
         </div>
+      ) : period ? (
+        <p className="text-xs text-ink-500">Based on your records for {period}.</p>
       ) : null}
 
-      {latest && actions.length > 0 ? <ActionRow actions={actions} onNavigate={onNavigate} /> : null}
-
-      {period || amountCheck === "trimmed" ? (
+      {amountCheck === "trimmed" ? (
         <p className="text-xs text-ink-500">
-          {period ? `Based on your records for ${period}.` : null}
-          {period && amountCheck === "trimmed" ? " " : null}
-          {amountCheck === "trimmed"
-            ? "Part of this answer was removed because it used a figure FinSight couldn't find in your records."
-            : null}
+          Part of this answer was removed because it used a figure FinSight couldn't find in your records.
         </p>
       ) : null}
 
-      {latest && followUps.length > 0 ? (
-        <div className="flex flex-wrap gap-2" aria-label="Suggested follow-up questions">
-          {followUps.map((question) => (
-            <button
-              key={question}
-              type="button"
-              onClick={() => onFollowUp(question)}
-              className="min-h-tap rounded-full border border-brand-200 px-3 text-xs text-tone-brand transition hover:bg-tint-brand"
-            >
-              {question}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {pages.map((page) => (
+        <Link key={page.key} to={CHAT_PAGE_ROUTES[page.key]} onClick={onNavigate} className={linkCardClass}>
+          <span className="flex-1 font-medium text-ink-900">Open {page.label}</span>
+          <IconArrowRight className="h-4 w-4 shrink-0 text-tone-brand" />
+        </Link>
+      ))}
+
+      {latest && actions.length > 0 ? <ActionRow actions={actions} onNavigate={onNavigate} /> : null}
 
       <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => void copyAnswer()}
+          className="tap flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-ink-600 transition hover:bg-paper-100 hover:text-ink-800"
+        >
+          <Copy aria-hidden size={14} />
+          Copy answer
+        </button>
+        <span className="flex-1" />
         <RateButton label="Helpful" active={feedback === "up"} onClick={() => onRate(feedback === "up" ? null : "up")}>
-          <ThumbsUp aria-hidden size={14} />
+          <ThumbsUp aria-hidden size={16} fill={feedback === "up" ? "currentColor" : "none"} />
         </RateButton>
         <RateButton label="Not helpful" active={feedback === "down"} onClick={() => onRate(feedback === "down" ? null : "down")}>
-          <ThumbsDown aria-hidden size={14} />
+          <ThumbsDown aria-hidden size={16} fill={feedback === "down" ? "currentColor" : "none"} />
         </RateButton>
       </div>
     </div>
@@ -128,8 +154,8 @@ function RateButton({
       aria-label={label}
       aria-pressed={active}
       onClick={onClick}
-      className={`tap flex h-8 w-8 items-center justify-center rounded-md transition ${
-        active ? "bg-tint-brand text-tone-brand" : "text-ink-600 hover:bg-paper-100 hover:text-ink-800"
+      className={`tap flex h-8 w-8 items-center justify-center rounded-md transition active:scale-90 ${
+        active ? "text-tone-brand" : "text-ink-500 hover:text-ink-800"
       }`}
     >
       {children}

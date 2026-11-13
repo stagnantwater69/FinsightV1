@@ -496,26 +496,23 @@ describe("renaming and deleting", () => {
 });
 
 describe("what the drawer has always had to say", () => {
-  it("opens with the full mascot scene and gives replies the small avatar", async () => {
-    // Fin's two appearances come from two crops of the same art, and swapping
-    // them is wrong in both places — the full scene is unreadable at 24px and
-    // the bare head wastes the opening moment.
+  it("shows Fin large on the welcome and small beside each reply", async () => {
     renderApp();
     await open();
     // The panel portals to <body>, so the render container is not where its
-    // markup lands.
-    const intro = drawer().querySelector('img[src="/mascot/ask-fin.webp"]');
-    expect(intro).toHaveAttribute("width", "104");
-    expect(intro).toHaveAttribute("height", "83");
+    // markup lands. One badge in the header, one large one on the welcome.
+    const welcomeBadges = () => drawer().querySelectorAll('img[src="/mascot/fin-avatar.webp"]');
+    expect(welcomeBadges()).toHaveLength(2);
+    expect(within(drawer()).getByRole("heading", { name: "Make sense of your numbers." })).toBeInTheDocument();
 
     await openHistory();
     await userEvent.click(await screen.findByRole("button", { name: "Why did rent go up?" }));
     await screen.findByText("Rent rose by 8%.");
 
-    // One reply, one small avatar — and the full scene has gone, so Fin is
+    // Header plus one per reply: the welcome portrait has gone, so Fin is
     // never on screen twice saying the same thing.
-    expect(drawer().querySelectorAll('img[src="/mascot/ask-fin-avatar.webp"]')).toHaveLength(1);
-    expect(drawer().querySelectorAll('img[src="/mascot/ask-fin.webp"]')).toHaveLength(0);
+    expect(welcomeBadges()).toHaveLength(2);
+    expect(within(drawer()).queryByRole("heading", { name: "Make sense of your numbers." })).not.toBeInTheDocument();
   });
 
   it("shows the greeting of the module it was opened from", async () => {
@@ -527,12 +524,51 @@ describe("what the drawer has always had to say", () => {
     expect(screen.getByText(/I can help you understand your expense behaviour/i)).toBeInTheDocument();
   });
 
-  it("primes the box from a starter chip without asking anything", async () => {
+  it("asks a starter question as soon as its card is tapped", async () => {
     renderApp();
     await open();
     await userEvent.click(screen.getByRole("button", { name: "What needs my attention?" }));
 
-    expect(box()).toHaveValue("What needs my attention?");
+    await screen.findByText("Here is what I found.");
+    expect(post).toHaveBeenCalledWith("/ai/conversations", expect.objectContaining({ question: "What needs my attention?" }));
+  });
+
+  it("edits the newest question in its bubble and sends the change", async () => {
+    renderApp();
+    await open();
+    await userEvent.type(box(), "What can I cut?");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("Here is what I found.");
+    post.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit this question" }));
+    const editor = screen.getByRole("textbox", { name: "Edit your question" });
+    expect(editor).toHaveValue("What can I cut?");
+    expect(editor).toHaveFocus();
+    expect(box()).toHaveValue("");
+
+    await userEvent.clear(editor);
+    await userEvent.type(editor, "What can I cut this week?");
+    await userEvent.click(screen.getByRole("button", { name: "Send edited question" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(JSON.stringify(post.mock.calls[0])).toContain("What can I cut this week?");
+    expect(screen.queryByRole("textbox", { name: "Edit your question" })).not.toBeInTheDocument();
+  });
+
+  it("leaves the question alone when the edit is cancelled", async () => {
+    renderApp();
+    await open();
+    await userEvent.type(box(), "What can I cut?");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("Here is what I found.");
+    post.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit this question" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("textbox", { name: "Edit your question" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit this question" })).toBeInTheDocument();
     expect(post).not.toHaveBeenCalled();
   });
 

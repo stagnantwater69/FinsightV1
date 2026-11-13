@@ -541,14 +541,16 @@ describe.skipIf(!existsSync(WEB_SPENDING_IMPACT))("Spending Impact capability pa
   });
 
   /*
-   * Both clients compare against the SHARED period (This week | Month | All
-   * time) rather than a window of their own, so the period on Spending Impact
-   * is always the one on Home and Expense Insights. Wiring, read off source;
-   * what the period means is driven in the block below. Web reads the period
-   * without drawing its own selector: it is picked on the Dashboard.
+   * Both clients compare against a period the owner picks on this screen
+   * (This week | Month | All time). The choice belongs to Spending Impact
+   * alone: Home and Expense Insights keep their own. Web once read the period
+   * without drawing a control, which left it stuck on the default month.
+   * Wiring, read off source; what the period means is driven in the block
+   * below.
    */
-  it("compares against the shared period on both clients", () => {
+  it("lets the owner pick the comparison period on both clients", () => {
     expect(readFileSync(WEB_SPENDING_IMPACT, "utf8")).toContain("useReportingPeriod()");
+    expect(readFileSync(WEB_SPENDING_IMPACT, "utf8")).toContain("<PeriodFilter");
     expect(readFileSync(MOBILE_SPENDING_IMPACT, "utf8")).toContain("<PeriodSelector");
   });
 

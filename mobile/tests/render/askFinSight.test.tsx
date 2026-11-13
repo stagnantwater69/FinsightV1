@@ -83,15 +83,12 @@ beforeEach(() => {
 afterEach(async () => { await cleanup(); vi.restoreAllMocks(); });
 
 describe('Ask FinSight native chat interactions', () => {
-  it('shows the selected business and module, and fills starter questions without sending', async () => {
+  it('shows the selected business and module, and asks a starter question as soon as it is tapped', async () => {
     const queries = await render(tree());
     expect(queries.getByText(fixtures.businessProfile.name)).toBeTruthy();
     expect(queries.getAllByText(/Expense Insights/).length).toBeGreaterThan(0);
     expect(queries.queryByText(/Sample Sari-Sari|October 2026|demo/i)).toBeNull();
-    await fireEvent.press(queries.getByRole('button', { name: 'Use this question: Which category is highest?' }));
-    expect(queries.getByLabelText('Ask about your business').props.value).toBe('Which category is highest?');
-    expect(apiPost).not.toHaveBeenCalled();
-    await fireEvent.press(queries.getByRole('button', { name: 'Send' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Ask: Which category is highest?' }));
     await waitFor(() => expect(apiPost).toHaveBeenCalledExactlyOnceWith('/ai/conversations', expect.objectContaining({
       businessProfileId: fixtures.businessProfile.id, originModule: 'Expense Insights', question: 'Which category is highest?',
     })));
@@ -114,40 +111,47 @@ describe('Ask FinSight native chat interactions', () => {
     expect(apiGet.mock.calls.filter(([path]) => path === '/ai/conversations')).toHaveLength(1);
   });
 
-  it('keeps a selected starter module with an edited draft when reopening from another screen', async () => {
+  it('starts a new thread under the module of the starter, not the screen it was opened from', async () => {
     const queries = await render(tree());
-    await fireEvent.press(queries.getByRole('button', { name: 'Use this question: What if I spend ₱11,000 on a fridge?' }));
-    await fireEvent.changeText(queries.getByLabelText('Ask about your business'), 'What if I spend 12000 on a freezer?');
-    await queries.rerender(tree('Dashboard', false));
-    await queries.rerender(tree('Dashboard', true));
-    expect(queries.getByLabelText('Ask about your business').props.value).toBe('What if I spend 12000 on a freezer?');
-    expect(apiPost).not.toHaveBeenCalled();
-    await fireEvent.press(queries.getByRole('button', { name: 'Send' }));
-    expect(apiPost.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+    await fireEvent.press(queries.getByRole('button', { name: 'Ask: What if I spend ₱11,000 on a fridge?' }));
+    await waitFor(() => expect(apiPost.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
       businessProfileId: fixtures.businessProfile.id,
       originModule: 'Spending Impact',
-      question: 'What if I spend 12000 on a freezer?',
-    }));
+      question: 'What if I spend ₱11,000 on a fridge?',
+    })));
   });
 
   it('clears replaced finding context when a different starter is explicitly selected', async () => {
     const queries = await render(tree());
     await act(async () => { exposedChat.prepareQuestion('Explain this finding', undefined, { kind: 'finding', findingId: 51 }); });
-    await fireEvent.press(queries.getByRole('button', { name: 'Use this question: Which category is highest?' }));
-    expect(exposedChat.getState().pendingFocus).toBeNull();
-    expect(apiPost).not.toHaveBeenCalled();
-    await fireEvent.press(queries.getByRole('button', { name: 'Send' }));
-    expect(apiPost.mock.calls[0]?.[1].question).toBe('Which category is highest?');
+    await fireEvent.press(queries.getByRole('button', { name: 'Ask: Which category is highest?' }));
+    await waitFor(() => expect(apiPost.mock.calls[0]?.[1].question).toBe('Which category is highest?'));
     expect(apiPost.mock.calls[0]?.[1]).not.toHaveProperty('focus');
   });
 
-  it('fills follow-up questions without sending and saves explicit feedback', async () => {
+  it('asks a follow-up from the row above the composer, and edits the last question in its bubble', async () => {
     const queries = await render(tree());
     await ask(queries);
     const question = chatMetadata.followUps[0]!;
-    await fireEvent.press(await queries.findByRole('button', { name: `Use this question: ${question}` }));
-    expect(queries.getByLabelText('Ask about your business').props.value).toBe(question);
-    expect(apiPost).toHaveBeenCalledTimes(1);
+    await fireEvent.press(await queries.findByRole('button', { name: `Ask: ${question}` }));
+    await waitFor(() => expect(apiPost).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ question })));
+    await waitFor(() => expect(queries.getAllByText(/Stock is your largest recorded expense/)).toHaveLength(2));
+    // Only the newest question carries the pencil.
+    expect(queries.getAllByRole('button', { name: 'Edit this question' })).toHaveLength(1);
+    await fireEvent.press(queries.getByRole('button', { name: 'Edit this question' }));
+    const editor = queries.getByLabelText('Edit your question');
+    expect(editor.props.value).toBe(question);
+    expect(queries.getByLabelText('Ask about your business').props.value).toBe('');
+
+    await fireEvent.changeText(editor, 'What changed this week?');
+    await fireEvent.press(queries.getByRole('button', { name: 'Send edited question' }));
+    await waitFor(() => expect(apiPost).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ question: 'What changed this week?' })));
+  });
+
+  it('saves explicit feedback', async () => {
+    const queries = await render(tree());
+    await ask(queries);
+    await queries.findByText(/Stock is your largest recorded expense/);
     await fireEvent.press(queries.getByRole('button', { name: 'Helpful' }));
     await waitFor(() => expect(apiPut).toHaveBeenCalledExactlyOnceWith('/ai/conversations/17/messages/102/feedback', { feedback: 'up' }));
     expect(queries.getByRole('button', { name: 'Helpful', selected: true })).toBeTruthy();

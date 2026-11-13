@@ -23,6 +23,7 @@ import { InsightsTabs } from "../components/AppShell";
 import { ButtonLink } from "../components/Button";
 import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButton";
 import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
+import { PeriodFilter } from "../components/PeriodFilter";
 import { periodLabel, periodParams, periodPhrase } from "../lib/reportingPeriod";
 import type {
   CategorySuggestion,
@@ -652,6 +653,7 @@ function SpendingImpactPage() {
         eyebrow="Insights"
         title="Spending impact"
         subtitle="What-if check. Nothing is saved."
+        actions={<PeriodFilter />}
       />
 
       <InsightsTabs />

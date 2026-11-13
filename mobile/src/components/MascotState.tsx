@@ -138,7 +138,9 @@ export type MascotState =
   | "possibleDuplicate"
   | "unusualExpense"
   // The mark itself, for brand moments that are not a character moment.
-  | "brandMark";
+  | "brandMark"
+  // Fin's face on a mint badge: who is speaking in Ask FinSight (see FinAvatar).
+  | "finAvatar";
 
 type Thunk = () => ImageSourcePropType;
 
@@ -183,6 +185,7 @@ const SOURCES: Record<MascotState, Thunk> = {
   unusualExpense: () => require("../../assets/mascot/06-warnings/unusualexpensedetected.png"),
 
   brandMark: () => require("../../assets/mascot/newmascotlogo.png"),
+  finAvatar: () => require("../../assets/mascot/fin-avatar.png"),
 };
 
 /**

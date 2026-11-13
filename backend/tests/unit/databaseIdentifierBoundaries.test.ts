@@ -61,7 +61,7 @@ app.get("/ai/conversations/:id", asyncHandler(ai.getConversation));
 app.post("/captures", asyncHandler(captures.create));
 app.get("/consent/:businessProfileId", asyncHandler(consent.show));
 app.get("/receipts/:id", asyncHandler(receipts.show));
-app.get("/findings", asyncHandler(insights.findingsSummary));
+app.get("/findings", asyncHandler(insights.findings));
 app.use(errorHandler);
 
 beforeEach(() => mocks.calls.mockClear());

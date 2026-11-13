@@ -18,7 +18,8 @@ import { navigateToTabScreen, type TabNavigation } from "../navigation/types";
 /**
  * Fin's reply text, in the small Markdown slice it writes. Rendered as nested
  * <Text> runs — model output is untrusted, and nothing in it can become
- * anything but text.
+ * anything but text. Selectable, so a long press copies an answer with the
+ * platform's own menu.
  */
 export function ChatMarkdown({ text, color }: { text: string; color: string }) {
   const t = useTheme();
@@ -36,7 +37,7 @@ export function ChatMarkdown({ text, color }: { text: string; color: string }) {
     <View style={{ gap: space.lg }}>
       {parseChatBlocks(text).map((block, i) =>
         block.kind === "p" ? (
-          <T key={i} style={i === 0 && block.lines.length === 1 && inlineRuns(block.lines[0]!).every((run) => run.bold) ? [base, { fontSize: typeScale.title, lineHeight: 25, color: t.textPrimary }] : base}>
+          <T key={i} selectable style={i === 0 && block.lines.length === 1 && inlineRuns(block.lines[0]!).every((run) => run.bold) ? [base, { fontSize: typeScale.title, lineHeight: 25, color: t.textPrimary }] : base}>
             {block.lines.map((line, j) => (
               <Text key={j}>
                 {j > 0 ? "\n" : null}
@@ -49,7 +50,7 @@ export function ChatMarkdown({ text, color }: { text: string; color: string }) {
             {block.items.map((item, j) => (
               <View key={j} style={{ flexDirection: "row", gap: space.sm }}>
                 <T style={base}>{block.kind === "ul" ? "•" : `${j + 1}.`}</T>
-                <T style={[base, { flex: 1 }]}>{runs(item)}</T>
+                <T selectable style={[base, { flex: 1 }]}>{runs(item)}</T>
               </View>
             ))}
           </View>
@@ -66,13 +67,13 @@ export function ChatMarkdown({ text, color }: { text: string; color: string }) {
  * built by the server from the flag the chat was opened on; an action runs only
  * when pressed, through the same review endpoint the flag card uses.
  *
- * Follow-ups and actions show on the LATEST reply only.
+ * Actions show on the LATEST reply only. Follow-up questions are not drawn
+ * here; the sheet shows the latest reply's in one row above the composer.
  */
 export function ChatReplyExtras({
   metadata,
   latest,
   feedback,
-  onFollowUp,
   onRate,
   onLeave,
   scopeKey = "",
@@ -80,7 +81,6 @@ export function ChatReplyExtras({
   metadata: ChatAnswerMetadata;
   latest: boolean;
   feedback: "up" | "down" | null;
-  onFollowUp: (question: string) => void;
   onRate: (feedback: "up" | "down" | null) => void;
   /** Closes the sheet before the app moves to another screen under it. */
   onLeave: () => void;
@@ -139,6 +139,9 @@ export function ChatReplyExtras({
     navigateToTabScreen(navigation, target, params);
   }
 
+  const count = metadata.references.length;
+  const sourcesLabel = `Based on ${count} ${count === 1 ? "record" : "records"}${metadata.period ? ` · ${metadata.period}` : ""}`;
+
   const chip = {
     minHeight: TAP_FLOOR,
     flexDirection: "row" as const,
@@ -149,7 +152,7 @@ export function ChatReplyExtras({
 
   return (
     <View style={{ gap: space.sm }}>
-      {metadata.period ? <T variant="caption">Based on records for {metadata.period}.</T> : null}
+      {metadata.period && metadata.references.length === 0 ? <T variant="caption">Based on records for {metadata.period}.</T> : null}
       {metadata.amountCheck === "trimmed" ? (
         <T variant="caption">Part of this answer was removed because it used a figure FinSight couldn't find in your records.</T>
       ) : null}
@@ -158,12 +161,12 @@ export function ChatReplyExtras({
         <Pressable
           onPress={() => setSourcesOpen((open) => !open)}
           accessibilityRole="button"
-          accessibilityLabel={`Records mentioned (${metadata.references.length})`}
+          accessibilityLabel={sourcesLabel}
           accessibilityState={{ expanded: sourcesOpen }}
           style={{ minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, paddingVertical: space.sm }}
         >
           <Ionicons name="receipt-outline" size={17} color={t.textMuted} />
-          <T variant="label" style={{ flex: 1, color: t.textSecondary }}>Records mentioned ({metadata.references.length})</T>
+          <T variant="label" style={{ flex: 1, color: t.textSecondary }}>{sourcesLabel}</T>
           <Ionicons name={sourcesOpen ? "chevron-down" : "chevron-forward"} size={16} color={t.textMuted} />
         </Pressable>
       {sourcesOpen ? <View style={{ borderTopWidth: 1, borderTopColor: t.border, paddingHorizontal: space.md }}>{metadata.references.map((reference) => (
@@ -210,35 +213,6 @@ export function ChatReplyExtras({
         />
       ) : null}
 
-      {latest && metadata.followUps.length > 0 ? (
-        <View style={{ gap: space.sm, marginTop: space.md }}>
-          <T variant="caption">Ask a follow-up</T>
-          {metadata.followUps.map((question) => (
-            <Pressable
-              key={question}
-              onPress={() => {
-                haptics.tapped();
-                onFollowUp(question);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={`Use this question: ${question}`}
-              style={{
-                minHeight: TAP_FLOOR,
-                justifyContent: "center",
-                borderWidth: 1,
-                borderColor: t.brandBorder,
-                backgroundColor: t.surface,
-                borderRadius: radius.md,
-                paddingHorizontal: space.md,
-                paddingVertical: space.sm,
-              }}
-            >
-              <T style={{ color: brand[700], fontSize: typeScale.label }}>{question}</T>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
-
       <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
         <T variant="caption" style={{ flex: 1 }}>Was this helpful?</T>
         {(["up", "down"] as const).map((value) => {
@@ -253,19 +227,18 @@ export function ChatReplyExtras({
               accessibilityRole="button"
               accessibilityLabel={value === "up" ? "Helpful" : "Not helpful"}
               accessibilityState={{ selected: active }}
-              style={{
+              style={({ pressed }) => ({
                 minWidth: TAP_FLOOR,
                 minHeight: TAP_FLOOR,
                 alignItems: "center",
                 justifyContent: "center",
-                borderRadius: radius.sm,
-                backgroundColor: active ? brand[50] : "transparent",
-              }}
+                transform: [{ scale: pressed ? 0.88 : 1 }],
+              })}
             >
               <Ionicons
                 name={value === "up" ? (active ? "thumbs-up" : "thumbs-up-outline") : active ? "thumbs-down" : "thumbs-down-outline"}
-                size={16}
-                color={active ? brand[700] : ink[600]}
+                size={18}
+                color={active ? t.brandText : ink[600]}
               />
             </Pressable>
           );

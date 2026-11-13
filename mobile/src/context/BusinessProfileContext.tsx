@@ -52,6 +52,8 @@ interface Value {
     /** Optional, owner-controlled — Expense Reduction Opportunities plan §5.2/§15 Phase 5. Omitted means UNCLASSIFIED. */
     costBehavior?: ExpenseCostBehavior;
   }) => Promise<ExpenseCategory>;
+  /** Changes a category's cost behavior after creation, as web's categories table does. */
+  updateCategory: (id: number, input: { costBehavior: ExpenseCostBehavior }) => Promise<ExpenseCategory>;
   createProfile: (input: BusinessProfileInput) => Promise<BusinessProfile>;
   updateProfile: (id: number, input: Partial<BusinessProfileInput>) => Promise<BusinessProfile>;
   archiveProfile: (id: number) => Promise<void>;
@@ -254,6 +256,25 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
             };
           });
           return created;
+        },
+        updateCategory: async (id, input) => {
+          const updated = await api.patch<ExpenseCategory>(
+            `/records/categories/${id}`,
+            input,
+            selectedId ? { cacheScope: { businessProfileId: selectedId } } : undefined,
+          );
+          // A business switched mid-request owns a different list; leave it alone.
+          if (categoryScope && latestCategoryScope.current === categoryScope) {
+            setCategoryStates((previous) => {
+              const current = previous[categoryScope];
+              if (!current) return previous;
+              return {
+                ...previous,
+                [categoryScope]: { ...current, rows: current.rows.map((row) => (row.id === id ? updated : row)) },
+              };
+            });
+          }
+          return updated;
         },
         createProfile: async (input) => {
           const created = await api.post<BusinessProfile>("/business-profiles", input);

@@ -30,16 +30,11 @@ beforeEach(async () => {
 afterAll(disconnectDb);
 
 describe("anomaly finding HTTP API", () => {
-  it("lists, summarizes, and reviews an owned finding", async () => {
+  it("lists and reviews an owned finding", async () => {
     const list = await request(app).get("/api/v1/insights/findings")
       .set(...AUTH).query({ businessProfileId: ctx.profile.id, status: "OPEN" });
     expect(list.status).toBe(200);
     expect(list.body.items).toHaveLength(1);
-
-    const summary = await request(app).get("/api/v1/insights/findings/summary")
-      .set(...AUTH).query({ businessProfileId: ctx.profile.id });
-    expect(summary.status).toBe(200);
-    expect(summary.body.open).toBe(1);
 
     const reviewed = await request(app).patch(`/api/v1/insights/findings/${list.body.items[0].id}/review`)
       .set(...AUTH).send({ status: AnomalyFindingStatus.DISMISSED, feedback: AnomalyFindingFeedback.EXPECTED_TRANSACTION });

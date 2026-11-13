@@ -16,6 +16,7 @@ import {
 import { FlatList, RefreshControl } from "react-native-gesture-handler";
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Callout, Card, EmptyState, ErrorNote, Screen, T } from "../../components/ui";
+import { FutureDatedNotice } from "../../components/FutureDatedNotice";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { api } from "../../lib/api";
 import { ConnectionNotice, FreshnessStatus } from "../../components/ConnectionNotice";
@@ -660,6 +661,14 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
         <T accessibilityRole="header" variant="title" numberOfLines={2} style={{ fontFamily: font.display, fontSize: typeScale.titleLg, marginBottom: space.lg }}>
           Records
         </T>
+
+        {selected ? (
+          <FutureDatedNotice
+            businessProfileId={selected.id}
+            onOpen={(record) => navigation.navigate("EditRecord", { record })}
+            style={{ marginBottom: space.md }}
+          />
+        ) : null}
 
         {flagged.data && flagged.data.total > 0 ? (
           <Pressable

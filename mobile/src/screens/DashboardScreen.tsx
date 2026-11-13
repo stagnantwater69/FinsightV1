@@ -6,6 +6,7 @@ import { HomeHeader } from "../components/HomeHeader";
 import { RecentRecords, UpcomingExpenses } from "../components/DashboardFeeds";
 import { MoneyFlowPanel, SpendingSplitCard, TodayGoalSummary } from "../components/HomeVisuals";
 import { IconRow, SectionTitle } from "../components/CoachKit";
+import { FutureDatedNotice } from "../components/FutureDatedNotice";
 import { GreetingHero } from "../components/GreetingHero";
 import { openFlaggedRecords } from "../lib/flaggedRecordsNavigation";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
@@ -420,6 +421,11 @@ function DashboardContent({ navigation }: DashboardScreenProps<"DashboardHome">)
                 action={<Button title={recoveryActionLabel} variant="primary" onPress={openRecoveryAction} />}
               />
             )}
+
+            <FutureDatedNotice
+              businessProfileId={selected.id}
+              onOpen={(record) => navigation.navigate("Records", { screen: "EditRecord", params: { record } })}
+            />
 
             <Card>
               <SectionTitle question="What needs my attention?" icon="notifications-outline" tone="accent" />

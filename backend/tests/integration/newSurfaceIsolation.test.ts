@@ -16,7 +16,7 @@ import { AnomalyFindingSeverity, AnomalyFindingStatus, AnomalyFindingType } from
 import { prisma } from "../../src/config/prisma";
 import { confirmImport, getImportBatchStatus } from "../../src/services/csvImport.service";
 import { anomalyEvaluation } from "../../src/services/anomalyDetection/evaluation.service";
-import { listFindings, findingSummary, reviewFinding } from "../../src/services/anomalyDetection/finding.service";
+import { listFindings, reviewFinding } from "../../src/services/anomalyDetection/finding.service";
 import { refreshIsolationForestFindings } from "../../src/services/anomalyDetection/isolationForest.service";
 import { DEFAULT_DETECTION_CONFIG, detectionConfig } from "../../src/services/anomalyDetection/config";
 import { buildModuleContext } from "../../src/services/aiContext.service";
@@ -147,9 +147,6 @@ describe("Isolation Forest shadow detector", () => {
     expect(
       await listFindings(alice.user.id, alice.profile.id, { status: AnomalyFindingStatus.SHADOW }),
     ).toHaveLength(0);
-    const summary = await findingSummary(alice.user.id, alice.profile.id);
-    expect(summary.open).toBe(0);
-    expect(summary.byType.ML_OUTLIER).toBeUndefined();
   });
 
   it("never lets a shadow finding be reviewed by another owner", async () => {

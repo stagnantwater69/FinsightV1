@@ -11,14 +11,14 @@ import * as fixtures from './support/fixtures';
  * Rendered coverage for the cost-behavior classification on the category
  * create form — Expense Reduction Opportunities plan §5.2/§15 Phase 5.
  *
- * Only mobile's create path is covered here (see CategoriesScreen.tsx —
- * there is no separate edit form on mobile today); it stays optional and
- * omitted entirely when the owner does not choose one, matching the
- * backend's own "omission means UNCLASSIFIED" contract.
+ * On create it stays optional and is omitted entirely when the owner does
+ * not choose one, matching the backend's own "omission means UNCLASSIFIED"
+ * contract. An existing category is changed from its row in the list.
  */
 
 const createCategory = vi.fn();
 const refreshCategories = vi.fn();
+const updateCategory = vi.fn();
 let categories = [...fixtures.categories];
 let categoriesLoading = false;
 let categoriesError: string | null = null;
@@ -36,6 +36,7 @@ vi.mock('../../src/context/BusinessProfileContext', () => ({
     refresh: vi.fn(),
     refreshCategories,
     createCategory,
+    updateCategory,
   }),
   BusinessProfileProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
@@ -55,6 +56,8 @@ async function renderScreen() {
 beforeEach(() => {
   createCategory.mockReset();
   refreshCategories.mockReset();
+  updateCategory.mockReset();
+  updateCategory.mockResolvedValue(undefined);
   refreshCategories.mockResolvedValue(undefined);
   categories = [];
   categoriesLoading = false;
@@ -121,6 +124,34 @@ describe('Category create form — cost-behavior classification', () => {
 
     await fireEvent.press(fixedChip);
     expect(fixedChip.props.accessibilityState?.selected).toBe(false);
+  });
+});
+
+describe('Category row cost-behavior edit', () => {
+  it('changes an existing category and clears it on a second tap', async () => {
+    categories = [{ ...fixtures.categories[0]!, costBehavior: 'VARIABLE' }];
+    const queries = await renderScreen();
+
+    const variable = queries.getByRole('button', { name: 'Variable cost for Stock' });
+    expect(variable.props.accessibilityState?.selected).toBe(true);
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Fixed cost for Stock' }));
+    await waitFor(() => expect(updateCategory).toHaveBeenLastCalledWith(10, { costBehavior: 'FIXED' }));
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Variable cost for Stock' }));
+    await waitFor(() => expect(updateCategory).toHaveBeenLastCalledWith(10, { costBehavior: 'UNCLASSIFIED' }));
+  });
+
+  it('shows why a change did not save and still opens the records', async () => {
+    categories = [fixtures.categories[0]!];
+    updateCategory.mockRejectedValue(new Error('Network unavailable.'));
+    const queries = await renderScreen();
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Mixed cost for Stock' }));
+    expect(await queries.findByText('Network unavailable.')).toBeTruthy();
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Stock, view records' }));
+    expect(navigation.navigate).toHaveBeenCalledWith('RecordsList', { type: 'expense', categoryId: 10 });
   });
 });
 

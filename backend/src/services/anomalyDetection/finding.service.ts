@@ -81,21 +81,6 @@ export async function listFindings(
   });
 }
 
-export async function findingSummary(userId: number, businessProfileId: number) {
-  const owned = await prisma.businessProfile.findFirst({ where: { id: businessProfileId, userId }, select: { id: true } });
-  if (!owned) throw new ApiError(404, "Business profile not found");
-  const [byType, bySeverity, open] = await Promise.all([
-    prisma.anomalyFinding.groupBy({ by: ["type"], where: { businessProfileId, status: "OPEN" }, _count: { _all: true } }),
-    prisma.anomalyFinding.groupBy({ by: ["severity"], where: { businessProfileId, status: "OPEN" }, _count: { _all: true } }),
-    prisma.anomalyFinding.count({ where: { businessProfileId, status: "OPEN" } }),
-  ]);
-  return {
-    open,
-    byType: Object.fromEntries(byType.map((entry) => [entry.type, entry._count._all])),
-    bySeverity: Object.fromEntries(bySeverity.map((entry) => [entry.severity, entry._count._all])),
-  };
-}
-
 export async function reviewFinding(userId: number, findingId: number, review: FindingReview) {
   const finding = await prisma.anomalyFinding.findFirst({
     where: { id: findingId, businessProfile: { userId } },
