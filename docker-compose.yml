@@ -102,11 +102,8 @@ services:
     # Isolation Forest scoring sidecar for the shadow detector (ml/README.md).
     # `expose`, not `ports`: it has no authentication, so only the compose
     # network may reach it. It receives numbers and opaque row ids only.
-    #
-    # Behind a profile because the detector flag is off by default: started
-    # unasked, it held up to 512 MiB that nothing used. Turning on
-    # ANOMALY_ISOLATION_FOREST_ENABLED also needs `--profile ml` (or
-    # COMPOSE_PROFILES=ml in the .env next to this file).
+    # Opt-in: the detector is off by default, so the 2 GB VM should not build
+    # or run it. Enable with COMPOSE_PROFILES=ml next to this file.
     profiles: ["ml"]
     build:
       context: ./ml

@@ -123,7 +123,14 @@ echo "deploy: building images"
 "${COMPOSE[@]}" --profile tools build migrate
 
 echo "deploy: checking migrations"
-if ! "${COMPOSE[@]}" run --rm migrate npx prisma migrate status; then
+if migrate_status=$("${COMPOSE[@]}" run --rm migrate npx prisma migrate status 2>&1); then
+  echo "$migrate_status"
+else
+  echo "$migrate_status"
+  # migrate status also fails when it cannot connect (e.g. the Supabase pooler
+  # is full), which is not the same as having migrations to apply.
+  grep -q "not yet been applied" <<<"$migrate_status" \
+    || fail "could not confirm the migration state (error above); nothing was changed. If it says 'max clients reached', stop other processes using this database (a local dev API/worker counts) and rerun"
   if [ "$migrate" = 1 ]; then
     "${COMPOSE[@]}" run --rm migrate
   else
