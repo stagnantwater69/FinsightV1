@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { AiChatProvider } from "../../context/AiChatContext";
@@ -150,6 +150,12 @@ describe("a grounded reply in the drawer", () => {
     renderApp();
     await askAboutFlag(user);
 
+    // The records sit behind one "Based on" line until the owner opens it.
+    expect(screen.queryByRole("link", { name: /Frozen fries x5/ })).not.toBeInTheDocument();
+    const sources = screen.getByRole("button", { name: "Based on 1 record · January 2022" });
+    await user.click(sources);
+    expect(sources).toHaveAttribute("aria-expanded", "true");
+
     const recordLink = screen.getByRole("link", { name: /Frozen fries x5/ });
     expect(recordLink).toHaveAttribute("href", "/records?highlightRecordId=343");
     expect(screen.getByRole("link", { name: /Open Needs review/ })).toHaveAttribute("href", "/records/flagged");
@@ -163,17 +169,40 @@ describe("a grounded reply in the drawer", () => {
     const user = userEvent.setup();
     renderApp();
     await askAboutFlag(user);
-    expect(screen.getByText(/Based on your records for January 2022\./)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Based on 1 record · January 2022" })).toBeInTheDocument();
     expect(screen.getByText(/Part of this answer was removed/)).toBeInTheDocument();
   });
 
-  it("primes the box with a follow-up rather than sending it", async () => {
+  it("names the period alone when the answer cited no records", async () => {
+    replyMetadata = { ...METADATA, references: [] };
     const user = userEvent.setup();
     renderApp();
     await askAboutFlag(user);
-    await user.click(screen.getByRole("button", { name: "What is my usual for Raw Materials?" }));
-    expect(screen.getByLabelText("Ask about your numbers")).toHaveValue("What is my usual for Raw Materials?");
-    expect(post).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Based on your records for January 2022.")).toBeInTheDocument();
+  });
+
+  it("shows follow-ups in one row above the box, and asks one when tapped", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await askAboutFlag(user);
+    const row = screen.getByLabelText("Suggested questions");
+    await user.click(within(row).getByRole("button", { name: "What is my usual for Raw Materials?" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenLastCalledWith(
+        "/ai/conversations/9/messages",
+        expect.objectContaining({ question: "What is my usual for Raw Materials?" }),
+      ),
+    );
+  });
+
+  it("copies the answer text", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    renderApp();
+    await askAboutFlag(user);
+    await user.click(screen.getByRole("button", { name: "Copy answer" }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("The **Frozen fries x5** purchase was higher than usual."));
+    expect(await screen.findByText("Answer copied")).toBeInTheDocument();
   });
 
   it("runs a review action only when pressed, through the review endpoint", async () => {

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Animated,
   Dimensions,
   Easing,
@@ -10,6 +9,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   TextInput,
   View,
@@ -29,13 +29,14 @@ import { Button, Callout, ErrorNote, T } from "./ui";
 import { TAP_FLOOR } from "./touchTarget";
 import { ChatHistoryPanel } from "./ChatHistoryPanel";
 import { ChatMarkdown, ChatReplyExtras } from "./ChatReply";
-import { Mascot } from "./MascotState";
+import { FinAvatar } from "./FinAvatar";
 import { useAiChat } from "../context/AiChatContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import * as haptics from "../lib/haptics";
 import { formatMoney } from "../lib/money";
 import { useReducedMotion } from "../lib/useReducedMotion";
 import { font, radius, space, typeScale } from "../theme/tokens";
+import { shadowStyle } from "../theme/shadow";
 import { useTheme } from "../context/ThemeContext";
 import type { ChatMessage, InteractionModule } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
@@ -94,7 +95,7 @@ export function AskFinSight({
   module: InteractionModule;
 }) {
   const t = useTheme();
-  const { brand, ink, paper } = t;
+  const { ink, paper } = t;
   const chat = useAiChat();
   const { selected } = useBusinessProfiles();
   const active = chat.conversations.find((c) => c.id === chat.activeId) ?? null;
@@ -334,6 +335,35 @@ export function AskFinSight({
   const starters = [...STARTERS].sort((a, b) => Number(b.module === currentModule) - Number(a.module === currentModule));
   const canRetry = failedSend && failedSend.businessId === businessId && failedSend.conversationId === chat.activeId;
 
+  /*
+   * One row of suggested questions above the composer once a thread exists:
+   * the newest reply's follow-ups, or the starters when it offered none.
+   */
+  const latestReply = messages.at(-1)?.role === "assistant" ? messages.at(-1) : undefined;
+  const followUps = latestReply?.metadata?.followUps ?? [];
+  const suggestions = followUps.length > 0 ? followUps : starters.map((starter) => starter.question);
+  const showSuggestions = messages.length > 0 && !chat.sending && !chat.pendingSend && !historyOpen;
+
+  /*
+   * Replies newer than this id fade in when they mount. It is set the moment
+   * a send starts, so only an answer that arrives while the sheet is watching
+   * animates; opening a conversation from history resets it, so old replies
+   * appear as they are.
+   */
+  const revealAfter = useRef<number | null>(null);
+  if (chat.sending && revealAfter.current === null) revealAfter.current = latestMessageId ?? 0;
+
+  const [awayFromLatest, setAwayFromLatest] = useState(false);
+
+  function startStarter(module: InteractionModule, question: string) {
+    haptics.tapped();
+    chat.setSeedModule(module);
+    // Clears any flag or opportunity a screen had queued: the owner chose this question instead.
+    chat.prepareQuestion(question);
+    starterDraft.current = { businessId, module, draft: question };
+    void submit(question);
+  }
+
   return (
     <Modal
       visible={visible}
@@ -400,12 +430,16 @@ export function AskFinSight({
           </View>
 
           <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
-            <T
-              accessibilityRole="header"
-              style={{ color: t.textPrimary, fontFamily: font.sansSemibold, fontSize: typeScale.title, flex: 1 }}
-            >
-              {historyOpen ? "Chat history" : "Ask FinSight"}
-            </T>
+            <FinAvatar size={44} />
+            <View style={{ flex: 1, marginLeft: space.sm }}>
+              <T
+                accessibilityRole="header"
+                style={{ color: t.textPrimary, fontFamily: font.sansSemibold, fontSize: typeScale.title }}
+              >
+                {historyOpen ? "Chat history" : "Ask FinSight"}
+              </T>
+              <T variant="caption" numberOfLines={1}>{selected?.name ?? "Choose a business"}</T>
+            </View>
 
             <Pressable
               onPress={() => {
@@ -428,6 +462,7 @@ export function AskFinSight({
                 // an abandoned empty chat never reaches the list.
                 chat.newChat();
                 starterDraft.current = null;
+                revealAfter.current = null;
                 setFailedSend(null);
                 setHistoryOpen(false);
               }}
@@ -447,11 +482,7 @@ export function AskFinSight({
               <Ionicons name="close-outline" size={24} color={t.textSecondary} />
             </Pressable>
           </View>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, marginTop: space.sm }}>
-            <Ionicons name="storefront-outline" size={14} color={t.textMuted} />
-            <T variant="label" style={{ color: t.textSecondary, flex: 1 }}>{selected?.name ?? "Choose a business"}</T>
-          </View>
-          <T variant="caption" style={{ marginTop: space.xs }}>
+          <T variant="caption" style={{ marginTop: space.sm }}>
             {historyOpen ? "Search or manage your saved conversations." : `${currentModule}${latestPeriod ? ` · ${latestPeriod}` : ""}`}
           </T>
         </View>
@@ -481,35 +512,48 @@ export function AskFinSight({
                 <View style={{ gap: space.xl }}>
                   {chat.messagesCursor ? <Button title="Load earlier messages" variant="secondary" loading={chat.messagesLoadingMore} onPress={() => void chat.loadOlderMessages()} /> : null}
                   {showWelcome ? (
-                    <View style={{ gap: space.md }}>
-                      <Mascot state="brandMark" size={56} style={{ alignSelf: "flex-start" }} />
-                      <T accessibilityRole="header" style={{ fontFamily: font.sansSemibold, fontSize: typeScale.titleLg, lineHeight: 32, color: t.textPrimary }}>
-                        Make sense of your numbers.
-                      </T>
-                      <T style={{ color: t.textMuted }}>Ask about your records, a planned expense or your recovery target.</T>
-                      <View style={{ gap: space.xs, marginTop: space.xs }}>
-                        <T variant="caption">Start with a question</T>
+                    <View style={{ gap: space.lg }}>
+                      {/* Fin at full size once, for the "ready to listen" moment. */}
+                      <View style={{ alignItems: "center", gap: space.md, paddingTop: space.md }}>
+                        <FinAvatar size={88} />
+                        <T accessibilityRole="header" style={{ fontFamily: font.sansSemibold, fontSize: typeScale.titleLg, lineHeight: 32, color: t.textPrimary, textAlign: "center" }}>
+                          Make sense of your numbers.
+                        </T>
+                        <T style={{ color: t.textSecondary, textAlign: "center" }}>Ask about your records, a planned expense or your recovery target.</T>
+                      </View>
+                      <View style={{ gap: space.sm }}>
+                        <T variant="caption">Tap a question and Fin answers it</T>
                         {starters.map((starter) => (
                           <Pressable
                             key={starter.module}
                             accessibilityRole="button"
-                            accessibilityLabel={`Use this question: ${starter.question}`}
-                            accessibilityHint={`Fills the question box for ${starter.module}. Tap Send when ready.`}
-                            onPress={() => {
-                              haptics.tapped();
-                              chat.setSeedModule(starter.module);
-                              chat.prepareQuestion(starter.question);
-                              starterDraft.current = { businessId, module: starter.module, draft: starter.question };
-                              setFailedSend(null);
-                            }}
-                            style={({ pressed }) => ({ minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.sm, borderBottomWidth: 1, borderBottomColor: t.border, backgroundColor: pressed ? t.surfaceMuted : "transparent" })}
+                            accessibilityLabel={`Ask: ${starter.question}`}
+                            accessibilityHint={`Sends this question about ${starter.module}.`}
+                            disabled={chat.sending}
+                            accessibilityState={{ disabled: chat.sending }}
+                            onPress={() => startStarter(starter.module, starter.question)}
+                            style={({ pressed }) => ({
+                              minHeight: 64,
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: space.md,
+                              paddingHorizontal: space.md,
+                              paddingVertical: space.sm,
+                              borderWidth: 1,
+                              borderColor: t.border,
+                              borderRadius: radius.lg,
+                              backgroundColor: pressed ? t.surfaceMuted : t.surface,
+                            })}
                           >
-                            <Ionicons name={starter.icon} size={22} color={t.brandText} />
+                            <View style={{ width: 38, height: 38, borderRadius: radius.md, alignItems: "center", justifyContent: "center", backgroundColor: t.surfaceMuted }}>
+                              <Ionicons name={starter.icon} size={20} color={t.brandText} />
+                            </View>
                             <View style={{ flex: 1, gap: space.xs }}>
                               <T style={{ fontFamily: font.sansMedium, color: t.textPrimary }}>{starter.question}</T>
                               <T variant="caption">{starter.module}</T>
                             </View>
-                            <Ionicons name="chevron-forward" size={16} color={t.textMuted} />
+                            {/* The composer's send mark: pressing this asks it. */}
+                            <Ionicons name="arrow-up-circle" size={28} color={t.brandText} />
                           </Pressable>
                         ))}
                       </View>
@@ -520,14 +564,26 @@ export function AskFinSight({
                   ) : null}
                 </View>
               }
+              onScroll={({ nativeEvent: { contentOffset, contentSize, layoutMeasurement } }) =>
+                setAwayFromLatest(contentSize.height - layoutMeasurement.height - contentOffset.y > 240)
+              }
+              scrollEventThrottle={100}
               renderItem={({ item, index }) =>
                 item.role === "user" ? (
-                  <Bubble>{item.content}</Bubble>
+                  <Bubble
+                    onSend={
+                      index === messages.findLastIndex((m) => m.role === "user") && !chat.sending
+                        ? (question) => void submit(question)
+                        : undefined
+                    }
+                  >
+                    {item.content}
+                  </Bubble>
                 ) : (
-                  <View style={{ gap: space.md }}>
+                  <Reveal animate={revealAfter.current !== null && item.id > revealAfter.current}>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-                      <Ionicons name="book-outline" size={16} color={t.brandText} />
-                      <T variant="label" style={{ color: t.textSecondary, fontFamily: font.sansSemibold }}>FinSight</T>
+                      <FinAvatar size={28} />
+                      <T variant="label" style={{ color: t.textPrimary, fontFamily: font.sansSemibold }}>Fin</T>
                     </View>
                     <ChatMarkdown text={item.content} color={t.textSecondary} />
                     {item.metadata ? (
@@ -535,27 +591,24 @@ export function AskFinSight({
                         metadata={item.metadata}
                         scopeKey={`${businessId}:${chat.activeId}`}
                         // The newest reply, while nothing newer is being
-                        // written, is the one whose follow-ups and actions
-                        // are still current.
+                        // written, is the one whose actions are still current.
                         latest={index === messages.length - 1 && !chat.sending}
                         feedback={item.feedback ?? null}
-                        onFollowUp={(question) => {
-                          setFailedSend(null);
-                          chat.setInput(question);
-                        }}
                         onRate={(value) => void chat.rate(item.id, value)}
                         onLeave={close}
                       />
                     ) : null}
-                  </View>
+                  </Reveal>
                 )
               }
               ListFooterComponent={
                 <View style={{ gap: space.md, marginTop: space.md }}>
                   {chat.sending ? (
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-                      <ActivityIndicator color={brand[600]} />
-                      <T variant="caption" accessibilityLiveRegion="polite">Working from your records…</T>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+                      <FinAvatar size={28} thinking />
+                      <View style={{ paddingHorizontal: space.md, paddingVertical: space.sm, borderWidth: 1, borderColor: t.border, borderRadius: radius.lg, borderTopLeftRadius: space.xs, backgroundColor: t.surface }}>
+                        <T variant="caption" accessibilityLiveRegion="polite" style={{ color: t.textSecondary }}>Working from your records…</T>
+                      </View>
                     </View>
                   ) : null}
                   {chat.unavailable ? (
@@ -604,6 +657,35 @@ export function AskFinSight({
               }
             />
 
+            {awayFromLatest && !historyOpen ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Jump to latest"
+                onPress={() => {
+                  haptics.tapped();
+                  listRef.current?.scrollToEnd({ animated: !reduceMotion });
+                }}
+                style={({ pressed }) => ({
+                  position: "absolute",
+                  bottom: space.md,
+                  alignSelf: "center",
+                  minHeight: TAP_FLOOR,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: space.xs,
+                  paddingHorizontal: space.lg,
+                  borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: t.border,
+                  backgroundColor: pressed ? t.surfaceMuted : t.surface,
+                  ...shadowStyle({ color: t.shadow, offsetY: 3, opacity: 0.16 * t.shadowStrength, blurRadius: 8, elevation: 4 }),
+                })}
+              >
+                <Ionicons name="arrow-down" size={16} color={t.textSecondary} />
+                <T variant="label" style={{ color: t.textPrimary }}>Jump to latest</T>
+              </Pressable>
+            ) : null}
+
             {historyOpen ? (
               <ChatHistoryPanel
                 conversations={chat.conversations}
@@ -617,6 +699,7 @@ export function AskFinSight({
                 onSelect={(id) => {
                   setFailedSend(null);
                   starterDraft.current = null;
+                  revealAfter.current = null;
                   void chat.selectConversation(id);
                   // Straight back to the messages: choosing a thread IS the
                   // exit from the list, so a separate "close" tap would be one
@@ -651,12 +734,47 @@ export function AskFinSight({
               padding: space.md,
               // With the keyboard up it already covers the home indicator, so
               // clearing it as well left a band of empty space above the keys.
+              paddingTop: space.xs,
               paddingBottom: space.md + (inputFocused ? 0 : insets.bottom),
-              borderTopWidth: 1,
-              borderTopColor: t.border,
               backgroundColor: paper[50],
             }}
           >
+            {/*
+              One row that scrolls sideways rather than wrapping, so suggestions
+              never push the conversation up. Tapping one asks it.
+            */}
+            {showSuggestions ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                style={{ marginHorizontal: -space.md, flexGrow: 0 }}
+                contentContainerStyle={{ gap: space.sm, paddingHorizontal: space.md }}
+              >
+                {suggestions.map((question) => (
+                  <Pressable
+                    key={question}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Ask: ${question}`}
+                    onPress={() => {
+                      haptics.tapped();
+                      void submit(question);
+                    }}
+                    style={({ pressed }) => ({
+                      minHeight: TAP_FLOOR,
+                      justifyContent: "center",
+                      paddingHorizontal: space.lg,
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: t.brandBorder,
+                      backgroundColor: pressed ? t.surfaceMuted : t.surface,
+                    })}
+                  >
+                    <T style={{ color: t.brandText, fontFamily: font.sansMedium, fontSize: typeScale.label }}>{question}</T>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            ) : null}
             <View style={{
               flexDirection: "row",
               alignItems: "flex-end",
@@ -664,8 +782,10 @@ export function AskFinSight({
               padding: space.xs,
               borderWidth: 1,
               borderColor: inputFocused ? t.brandText : t.ink[400],
-              borderRadius: radius.lg,
+              borderRadius: radius.xl,
               backgroundColor: t.surface,
+              // Lifted off the sheet: the box is the one place the owner acts.
+              ...shadowStyle({ color: t.shadow, offsetY: 6, opacity: 0.1 * t.shadowStrength, blurRadius: 16, elevation: 4 }),
             }}>
             <TextInput
               nativeID={composerInputId}
@@ -730,23 +850,107 @@ export function AskFinSight({
   );
 }
 
-function Bubble({ children }: { children: React.ReactNode }) {
+/** The owner's question. The newest one carries a pencil that opens it for editing in place. */
+function Bubble({ children, onSend }: { children: string; onSend?: (question: string) => void }) {
   const t = useTheme();
-  return (
-    <View style={{ alignItems: "flex-end" }}>
+  const [editing, setEditing] = useState<string | null>(null);
+  if (onSend && editing !== null) {
+    const draft = editing.trim();
+    return (
       <View
         style={{
-          maxWidth: "88%",
-          backgroundColor: t.surfaceMuted,
-          borderRadius: radius.lg,
-          borderBottomRightRadius: space.xs,
-          paddingHorizontal: space.md,
-          paddingVertical: space.sm,
+          alignSelf: "flex-end",
+          width: "88%",
+          gap: space.sm,
+          padding: space.md,
+          borderRadius: radius.xl,
+          borderWidth: 1,
+          borderColor: t.brandBorder,
+          backgroundColor: t.surface,
+          ...shadowStyle({ color: t.shadow, offsetY: 3, opacity: 0.14 * t.shadowStrength, blurRadius: 8, elevation: 2 }),
         }}
       >
-        <T style={{ color: t.textPrimary, fontSize: typeScale.body, lineHeight: 22 }}>{children}</T>
+        <TextInput
+          autoFocus
+          multiline
+          accessibilityLabel="Edit your question"
+          value={editing}
+          onChangeText={setEditing}
+          maxLength={FIELD_LIMITS.aiQuestion}
+          textAlignVertical="top"
+          style={{ minHeight: TAP_FLOOR, maxHeight: 140, color: t.textPrimary, fontFamily: font.sans, fontSize: typeScale.body, lineHeight: 23 }}
+        />
+        <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: space.sm }}>
+          <Button title="Cancel" variant="ghost" onPress={() => setEditing(null)} />
+          <Button
+            title="Send"
+            accessibilityLabel="Send edited question"
+            disabled={!draft}
+            onPress={() => {
+              setEditing(null);
+              onSend(draft);
+            }}
+          />
+        </View>
+      </View>
+    );
+  }
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xs }}>
+      {onSend ? (
+        <Pressable
+          onPress={() => {
+            haptics.tapped();
+            setEditing(children);
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Edit this question"
+          style={{ minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
+        >
+          <Ionicons name="pencil-outline" size={17} color={t.textMuted} />
+        </Pressable>
+      ) : null}
+      <View
+        style={{
+          maxWidth: "84%",
+          backgroundColor: t.brandFill,
+          borderRadius: radius.xl,
+          borderBottomRightRadius: space.xs,
+          paddingHorizontal: space.lg,
+          paddingVertical: space.md,
+          ...shadowStyle({ color: t.shadow, offsetY: 3, opacity: 0.14 * t.shadowStrength, blurRadius: 8, elevation: 2 }),
+        }}
+      >
+        <T style={{ color: t.onBrandFill, fontSize: typeScale.body, lineHeight: 23 }}>{children}</T>
       </View>
     </View>
+  );
+}
+
+/**
+ * Fades a fresh answer up into place, so the eye lands on where it starts.
+ * Only replies that arrived while the sheet was watching pass `animate`;
+ * under Reduce Motion they simply appear.
+ */
+function Reveal({ animate, children }: { animate: boolean; children: React.ReactNode }) {
+  const reduceMotion = useReducedMotion();
+  const progress = useRef(new Animated.Value(animate && !reduceMotion ? 0 : 1)).current;
+  useEffect(() => {
+    if (!animate || reduceMotion) return;
+    Animated.timing(progress, { toValue: 1, duration: 320, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== "web" }).start();
+    // Mount-only: an answer animates once, when it first appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <Animated.View
+      style={{
+        gap: space.md,
+        opacity: progress,
+        transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }],
+      }}
+    >
+      {children}
+    </Animated.View>
   );
 }
 

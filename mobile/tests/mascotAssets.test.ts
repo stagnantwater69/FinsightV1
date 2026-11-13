@@ -131,6 +131,8 @@ describe("the mascot state map", () => {
         "businessSetup",
         "cameraPermission",
         "emptyDashboard",
+        // Ask FinSight's speaker badge, approved with the 2026-11 chat redesign.
+        "finAvatar",
         "forgotPassword",
         "importErrors",
         "login",

@@ -10,7 +10,6 @@ const apiGet = vi.fn();
 const apiPatch = vi.fn();
 const apiPost = vi.fn();
 const navigate = vi.fn();
-const onFollowUp = vi.fn();
 const onRate = vi.fn();
 const onLeave = vi.fn();
 let selected: BusinessProfile | null = fixtures.businessProfile;
@@ -32,7 +31,7 @@ const reviewAction: ChatAction = {
 const record = { id: 41, type: 'expense', businessProfileId: 1, amount: 6800.25, date: '2026-10-12' } as RecordItem;
 function tree(metadata: ChatAnswerMetadata = chatMetadata, latest = true, feedback: 'up' | 'down' | null = null) {
   return <ThemeProvider initialMode="light"><ChatReplyExtras metadata={metadata} latest={latest} feedback={feedback}
-    scopeKey={`${selected?.id ?? 'none'}:17`} onFollowUp={onFollowUp} onRate={onRate} onLeave={onLeave} /></ThemeProvider>;
+    scopeKey={`${selected?.id ?? 'none'}:17`} onRate={onRate} onLeave={onLeave} /></ThemeProvider>;
 }
 
 function pressHandler(node: ReturnType<Awaited<ReturnType<typeof render>>['getByRole']>): () => void {
@@ -45,7 +44,7 @@ function pressHandler(node: ReturnType<Awaited<ReturnType<typeof render>>['getBy
 
 beforeEach(() => {
   selected = fixtures.businessProfile;
-  for (const spy of [apiGet, apiPatch, apiPost, navigate, onFollowUp, onRate, onLeave]) spy.mockReset();
+  for (const spy of [apiGet, apiPatch, apiPost, navigate, onRate, onLeave]) spy.mockReset();
   apiGet.mockResolvedValue(record);
   apiPatch.mockResolvedValue(undefined);
   apiPost.mockResolvedValue(undefined);
@@ -55,11 +54,11 @@ afterEach(async () => { await cleanup(); vi.restoreAllMocks(); });
 describe('chat reply record references and actions', () => {
   it('expands server-provided records with exact decimal amounts and dates without fetching', async () => {
     const queries = await render(tree());
-    const records = queries.getByRole('button', { name: 'Records mentioned (2)', expanded: false });
+    const records = queries.getByRole('button', { name: 'Based on 2 records · October 2026', expanded: false });
     expect(queries.queryByRole('link', { name: /^Open record Weekly stock/ })).toBeNull();
     expect(apiGet).not.toHaveBeenCalled();
     await fireEvent.press(records);
-    expect(queries.getByRole('button', { name: 'Records mentioned (2)', expanded: true })).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Based on 2 records · October 2026', expanded: true })).toBeTruthy();
     const stock = queries.getByRole('link', { name: /^Open record Weekly stock/ });
     const sales = queries.getByRole('link', { name: /^Open record Counter sales/ });
     expect(stock.props.accessibilityLabel).toBe('Open record Weekly stock, PHP 6,800.25, Oct 12, 2026');
@@ -67,7 +66,7 @@ describe('chat reply record references and actions', () => {
     expect(queries.getByText(/PHP 6,800\.25/)).toBeTruthy();
     expect(queries.getByText(/PHP 5,400\.75/)).toBeTruthy();
     expect(apiGet).not.toHaveBeenCalled();
-    await fireEvent.press(queries.getByRole('button', { name: 'Records mentioned (2)' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Based on 2 records · October 2026' }));
     expect(queries.queryByRole('link', { name: /^Open record Weekly stock/ })).toBeNull();
   });
 
@@ -75,7 +74,7 @@ describe('chat reply record references and actions', () => {
     const pending = deferred<RecordItem>();
     apiGet.mockReturnValueOnce(pending.promise);
     const queries = await render(tree());
-    await fireEvent.press(queries.getByRole('button', { name: 'Records mentioned (2)' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Based on 2 records · October 2026' }));
     await fireEvent.press(queries.getByRole('link', { name: /^Open record Weekly stock/ }));
     expect(apiGet.mock.calls[0]?.[0]).toBe('/records/expenses/41');
     expect(onLeave).not.toHaveBeenCalled();
@@ -85,11 +84,9 @@ describe('chat reply record references and actions', () => {
     expect(onLeave).toHaveBeenCalledTimes(1);
   });
 
-  it('opens page metadata using only the fixed route map and never runs follow-ups automatically', async () => {
+  it('opens page metadata using only the fixed route map, and leaves follow-ups to the composer row', async () => {
     const queries = await render(tree());
-    const question = chatMetadata.followUps[0]!;
-    await fireEvent.press(queries.getByRole('button', { name: `Use this question: ${question}` }));
-    expect(onFollowUp).toHaveBeenCalledExactlyOnceWith(question);
+    expect(queries.queryByText(chatMetadata.followUps[0]!)).toBeNull();
     expect(apiGet).not.toHaveBeenCalled();
     expect(apiPatch).not.toHaveBeenCalled();
     await fireEvent.press(queries.getByRole('link', { name: /Open Expense Insights/ }));
@@ -97,11 +94,10 @@ describe('chat reply record references and actions', () => {
     expect(navigate).toHaveBeenCalledExactlyOnceWith('Insights', { screen: 'ExpenseBehavior' });
   });
 
-  it('withholds follow-ups and actions from old replies while keeping their evidence and feedback', async () => {
+  it('withholds actions from old replies while keeping their evidence and feedback', async () => {
     const queries = await render(tree({ ...chatMetadata, actions: [reviewAction] }, false));
-    expect(queries.queryByRole('button', { name: /Use this question/ })).toBeNull();
     expect(queries.queryByRole('button', { name: 'Mark expected' })).toBeNull();
-    expect(queries.getByRole('button', { name: 'Records mentioned (2)' })).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Based on 2 records · October 2026' })).toBeTruthy();
     await fireEvent.press(queries.getByRole('button', { name: 'Not helpful' }));
     expect(onRate).toHaveBeenCalledExactlyOnceWith('down');
     expect(apiPatch).not.toHaveBeenCalled();
@@ -163,7 +159,7 @@ describe('chat reply record references and actions', () => {
     const pending = deferred<RecordItem>();
     apiGet.mockReturnValueOnce(pending.promise);
     const queries = await render(tree());
-    await fireEvent.press(queries.getByRole('button', { name: 'Records mentioned (2)' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Based on 2 records · October 2026' }));
     await fireEvent.press(queries.getByRole('link', { name: /^Open record Weekly stock/ }));
     selected = { ...fixtures.businessProfile, id: 2, name: 'Second business' };
     await queries.rerender(tree());
@@ -195,7 +191,7 @@ describe('chat reply record references and actions', () => {
     const newRequest = deferred<RecordItem>();
     apiGet.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise);
     const queries = await render(tree());
-    await fireEvent.press(queries.getByRole('button', { name: 'Records mentioned (2)' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Based on 2 records · October 2026' }));
     await fireEvent.press(queries.getByRole('link', { name: /^Open record Weekly stock/ }));
     selected = { ...fixtures.businessProfile, id: 2, name: 'Second business' };
     const metadata: ChatAnswerMetadata = {
@@ -203,7 +199,7 @@ describe('chat reply record references and actions', () => {
       references: [{ ...chatMetadata.references[0]!, id: 43, label: 'Second business stock' }],
     };
     await queries.rerender(tree(metadata));
-    await fireEvent.press(queries.getByRole('button', { name: 'Records mentioned (1)' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Based on 1 record · October 2026' }));
     await fireEvent.press(queries.getByRole('link', { name: /^Open record Second business stock/ }));
     expect(apiGet.mock.calls.map(([path]) => path)).toEqual(['/records/expenses/41', '/records/expenses/43']);
     await act(async () => { oldRequest.resolve(record); await oldRequest.promise; });
@@ -223,7 +219,7 @@ describe('chat reply record references and actions', () => {
       actions: [{ ...reviewAction, findingId: Number.NaN }],
     } as unknown as ChatAnswerMetadata;
     const queries = await render(tree(metadata));
-    const records = queries.queryByRole('button', { name: /Records mentioned/ });
+    const records = queries.queryByRole('button', { name: /^Based on/ });
     if (records) await fireEvent.press(records);
     for (const node of [
       queries.queryByRole('link', { name: /^Open record Weekly stock/ }),

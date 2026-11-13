@@ -71,31 +71,6 @@ export function SkeletonRows({ rows = 5 }: { rows?: number }) {
   );
 }
 
-/**
- * The AI drawer's "thinking" state.
- *
- * Shaped like an answer bubble rather than shown as a spinner, because the
- * useful signal is "an answer is being written in this spot", and a bubble
- * conveys that where a spinner doesn't.
- */
-export function SkeletonBubble() {
-  return (
-    <div className="flex items-start gap-2">
-      <span
-        aria-hidden
-        className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-tint-brand text-xs text-tone-brand"
-      >
-        ✦
-      </span>
-      <div className="w-[85%] space-y-2 rounded-2xl rounded-bl-sm bg-paper px-3.5 py-3 border border-paper-200">
-        <SkeletonLine className="w-full" />
-        <SkeletonLine className="w-11/12" />
-        <SkeletonLine className="w-3/5" />
-      </div>
-    </div>
-  );
-}
-
 /** Full dashboard skeleton, matching the real grid so nothing jumps. */
 export function SkeletonDashboard() {
   return (

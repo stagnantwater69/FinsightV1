@@ -1,57 +1,46 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { SkeletonBubble } from "../Skeleton";
+import { useEffect, useRef, useState } from "react";
 import { formatMoney } from "../Money";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { Button } from "../Button";
 import { AnswerExtras } from "./AnswerExtras";
+import { FinAvatar } from "./FinAvatar";
+import { IconArrowUp, IconChevronDown, IconEdit } from "../icons";
 import type { ChatMessage, InteractionModule } from "../../lib/types";
 
 /**
- * The scrolling half of the chat page: welcome state, bubbles, starter chips
- * and the two banners.
- *
- * Everything visual here is lifted from the old AskFinSightDrawer unchanged —
- * the two mascot sizes, the bubble radii and colours, the chip pill. The
- * drawer is gone but its visual language is not being redesigned in the same
- * pass that moves it, so a change of layout cannot be mistaken for a change of
- * behaviour.
+ * The scrolling half of the chat: welcome state, the thread, and the banners.
+ * Suggested follow-ups are not here; they live in one row above the composer
+ * (see AskFinSightDrawer), so they sit where the next question is typed.
  */
 
 interface ModuleCopy {
   title: string;
-  scope: string;
   greeting: string;
   starters: string[];
 }
 
 /**
- * The per-module copy, carried over verbatim from the drawer.
+ * The per-module copy.
  *
- * It survives the drawer because it is product writing, not scaffolding: each
- * scope line states what FinSight can and cannot answer for that screen, and
- * each starter set was written against what that screen's server-side context
- * actually contains. A conversation is no longer bound to a module, so this
- * now keys off the ORIGIN module — where the question started — and only
- * governs the welcome state.
+ * It is product writing, not scaffolding: each starter set was written
+ * against what that screen's server-side context actually contains. It keys
+ * off the ORIGIN module, where the question started, and governs the welcome
+ * state and the fallback suggestions.
  */
 export const MODULE_COPY: Record<InteractionModule, ModuleCopy> = {
   Dashboard: {
     title: "Ask FinSight about your dashboard",
-    scope: "Scoped to your Dashboard — I can walk through your totals, what needs review, and your recovery pace.",
     greeting:
       "I can explain what's on your dashboard right now — your expenses, sales, alerts, and recovery pace. What would you like to know?",
     starters: ["Summarise this month for me", "What needs my attention?", "How can I reduce my expenses?"],
   },
   "Expense Insights": {
     title: "Ask FinSight about your expenses",
-    scope: "Scoped to Expense Insights — I can explain category shares, increases, and which records look unusual.",
     starters: ["Why did my expenses increase?", "Which category is highest?", "How can I reduce my expenses?"],
     greeting: "I can help you understand your expense behaviour. What would you like to know?",
   },
   "Spending Impact": {
     title: "Ask FinSight about spending",
-    scope:
-      "Scoped to Spending Impact — describe a planned expense in your own words and FinSight calculates the real impact. The numbers are computed, not estimated by AI.",
     starters: ["What if I spend ₱11,000 on a fridge?", "How much of my funds would that use?", "Is this a large expense for me?"],
     greeting:
       'Describe a planned expense in your own words and I\'ll run the real numbers. For example: "What if I spend ₱11,000 on a fridge?"',
@@ -66,8 +55,6 @@ export const MODULE_COPY: Record<InteractionModule, ModuleCopy> = {
   */
   "Records Review": {
     title: "Ask FinSight about this flag",
-    scope:
-      "Scoped to Needs review — I can explain the comparison behind a flag. A flag is never a claim that something is wrong.",
     starters: [
       "Why was this flagged?",
       "What does FinSight compare against?",
@@ -78,12 +65,14 @@ export const MODULE_COPY: Record<InteractionModule, ModuleCopy> = {
   },
   "Recovery Target": {
     title: "Ask FinSight about recovery",
-    scope: "Scoped to Recovery Target — I can explain today's gap and how the remaining target spreads across the open days you have left.",
     starters: ["How much more sales do I need?", "Did I reach today's target?", "What is my adjusted daily target?"],
     greeting:
       "I can compare your recorded sales against your needed target and show how much is still needed. What would you like to check?",
   },
 };
+
+/** How far above the newest message the owner must be before "Jump to latest" shows. */
+const AWAY_FROM_LATEST_PX = 240;
 
 interface Props {
   /** Governs the welcome copy only — the origin module, not a binding. */
@@ -98,9 +87,10 @@ interface Props {
   /** The amount the server parsed out of the last question, if any. */
   detectedAmount: number | null;
   error: string | null;
+  /** A welcome card was pressed. The drawer sends it straight away. */
   onStarter: (question: string) => void;
-  /** A follow-up chip under the latest reply was pressed — primes the box like a starter. */
-  onFollowUp?: (question: string) => void;
+  /** The newest question was edited in place and sent again. */
+  onEdit?: (question: string) => void;
   onRate?: (messageId: number, feedback: "up" | "down" | null) => void;
   /** A link under a reply is leaving for another page. */
   onNavigate?: () => void;
@@ -119,7 +109,7 @@ export function ChatMessages({
   detectedAmount,
   error,
   onStarter,
-  onFollowUp = onStarter,
+  onEdit,
   onRate = () => undefined,
   onNavigate = () => undefined,
   nextCursor,
@@ -130,6 +120,21 @@ export function ChatMessages({
   const copy = MODULE_COPY[originModule];
   const bodyRef = useRef<HTMLDivElement>(null);
   const olderScrollRef = useRef<{ height: number; top: number } | null>(null);
+  const [awayFromLatest, setAwayFromLatest] = useState(false);
+  const [editing, setEditing] = useState<{ id: number; text: string } | null>(null);
+
+  /*
+   * The reply that arrived while this view was watching. Only it gets the
+   * reveal: replaying the entrance on every reply of a reopened conversation
+   * would animate history, which is not news.
+   */
+  const [revealId, setRevealId] = useState<number | null>(null);
+  const wasSending = useRef(sending);
+  useEffect(() => {
+    const last = messages.at(-1);
+    if (wasSending.current && !sending && last?.role === "assistant") setRevealId(last.id);
+    wasSending.current = sending;
+  }, [sending, messages]);
 
   useEffect(() => {
     const node = bodyRef.current;
@@ -143,156 +148,205 @@ export function ChatMessages({
   useEffect(() => { if (!loadingOlder) olderScrollRef.current = null; }, [loadingOlder]);
 
   const welcome = messages.length === 0 && !loading;
+  const lastUserId = messages.findLast((m) => m.role === "user")?.id;
 
   return (
-    <div ref={bodyRef} className="scroll-slim min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
-        {nextCursor && onLoadOlder ? <Button type="button" variant="secondary" disabled={loadingOlder || loading} onClick={() => {
-          const node = bodyRef.current;
-          if (node) olderScrollRef.current = { height: node.scrollHeight, top: node.scrollTop };
-          onLoadOlder();
-        }}>{loadingOlder ? "Loading older messages…" : "Older messages"}</Button> : null}
-        {/*
-          The opening line gets Fin at full size rather than the 24px avatar
-          every later reply carries — this is the "ready to listen" moment in
-          docs/mascot-scenario-library.md, and it is the one point on the page
-          with room for the whole scene (head, question bubble, sparkles).
-          Deliberately NOT a <Bubble>: stacking the small avatar under the
-          large mascot would put Fin on screen twice, saying the same thing.
-        */}
-        {welcome ? (
-          <div className="flex flex-col items-center pb-1 text-center">
-            <img
-              src="/mascot/ask-fin.webp"
-              alt=""
-              aria-hidden
-              width={104}
-              height={83}
-              className="h-[83px] w-[104px] select-none"
-              draggable={false}
-            />
-            <p className="mt-2 max-w-[90%] text-sm leading-relaxed text-ink-700">{copy.greeting}</p>
+    <>
+      <div
+        ref={bodyRef}
+        onScroll={(e) => {
+          const node = e.currentTarget;
+          setAwayFromLatest(node.scrollHeight - node.scrollTop - node.clientHeight > AWAY_FROM_LATEST_PX);
+        }}
+        className="scroll-slim min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6"
+      >
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+          {nextCursor && onLoadOlder ? <Button type="button" variant="secondary" disabled={loadingOlder || loading} onClick={() => {
+            const node = bodyRef.current;
+            if (node) olderScrollRef.current = { height: node.scrollHeight, top: node.scrollTop };
+            onLoadOlder();
+          }}>{loadingOlder ? "Loading older messages…" : "Older messages"}</Button> : null}
 
-            {/* The chips prime the box; they never send. Same pill as the
-                drawer's, so the affordance is recognisably the same one. */}
-            <div className="mt-4 flex flex-wrap justify-center gap-2">
-              {copy.starters.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => onStarter(s)}
-                  className="min-h-tap rounded-full border border-brand-200 px-3 text-xs text-tone-brand transition hover:bg-tint-brand"
-                >
-                  {s}
-                </button>
-              ))}
+          {/* Fin at full size once, for the "ready to listen" moment; every reply after carries the small badge. */}
+          {welcome ? (
+            <div className="flex flex-col">
+              <div className="surface-ai-glow flex flex-col items-center rounded-3xl px-2 pb-2 pt-6 text-center">
+                <FinAvatar size="lg" />
+                <h3 className="mt-5 font-display text-2xl font-bold tracking-tight text-ink-900">Make sense of your numbers.</h3>
+                <p className="mt-2 max-w-sm text-sm leading-relaxed text-ink-600">{copy.greeting}</p>
+              </div>
+
+              <p className="mb-2 mt-6 px-1 text-xs font-semibold text-ink-500">Tap a question and Fin answers it</p>
+              <div className="flex flex-col gap-2">
+                {copy.starters.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => onStarter(s)}
+                    className="group flex min-h-tap items-center gap-3 rounded-2xl border border-paper-200 bg-paper px-4 py-3 text-left text-sm font-medium text-ink-900 shadow-sm transition hover:border-brand-200 hover:shadow-md"
+                  >
+                    <span className="flex-1">{s}</span>
+                    {/* An up arrow, the composer's own send mark: pressing this asks it. */}
+                    <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-tint-brand text-tone-brand transition-colors group-hover:bg-brand-600 group-hover:text-white">
+                      <IconArrowUp className="h-4 w-4" />
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {loading ? <p role="status" className="text-center text-xs text-ink-500">Loading this conversation…</p> : null}
+          {loading ? <p role="status" className="text-center text-xs text-ink-500">Loading this conversation…</p> : null}
 
-        {messages.map((m, index) => {
-          if (m.role === "user") {
+          {messages.map((m, index) => {
+            if (m.role === "user") {
+              const editable = onEdit && m.id === lastUserId && !sending;
+              if (editable && editing?.id === m.id) {
+                const draft = editing.text.trim();
+                const submitEdit = () => {
+                  if (!draft) return;
+                  setEditing(null);
+                  onEdit(draft);
+                };
+                return (
+                  <form
+                    key={m.id}
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      submitEdit();
+                    }}
+                    className="ml-auto flex w-full max-w-[85%] flex-col gap-2 rounded-[22px] border border-edge-brand bg-paper p-3 shadow-md"
+                  >
+                    <textarea
+                      autoFocus
+                      aria-label="Edit your question"
+                      rows={3}
+                      value={editing.text}
+                      onChange={(e) => setEditing({ id: m.id, text: e.target.value })}
+                      onFocus={(e) => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setEditing(null);
+                        else if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          submitEdit();
+                        }
+                      }}
+                      className="w-full resize-none bg-transparent px-1 text-[15px] leading-6 text-ink-900 outline-none focus-visible:ring-0"
+                    />
+                    <div className="flex justify-end gap-2">
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(null)}>
+                        Cancel
+                      </Button>
+                      <Button type="submit" size="sm" disabled={!draft} aria-label="Send edited question">
+                        Send
+                      </Button>
+                    </div>
+                  </form>
+                );
+              }
+              return (
+                <div key={m.id} className="flex items-center justify-end gap-1">
+                  {editable ? (
+                    <button
+                      type="button"
+                      onClick={() => setEditing({ id: m.id, text: m.content })}
+                      aria-label="Edit this question"
+                      className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
+                    >
+                      <IconEdit className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                  <p className="max-w-[85%] whitespace-pre-wrap rounded-[22px] rounded-br-md bg-brand-800 px-4 py-3 text-[15px] leading-6 text-white shadow-md">
+                    {m.content}
+                  </p>
+                </div>
+              );
+            }
+            // The newest reply, while nothing newer is being written, is the
+            // one whose actions are still current.
+            const latest = index === messages.length - 1 && !sending;
             return (
-              <Bubble key={m.id} from="user">
-                {m.content}
-              </Bubble>
+              <div key={m.id} className="flex items-start gap-3">
+                <FinAvatar />
+                <div className="flex min-w-0 flex-1 flex-col gap-3">
+                  <p className="text-sm font-semibold leading-8 text-ink-900">Fin</p>
+                  <div className={`-mt-2 text-[15px] leading-7 text-ink-700 ${m.id === revealId ? "chat-reveal" : ""}`}>
+                    <ChatMarkdown text={m.content} />
+                  </div>
+                  {m.metadata ? (
+                    <AnswerExtras
+                      metadata={m.metadata}
+                      content={m.content}
+                      latest={latest}
+                      feedback={m.feedback ?? null}
+                      onRate={(value) => onRate(m.id, value)}
+                      onNavigate={onNavigate}
+                    />
+                  ) : null}
+                </div>
+              </div>
             );
-          }
-          // The newest reply, while nothing newer is being written, is the
-          // one whose follow-ups and actions are still current.
-          const latest = index === messages.length - 1 && !sending;
-          return (
-            <div key={m.id} className="flex flex-col gap-2">
-              <Bubble from="ai">
-                <ChatMarkdown text={m.content} />
-              </Bubble>
-              {m.metadata ? (
-                <AnswerExtras
-                  metadata={m.metadata}
-                  latest={latest}
-                  feedback={m.feedback ?? null}
-                  onFollowUp={onFollowUp}
-                  onRate={(value) => onRate(m.id, value)}
-                  onNavigate={onNavigate}
-                />
-              ) : null}
+          })}
+
+          {sending ? (
+            <div aria-hidden className="flex animate-fade-up items-center gap-3">
+              <FinAvatar thinking />
+              <div className="flex items-center gap-2.5 rounded-2xl rounded-tl-md border border-paper-200 bg-paper px-4 py-2.5 text-sm text-ink-600 shadow-sm">
+                <span className="flex gap-1">
+                  {[0, 150, 300].map((delay) => (
+                    <span key={delay} className="h-1.5 w-1.5 rounded-full bg-brand-600 motion-safe:animate-pulse" style={{ animationDelay: `${delay}ms` }} />
+                  ))}
+                </span>
+                Working from your records…
+              </div>
             </div>
-          );
-        })}
+          ) : null}
+          <p role="status" aria-live="polite" className="sr-only">{sending ? "FinSight is preparing an answer." : messages.length > 0 ? "Conversation updated." : ""}</p>
 
-        {sending ? <SkeletonBubble /> : null}
-        <p role="status" aria-live="polite" className="sr-only">{sending ? "FinSight is preparing an answer." : messages.length > 0 ? "Conversation updated." : ""}</p>
+          {/*
+            Both providers failed. The backend still returns a placeholder answer
+            with a 2xx, so this says so out loud rather than letting it read like
+            a real, considered response.
+          */}
+          {unavailable ? (
+            <p className="rounded-xl bg-tint-danger p-3 text-xs text-tone-danger">
+              FinSight's AI assistant is unreachable right now, so the message above is a placeholder rather than a real
+              answer. Your numbers on the rest of the app are unaffected — they're calculated by FinSight, not by AI.
+            </p>
+          ) : null}
 
-        {/*
-          Both providers failed. The backend still returns a placeholder answer
-          with a 2xx, so this says so out loud rather than letting it read like
-          a real, considered response.
-        */}
-        {unavailable ? (
-          <p className="rounded-lg bg-tint-danger p-3 text-xs text-tone-danger">
-            FinSight's AI assistant is unreachable right now, so the message above is a placeholder rather than a real
-            answer. Your numbers on the rest of the app are unaffected — they're calculated by FinSight, not by AI.
-          </p>
-        ) : null}
+          {/*
+            What the server read as an amount out of a plainly-worded question.
+            Shown because the figure drives a real calculation: if it misread
+            "11,000" the owner should be able to see that before trusting the
+            answer built on it.
+          */}
+          {detectedAmount !== null ? (
+            <p className="rounded-xl bg-tint-neutral p-3 text-xs text-tone-neutral">
+              FinSight read <span className="figure">{formatMoney(detectedAmount)}</span> from your question and used that
+              figure in its calculation.
+            </p>
+          ) : null}
 
-        {/*
-          What the server read as an amount out of a plainly-worded question.
-          Shown because the figure drives a real calculation: if it misread
-          "11,000" the owner should be able to see that before trusting the
-          answer built on it.
-        */}
-        {detectedAmount !== null ? (
-          <p className="rounded-lg bg-tint-neutral p-3 text-xs text-tone-neutral">
-            FinSight read <span className="figure">{formatMoney(detectedAmount)}</span> from your question and used that
-            figure in its calculation.
-          </p>
-        ) : null}
-
-        {error ? (
-          <div className="rounded-lg bg-tint-danger p-3">
-            <p role="alert" className="text-xs text-tone-danger">{error}</p>
-            {onReload ? <Button type="button" variant="secondary" size="sm" className="mt-2" disabled={loading || loadingOlder} onClick={onReload}>Reload conversation</Button> : null}
-          </div>
-        ) : null}
+          {error ? (
+            <div className="rounded-xl bg-tint-danger p-3">
+              <p role="alert" className="text-xs text-tone-danger">{error}</p>
+              {onReload ? <Button type="button" variant="secondary" size="sm" className="mt-2" disabled={loading || loadingOlder} onClick={onReload}>Reload conversation</Button> : null}
+            </div>
+          ) : null}
+        </div>
       </div>
-    </div>
-  );
-}
 
-function Bubble({ from, children }: { from: "ai" | "user"; children: ReactNode }) {
-  if (from === "user") {
-    return (
-      <div className="flex justify-end">
-        <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-brand-600 px-3.5 py-2.5 text-sm text-white">
-          {children}
-        </p>
-      </div>
-    );
-  }
-  return (
-    <div className="flex items-start gap-2">
-      {/*
-        Fin's face rather than a ✦, so the column of replies reads as coming
-        from someone. The head is cropped away from the question bubble and
-        sparkle marks it ships with (see scripts/convert-mascot-assets.py):
-        the whole scene at this size leaves the face about fourteen pixels
-        wide, which is a smudge rather than a character.
-      */}
-      <img
-        src="/mascot/ask-fin-avatar.webp"
-        alt=""
-        aria-hidden
-        width={24}
-        height={24}
-        className="mt-0.5 h-6 w-6 shrink-0 select-none"
-        draggable={false}
-      />
-
-      <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-paper-200 bg-paper px-3.5 py-2.5 text-sm text-ink-700">
-        {children}
-      </div>
-    </div>
+      {awayFromLatest ? (
+        <button
+          type="button"
+          onClick={() => bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: "smooth" })}
+          className="tap absolute bottom-3 left-1/2 flex -translate-x-1/2 animate-fade-up items-center gap-1.5 rounded-full border border-paper-200 bg-paper px-4 text-xs font-semibold text-ink-700 shadow-md transition hover:text-ink-900"
+        >
+          <IconChevronDown className="h-4 w-4" />
+          Jump to latest
+        </button>
+      ) : null}
+    </>
   );
 }

@@ -7,6 +7,7 @@ import { FIELD_LIMITS } from "../lib/fieldLimits";
 import { IconArrowUp, IconPlus } from "./icons";
 import { ChatHistoryOverlay } from "./aiChat/ChatHistoryOverlay";
 import { ChatMessages, MODULE_COPY } from "./aiChat/ChatMessages";
+import { FinAvatar } from "./aiChat/FinAvatar";
 
 /** Roughly seven lines of the composer's 20px line height, plus its padding. */
 const COMPOSER_MAX_PX = 164;
@@ -149,6 +150,16 @@ export function AskFinSightDrawer() {
     inputRef.current?.focus();
   }
 
+  /*
+   * One row of suggested questions above the composer once a thread exists:
+   * the newest reply's follow-ups, or this screen's starters when that reply
+   * offered none. Tapping one asks it, the same as a welcome card.
+   */
+  const latestReply = messages.at(-1)?.role === "assistant" ? messages.at(-1) : undefined;
+  const followUps = latestReply?.metadata?.followUps ?? [];
+  const suggestions = followUps.length > 0 ? followUps : copy.starters;
+  const showSuggestions = messages.length > 0 && !sending && pendingQuestion === null && !historyOpen;
+
   return createPortal(
     <>
       <div
@@ -177,31 +188,35 @@ export function AskFinSightDrawer() {
         role="dialog"
         aria-modal="true"
         aria-label="Ask FinSight"
-        className={`fixed inset-0 z-50 flex flex-col bg-paper shadow-lg transition-transform duration-300 ease-shell sm:inset-y-0 sm:left-auto sm:right-0 sm:w-full sm:max-w-md ${
+        className={`fixed inset-0 z-50 flex flex-col bg-paper-50 shadow-lg transition-transform duration-300 ease-shell sm:inset-y-0 sm:left-auto sm:right-0 sm:w-full sm:max-w-md ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
-        <header className="bg-brand-800 px-4 py-3 text-white">
-          <div className="flex items-center gap-1">
+        {/*
+          A light header led by Fin's face, so the panel reads as a person to
+          ask rather than a dark slab of chrome over the page.
+        */}
+        <header className="border-b border-paper-200 bg-paper">
+          <div className="flex items-center gap-3 py-3 pl-4 pr-2">
+            <FinAvatar size="md" />
+            <div className="min-w-0 flex-1">
+              <h2 className="truncate text-sm font-semibold text-ink-900">{active ? active.title : copy.title}</h2>
+              <p className="truncate text-xs text-ink-500">Fin · answers from your records</p>
+            </div>
             <button
               type="button"
               onClick={() => setHistoryOpen((v) => !v)}
               aria-label="Chat history"
               aria-expanded={historyOpen}
-              className="tap h-11 w-11 shrink-0 rounded-lg bg-white/10 text-white transition hover:bg-white/25"
+              className={`tap h-11 w-11 shrink-0 rounded-xl transition ${historyOpen ? "bg-tint-brand text-tone-brand" : "text-ink-600 hover:bg-paper-100 hover:text-ink-900"}`}
             >
               <List aria-hidden size={18} className="mx-auto" />
             </button>
-
-            <h2 className="min-w-0 flex-1 truncate px-1 text-sm font-semibold">
-              {active ? active.title : copy.title}
-            </h2>
-
             <button
               type="button"
               onClick={startNewChat}
               aria-label="New chat"
-              className="tap h-11 w-11 shrink-0 rounded-lg bg-white/10 text-white transition hover:bg-white/25"
+              className="tap h-11 w-11 shrink-0 rounded-xl text-ink-600 transition hover:bg-paper-100 hover:text-ink-900"
             >
               <IconPlus className="mx-auto h-[18px] w-[18px]" />
             </button>
@@ -209,15 +224,11 @@ export function AskFinSightDrawer() {
               type="button"
               onClick={closeChat}
               aria-label="Close Ask FinSight"
-              className="tap h-11 w-11 shrink-0 rounded-lg bg-white/15 text-lg leading-none transition hover:bg-white/25"
+              className="tap h-11 w-11 shrink-0 rounded-xl text-xl leading-none text-ink-600 transition hover:bg-paper-100 hover:text-ink-900"
             >
               ×
             </button>
           </div>
-          {/* The scope line is the drawer's own product copy. It states what
-              FinSight can answer from the screen the question started on, which
-              is the honest framing the whole feature depends on. */}
-          <p className="mt-2 rounded-lg bg-white/10 px-3 py-2 text-xs leading-relaxed text-brand-50">{copy.scope}</p>
         </header>
         {pendingQuestion || recoveryMessage ? (
           <div className="border-b border-paper-200 bg-paper-50 px-4 py-3">
@@ -242,10 +253,8 @@ export function AskFinSightDrawer() {
             unavailable={unavailable}
             detectedAmount={detectedAmount}
             error={error}
-            onStarter={(question) => {
-              setInput(question);
-              inputRef.current?.focus();
-            }}
+            onStarter={send}
+            onEdit={send}
             onRate={rate}
             onNavigate={closeChat}
             nextCursor={messagesNextCursor}
@@ -285,8 +294,35 @@ export function AskFinSightDrawer() {
             e.preventDefault();
             send(input);
           }}
-          className="border-t border-paper-200 px-4 py-3"
+          className="flex flex-col gap-2.5 px-4 pb-3 pt-1"
         >
+          {/*
+            One row that scrolls sideways rather than wrapping, so suggestions
+            never push the conversation up. Bled to the panel edges and faded
+            on the right to show there is more. A plain mouse wheel only moves
+            vertically, so it is turned into sideways movement here; that is
+            what keeps the row reachable with the scrollbar hidden.
+          */}
+          {showSuggestions ? (
+            <div
+              aria-label="Suggested questions"
+              onWheel={(e) => {
+                if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
+              }}
+              className="scroll-none -mx-4 flex gap-2 overflow-x-auto px-4 py-0.5 [mask-image:linear-gradient(90deg,#000_85%,transparent)]"
+            >
+              {suggestions.map((question) => (
+                <button
+                  key={question}
+                  type="button"
+                  onClick={() => send(question)}
+                  className="min-h-tap shrink-0 animate-fade-up whitespace-nowrap rounded-full border border-edge-brand bg-paper px-4 text-xs font-medium text-tone-brand shadow-sm transition hover:border-brand-300 hover:bg-tint-brand"
+                >
+                  {question}
+                </button>
+              ))}
+            </div>
+          ) : null}
           {/*
             The focus indicator belongs to the BOX, not to the textarea inside
             it. index.css rings every :focus-visible element globally, which
@@ -302,7 +338,7 @@ export function AskFinSightDrawer() {
             used here fires on click as well as on Tab: it has to be something
             that looks deliberate at every focus, not only at a keyboard one.
           */}
-          <div className="flex items-end gap-2 rounded-3xl border border-ink-200 bg-paper p-1 pl-4 transition-colors focus-within:border-brand-600 focus-within:ring-1 focus-within:ring-brand-600 focus-within:ring-offset-0">
+          <div className="flex items-end gap-2 rounded-[26px] border border-ink-200 bg-paper p-1.5 pl-4 shadow-md transition-colors focus-within:border-brand-600 focus-within:ring-1 focus-within:ring-brand-600 focus-within:ring-offset-0">
             <label className="sr-only" htmlFor="ai-chat-question">
               Ask about your numbers
             </label>
@@ -352,6 +388,7 @@ export function AskFinSightDrawer() {
               <IconArrowUp className="h-5 w-5" />
             </button>
           </div>
+          <p className="text-center text-xs text-ink-500">Check important decisions against your records.</p>
         </form>
       </aside>
     </>,
