@@ -43,6 +43,7 @@ describe("production CSP", () => {
     expect(directive(csp, "connect-src")).toEqual(["'self'", SUPABASE, "wss://abcd1234.supabase.co"]);
     expect(directive(csp, "img-src")).toEqual(["'self'", "data:", "blob:", SUPABASE]);
     expect(directive(csp, "frame-ancestors")).toEqual(["'none'"]);
+    expect(directive(csp, "frame-src")).toEqual(["https://www.youtube-nocookie.com"]);
     expect(directive(csp, "object-src")).toEqual(["'none'"]);
   });
 
