@@ -21,6 +21,10 @@ export type DashboardStackParamList = {
   Notifications: undefined;
   MoneyFlow: undefined;
   Onboarding: undefined;
+  /** Opened from Home's header. `recorded` is set on the way back from saving a payment; cleared once read. */
+  PaymentCalendar: { recorded?: boolean } | undefined;
+  /** Also in the Insights stack; here so the calendar's add and edit come back to it. */
+  RecurringSchedule: { scheduleId?: number } | undefined;
 };
 
 export type RecordsStackParamList = {
@@ -45,8 +49,6 @@ export type InsightsStackParamList = {
   /** Prefilled from an Ask FinSight answer; validated by the screen, so typed loosely. */
   SpendingImpact: { plannedAmount?: unknown } | undefined;
   RecoveryTarget: undefined;
-  /** `recorded` is set on the way back from saving a payment; cleared once read. */
-  PaymentCalendar: { recorded?: boolean } | undefined;
   RecurringSchedule: { scheduleId?: number } | undefined;
 };
 

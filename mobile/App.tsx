@@ -193,6 +193,12 @@ function DashboardStack() {
       <DashboardNav.Screen name="DashboardHome" component={DashboardScreen} options={{ headerShown: false }} />
       <DashboardNav.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: false }} />
       <DashboardNav.Screen name="MoneyFlow" component={MoneyFlowScreen} options={{ title: "Money in and out" }} />
+      {/* Opened from the calendar button on Home's header, so it lives in
+          this stack: the Home tab stays lit and back returns to Home. The
+          repeating-payment form is registered here too, so adding or editing
+          one from the calendar comes back to the calendar. */}
+      <DashboardNav.Screen name="PaymentCalendar" component={PaymentCalendarScreen} options={{ headerShown: false }} />
+      <DashboardNav.Screen name="RecurringSchedule" component={RecurringScheduleScreen} options={{ title: "Repeating payment" }} />
       {/* How someone who chose "Skip for now" gets back into setup — the
           wizard draws its own header, so this one is hidden. */}
       <DashboardNav.Screen name="Onboarding" component={OnboardingResumeScreen} options={{ headerShown: false }} />
@@ -295,7 +301,6 @@ function InsightsStack() {
       <InsightsNav.Screen name="ExpenseBehavior" component={ExpenseBehaviorScreen} />
       <InsightsNav.Screen name="SpendingImpact" component={SpendingImpactScreen} />
       <InsightsNav.Screen name="RecoveryTarget" component={RecoveryTargetScreen} />
-      <InsightsNav.Screen name="PaymentCalendar" component={PaymentCalendarScreen} />
       {/*
         The one screen in this stack that IS pushed onto something, so it is
         the one that keeps a header: it has a parent to go back to (the
@@ -803,7 +808,6 @@ function AuthStack() {
             key={(route.params as { email?: string } | undefined)?.email ?? ""}
             email={(route.params as { email?: string } | undefined)?.email ?? ""}
             onDone={() => navigation.navigate("Login")}
-            onNewCode={(email) => navigation.popTo("RecoverPassword", { email })}
             onChangeEmail={(email) => navigation.popTo("RecoverPassword", { email, editEmail: true })}
           />
         )}

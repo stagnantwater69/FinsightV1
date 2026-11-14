@@ -34,6 +34,7 @@ vi.mock("../../src/services/ai.service", async (importOriginal) => {
 import { prisma } from "../../src/config/prisma";
 import { confirmReceipt, getScan, uploadAndScan } from "../../src/services/receiptScan.service";
 import { listCategories } from "../../src/services/expenseCategory.service";
+import { ensureUncategorised } from "../../src/services/receiptScan/categorisation";
 import { disconnectDb, makeOwnerWithProfile, resetDb, runReceiptWorkerAndWait } from "../setup/testDb";
 
 /** A sari-sari store's restocking run: shop goods in shop quantities. */
@@ -177,6 +178,17 @@ describe("categorising a scanned receipt, business first", () => {
 
     expect(await categoryNames(owner)).toEqual(["Uncategorized"]);
     expect(result.items[0]!.categorisation).toMatchObject({ confidence: "low", source: "none", kind: null });
+  });
+
+  it("creates one Uncategorized when several receipts need it at the same moment", async () => {
+    // Several rounds: the first round on a cold pool rarely overlaps.
+    for (let round = 0; round < 5; round++) {
+      const owner = await makeOwnerWithProfile({ type: "Services" }, []);
+      const ids = await Promise.all([1, 2, 3, 4].map(() => ensureUncategorised(owner.profile.id)));
+
+      expect(new Set(ids).size).toBe(1);
+      expect(await categoryNames(owner)).toEqual(["Uncategorized"]);
+    }
   });
 
   it("saves the categories the owner chose, not the ones FinSight suggested", async () => {

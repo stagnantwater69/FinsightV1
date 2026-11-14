@@ -112,6 +112,9 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+  // The cursor whose batch failed to load. Pauses the automatic fetch so a
+  // dead connection is not retried in a loop; "Try again" clears it.
+  const [failedCursor, setFailedCursor] = useState<string | null>(null);
   const firstSnapshot = useRef<{ identity: string; data: RecordPage } | null>(null);
   const consumedCursors = useRef(new Set<string>());
   const [keyword, setKeyword] = useState("");
@@ -275,6 +278,7 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
         setLoadedAt(updatedAt);
         setLoadFailure(null);
         setLoadFailureIdentity(null);
+        setFailedCursor(null);
       };
       setError(null);
       setClock(Date.now());
@@ -297,7 +301,10 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
         return true;
       } catch (err) {
         if (request !== requestVersion.current) return false;
-        if (append) setError(describeActionFailure(toLoadFailure(err), "Your loaded records are unchanged. Try Load more records again.", "read"));
+        if (append) {
+          setFailedCursor(cursor ?? null);
+          setError(describeActionFailure(toLoadFailure(err), "Your loaded records are unchanged.", "read"));
+        }
         else { setLoadFailure(toLoadFailure(err)); setLoadFailureIdentity(identity); }
         return false;
       } finally {
@@ -312,6 +319,17 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
   useEffect(() => {
     setPageIndex((current) => Math.min(current, loadedPageCount - 1));
   }, [loadedPageCount]);
+
+  // Same as the web table: reaching the last loaded page fetches the next
+  // batch. Not while another read is in flight (the cursor may belong to
+  // results being replaced), nor after a failed batch.
+  const onLastLoadedPage = loadedRecords.length > 0 && visiblePageIndex === loadedPageCount - 1;
+  const readInFlight = loading || loadingMore || refreshing || revalidating || switchingQuery;
+  useEffect(() => {
+    if (onLastLoadedPage && visibleNextCursor && !readInFlight && failedCursor !== visibleNextCursor) {
+      void load(false, visibleNextCursor, true);
+    }
+  }, [onLastLoadedPage, visibleNextCursor, readInFlight, failedCursor, load]);
 
   const activeFilters =
     (categoryId !== null ? 1 : 0) +
@@ -945,10 +963,10 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
                   accessibilityLiveRegion="polite"
                   style={{ textAlign: "center", color: ink[500], marginBottom: space.sm }}
                 >
-                  Page {visiblePageIndex + 1} of {loadedPageCount} · {loadedRecords.length} records loaded
+                  Page {visiblePageIndex + 1} of {loadedPageCount} · {loadedRecords.length} records loaded{loadingMore ? " · Loading more…" : ""}
                 </T>
                 <NumberedPagination page={visiblePageIndex} totalPages={loadedPageCount} reachablePages={loadedPageCount} busy={loadingMore || refreshing || revalidating} available={!switchingQuery} hasNext={visiblePageIndex + 1 < loadedPageCount} onPage={changePage} onNext={() => changePage(visiblePageIndex + 1)} />
-                {visibleNextCursor ? <Button title="Load more records" accessibilityLabel="Load more records" variant="secondary" loading={loadingMore} disabled={loadingMore || refreshing || revalidating || switchingQuery} onPress={() => void load(false, visibleNextCursor, true)} style={{ marginTop: space.md }} /> : null}
+                {visibleNextCursor && failedCursor === visibleNextCursor ? <Button title="Try again" accessibilityLabel="Try loading more records again" variant="secondary" loading={loadingMore} disabled={readInFlight} onPress={() => void load(false, visibleNextCursor, true)} style={{ marginTop: space.md }} /> : null}
               </Card>
           ) : undefined
         }

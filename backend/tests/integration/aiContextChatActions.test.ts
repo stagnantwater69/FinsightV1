@@ -232,6 +232,15 @@ describe("weekly summary alert", () => {
     expect(await sendWeeklySummaries(new Date(monday.getTime() + 60 * 60 * 1000))).toEqual({ sent: 0 });
   });
 
+  it("sends one summary when two workers sweep at the same moment", async () => {
+    const monday = mondayNoonManila();
+    await expense(alice, 1200, { date: dayBefore(monday, 3) });
+
+    const results = await Promise.all([sendWeeklySummaries(monday), sendWeeklySummaries(monday)]);
+    expect(results.map((r) => r.sent).sort()).toEqual([0, 1]);
+    expect(await prisma.notification.count({ where: { type: NOTIFICATION_TYPES.WEEKLY_SUMMARY } })).toBe(1);
+  });
+
   it("sends nothing on other days", async () => {
     const monday = mondayNoonManila();
     await expense(alice, 1200, { date: dayBefore(monday, 3) });

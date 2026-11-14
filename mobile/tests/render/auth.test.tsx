@@ -395,7 +395,7 @@ describe('Register — the success panel', () => {
 
       // The first mail has just gone out, so the resend starts on cooldown.
       const button = await queries.findByRole('button', {
-        name: 'Send again in 60s',
+        name: 'Resend code in 60s',
       });
       expect(button.props.accessibilityState.disabled).toBe(true);
 
@@ -411,7 +411,7 @@ describe('Register — the success panel', () => {
           await vi.advanceTimersByTimeAsync(1000);
         });
         expect(
-          queries.getByRole('button', { name: `Send again in ${expected}s` }),
+          queries.getByRole('button', { name: `Resend code in ${expected}s` }),
         ).toBeTruthy();
       }
     } finally {
@@ -506,7 +506,7 @@ describe('Password recovery', () => {
     expect(navigation.navigate).toHaveBeenCalledWith('ResetPassword', {
       email: 'nena@example.com',
     });
-    expect(queries.getByRole('button', { name: 'Send again in 60s' })).toBeDisabled();
+    expect(queries.getByRole('button', { name: 'Resend code in 60s' })).toBeDisabled();
     await fireEvent.press(queries.getByRole('button', { name: 'Use a different email' }));
     expect(queries.getByLabelText('Email')).toHaveProp('value', 'nena@example.com');
     await fireEvent.press(queries.getByRole('button', { name: 'Back to log in' }));
@@ -520,18 +520,18 @@ describe('Password recovery', () => {
       const queries = await renderRecovery();
       await fireEvent.changeText(queries.getByLabelText('Email'), 'nena@example.com');
       await fireEvent.press(queries.getByRole('button', { name: 'Send code' }));
-      expect(queries.getByRole('button', { name: 'Send again in 60s' })).toBeDisabled();
+      expect(queries.getByRole('button', { name: 'Resend code in 60s' })).toBeDisabled();
       for (let seconds = 0; seconds < 60; seconds += 1) {
         await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
       }
-      const resend = queries.getByRole('button', { name: 'Send it again' });
+      const resend = queries.getByRole('button', { name: 'Resend code' });
       expect(resend).toBeEnabled();
       await fireEvent.press(resend);
       expect(apiPost).toHaveBeenCalledTimes(2);
       expect(apiPost).toHaveBeenLastCalledWith('/auth/recover-password', {
         email: 'nena@example.com', platform: 'mobile',
       });
-      expect(queries.getByRole('button', { name: 'Send again in 60s' })).toBeDisabled();
+      expect(queries.getByRole('button', { name: 'Resend code in 60s' })).toBeDisabled();
     } finally {
       vi.useRealTimers();
     }
@@ -550,19 +550,17 @@ describe('Password recovery', () => {
 describe('Reset password — the emailed code', () => {
   const session = { access_token: 'at-live', refresh_token: 'rt-live' };
   const onDone = vi.fn();
-  const onNewCode = vi.fn();
 
   function renderReset(email = 'nena@example.com') {
     return render(
       <ThemeProvider initialMode="light">
-        <ResetPasswordScreen email={email} onDone={onDone} onNewCode={onNewCode} />
+        <ResetPasswordScreen email={email} onDone={onDone} />
       </ThemeProvider>,
     );
   }
 
   beforeEach(() => {
     onDone.mockReset();
-    onNewCode.mockReset();
   });
 
   it('shows the trimmed recipient as text without an email input on the code step', async () => {
@@ -586,7 +584,7 @@ describe('Reset password — the emailed code', () => {
     apiPost.mockResolvedValue({});
     verifyOtp.mockResolvedValueOnce({ data: { session }, error: null });
     const queries = await renderReset();
-    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '082450');
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '08245');
     await fireEvent.press(queries.getByRole('button', { name: 'Change email' }));
     expect(queries.getByLabelText('Email')).toHaveProp('value', 'nena@example.com');
     expect(queries.queryByLabelText('Recovery code')).toBeNull();
@@ -619,7 +617,7 @@ describe('Reset password — the emailed code', () => {
         <ResetPasswordScreen email=" nena@example.com " onDone={onDone} onChangeEmail={onChangeEmail} />
       </ThemeProvider>,
     );
-    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '082450');
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '08245');
     await fireEvent.press(queries.getByRole('button', { name: 'Change email' }));
     expect(onChangeEmail).toHaveBeenCalledWith('nena@example.com');
     expect(queries.getByLabelText('Recovery code')).toHaveProp('value', '');
@@ -636,11 +634,24 @@ describe('Reset password — the emailed code', () => {
     expect(verifyOtp).not.toHaveBeenCalled();
   });
 
+  it('checks a six-digit code as soon as the last box is filled, without Continue', async () => {
+    verifyOtp.mockResolvedValueOnce({ data: { session }, error: null });
+    const queries = await renderReset(' nena@example.com ');
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '08245');
+    expect(verifyOtp).not.toHaveBeenCalled();
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '08 2450');
+    await waitFor(() => expect(verifyOtp).toHaveBeenCalledWith({
+      email: 'nena@example.com',
+      token: '082450',
+      type: 'recovery',
+    }));
+    expect(verifyOtp).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
-    ['08 2450', '082450'],
     ['0753-2474', '07532474'],
     ['01234 56789', '0123456789'],
-  ])('submits the complete code %s only after Continue is pressed', async (raw, token) => {
+  ])('submits the longer pasted code %s only after Continue is pressed', async (raw, token) => {
     verifyOtp.mockResolvedValueOnce({ data: { session }, error: null });
     const queries = await renderReset(' nena@example.com ');
     await fireEvent.changeText(queries.getByLabelText('Recovery code'), raw);
@@ -786,13 +797,46 @@ describe('Reset password — the emailed code', () => {
     expect(updateUser).not.toHaveBeenCalled();
   });
 
-  it('offers a way back to ask for a new code, and to the log-in screen', async () => {
-    const queries = await renderReset(' nena@example.com ');
-    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '082450');
-    await fireEvent.press(queries.getByRole('button', { name: 'Get another code' }));
-    expect(onNewCode).toHaveBeenCalledWith('nena@example.com');
-    expect(queries.getByLabelText('Recovery code')).toHaveProp('value', '');
-    await fireEvent.press(queries.getByRole('button', { name: 'Back to log in' }));
-    expect(onDone).toHaveBeenCalled();
+  it('resends the code in place after the countdown, and offers the log-in screen', async () => {
+    vi.useFakeTimers();
+    try {
+      apiPost.mockReset().mockResolvedValue({});
+      const queries = await renderReset(' nena@example.com ');
+      // The code has just been sent, so the resend starts on its countdown.
+      expect(queries.getByRole('button', { name: 'Resend code in 60s' })).toBeDisabled();
+      await fireEvent.changeText(queries.getByLabelText('Recovery code'), '082450');
+      for (let seconds = 0; seconds < 60; seconds += 1) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      }
+      await fireEvent.press(queries.getByRole('button', { name: 'Resend code' }));
+      expect(apiPost).toHaveBeenCalledWith('/auth/recover-password', {
+        email: 'nena@example.com', platform: 'mobile',
+      });
+      expect(queries.getByRole('button', { name: 'Resend code in 60s' })).toBeDisabled();
+      expect(queries.getByText(/a new code is on its way/)).toBeTruthy();
+      expect(queries.getByLabelText('Recovery code')).toHaveProp('value', '');
+      await fireEvent.press(queries.getByRole('button', { name: 'Back to log in' }));
+      expect(onDone).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the typed code and says why when a resend fails', async () => {
+    vi.useFakeTimers();
+    try {
+      apiPost.mockReset().mockRejectedValue(new Error('Too many requests. Try again later.'));
+      const queries = await renderReset('nena@example.com');
+      await fireEvent.changeText(queries.getByLabelText('Recovery code'), '082450');
+      for (let seconds = 0; seconds < 60; seconds += 1) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      }
+      await fireEvent.press(queries.getByRole('button', { name: 'Resend code' }));
+      expect(queries.getByText(/Too many requests/)).toBeTruthy();
+      expect(queries.getByLabelText('Recovery code')).toHaveProp('value', '082450');
+      expect(queries.getByRole('button', { name: 'Resend code' })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

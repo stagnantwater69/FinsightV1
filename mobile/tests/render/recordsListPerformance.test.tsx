@@ -151,17 +151,14 @@ afterEach(async () => {
 });
 
 describe('RecordsScreen virtualized list behavior', () => {
-  it('appends cursor batches without replacing the current loaded rows', async () => {
+  it('fetches the next cursor batch on its own at the end of the loaded rows, keeping them', async () => {
     const q = await renderScreen();
-    await q.findByText('First page purchase');
-    await fireEvent.press(q.getByRole('button', { name: 'Load more records' }));
     expect(await q.findByText('Second page purchase')).toBeTruthy();
     expect(q.getByText('First page purchase')).toBeTruthy();
     expect(searchCalls()).toHaveLength(2);
     expect(searchCalls()[0]![1]).toMatchObject({ businessProfileId: fixtures.businessProfile.id, limit: 100 });
     expect(searchCalls()[0]![1].includeTotal).toBeUndefined();
     expect(searchCalls()[1]![1]).toMatchObject({ limit: 100, cursor: 'cursor-1' });
-    expect(q.queryByRole('button', { name: 'Load more records' })).toBeNull();
   });
 
   it('keeps resolve and confirmed-delete callbacks wired through swipe actions', async () => {
@@ -169,7 +166,7 @@ describe('RecordsScreen virtualized list behavior', () => {
     const queries = await renderScreen();
     await queries.findByText('First page purchase');
 
-    await fireEvent.press(queries.getByRole('button', { name: 'Resolve' }));
+    await fireEvent.press(queries.getAllByRole('button', { name: 'Resolve' })[0]!);
     await waitFor(() =>
       expect(apiPatch).toHaveBeenCalledWith('/records/expenses/1', {
         duplicateStatus: 'Not a Duplicate',
@@ -178,7 +175,7 @@ describe('RecordsScreen virtualized list behavior', () => {
     );
     expect(await queries.findByText('Marked reviewed and not a duplicate.')).toBeTruthy();
 
-    await fireEvent.press(queries.getByRole('button', { name: 'Delete' }));
+    await fireEvent.press(queries.getAllByRole('button', { name: 'Delete' })[0]!);
     expect(alert).toHaveBeenCalledWith(
       'Delete this record?',
       '"First page purchase" will be removed. This cannot be undone.',
@@ -203,7 +200,7 @@ describe('RecordsScreen virtualized list behavior', () => {
     const alert = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
     const queries = await renderScreen();
     await queries.findByText('First page purchase');
-    await fireEvent.press(queries.getByRole('button', { name: 'Delete' }));
+    await fireEvent.press(queries.getAllByRole('button', { name: 'Delete' })[0]!);
     const buttons = alert.mock.calls[0]![2] ?? [];
     const destructive = buttons.find((button) => button.style === 'destructive');
 
@@ -257,16 +254,13 @@ describe('Records loaded-batch pagination', () => {
     expect(q.getByRole('button', { name: 'Go to page 10' })).toBeTruthy();
     expect(q.queryByRole('button', { name: 'Go to page 25' })).toBeNull();
     await fireEvent.press(q.getByRole('button', { name: 'Last page' }));
-    expect(await q.findByText('Purchase 100')).toBeTruthy();
-    expect(searchCalls()).toHaveLength(1);
-    await fireEvent.press(q.getByRole('button', { name: 'Load more records' }));
     await waitFor(() => expect(q.getByRole('button', { name: 'Go to page 20' })).toBeTruthy());
     expect(q.getByText('Purchase 100')).toBeTruthy();
     expect(q.getByRole('button', { name: 'Go to page 10' }).props.accessibilityState.selected).toBe(true);
-    await fireEvent.press(q.getByRole('button', { name: 'Load more records' }));
+    expect(searchCalls()).toHaveLength(2);
+    await fireEvent.press(q.getByRole('button', { name: 'Last page' }));
     await waitFor(() => expect(q.getByRole('button', { name: 'Go to page 25' })).toBeTruthy());
-    expect(q.getByRole('button', { name: 'Go to page 10' }).props.accessibilityState.selected).toBe(true);
-    expect(q.queryByRole('button', { name: 'Load more records' })).toBeNull();
+    expect(q.getByRole('button', { name: 'Go to page 20' }).props.accessibilityState.selected).toBe(true);
     await fireEvent.press(q.getByRole('button', { name: 'Last page' }));
     expect(await q.findByText('Purchase 250')).toBeTruthy();
     expect(q.getAllByText(/^Purchase \d+$/)).toHaveLength(10);
@@ -300,8 +294,6 @@ describe('Records loaded-batch pagination', () => {
   it('deduplicates overlapping batches by record type and ID while retaining expense/sales ID collisions', async () => {
     apiGet.mockImplementation(async (_path: string, query?: Record<string, unknown>) => query?.cursor ? { items: [record(1, 'Expense one'), { ...record(1, 'Sale one'), type: 'sales' }], nextCursor: null } : { items: [record(1, 'Expense one')], nextCursor: 'mixed' });
     const q = await renderScreen();
-    await q.findByText('Expense one');
-    await fireEvent.press(q.getByRole('button', { name: 'Load more records' }));
     expect(await q.findByText('Sale one')).toBeTruthy();
     expect(q.getAllByText('Expense one')).toHaveLength(1);
     expect(q.getAllByRole('button', { name: 'Resolve' })).toHaveLength(2);
@@ -351,15 +343,16 @@ describe('Records loaded-batch pagination', () => {
     apiGet.mockImplementation((path: string, query?: Record<string, unknown>) => query?.cursor && failed ? Promise.reject(new Error('More records unavailable')) : base(path, query));
     const q = await renderScreen();
     await q.findByText('Purchase 10');
-    await fireEvent.press(q.getByRole('button', { name: 'Load more records' }));
+    await fireEvent.press(q.getByRole('button', { name: 'Last page' }));
     expect(await q.findByText(/More records unavailable/)).toBeTruthy();
-    expect(q.getByText('Purchase 10')).toBeTruthy();
+    expect(q.getByText('Purchase 100')).toBeTruthy();
     expect(q.getByRole('button', { name: 'Go to page 10' })).toBeTruthy();
     expect(q.queryByRole('button', { name: 'Go to page 20' })).toBeNull();
     failed = false;
-    await fireEvent.press(q.getByRole('button', { name: 'Load more records' }));
+    await fireEvent.press(q.getByRole('button', { name: 'Try loading more records again' }));
     await waitFor(() => expect(q.getByRole('button', { name: 'Go to page 20' })).toBeTruthy());
-    expect(q.getByText('Purchase 10')).toBeTruthy();
+    expect(q.getByText('Purchase 100')).toBeTruthy();
+    expect(q.queryByRole('button', { name: 'Try loading more records again' })).toBeNull();
     expect(searchCalls().slice(-2).map((call) => call[1].cursor)).toEqual(['100', '100']);
   });
 
@@ -374,7 +367,7 @@ describe('Records loaded-batch pagination', () => {
     });
     const q = await renderScreen();
     await q.findByText('Purchase 10');
-    await fireEvent.press(q.getByRole('button', { name: 'Load more records' }));
+    await fireEvent.press(q.getByRole('button', { name: 'Last page' }));
     selectedBusiness = { ...fixtures.businessProfile, id: 99, name: 'Second business' };
     await q.rerender(<ThemeProvider initialMode="light"><RecordsScreen navigation={navigation} route={route} /></ThemeProvider>);
     expect(await q.findByText('Second business purchase')).toBeTruthy();
@@ -404,7 +397,9 @@ describe('Records loaded-batch pagination', () => {
     let failDelete!: (error: Error) => void;
     const pendingDelete = new Promise<void>((_resolve, reject) => { failDelete = reject; });
     apiDelete.mockReturnValue(pendingDelete);
-    apiGet.mockImplementation(async (_path: string, query?: Record<string, unknown>) => query?.cursor ? { items: [record(3, 'Appended purchase')], nextCursor: null } : { items: [record(1, 'Deleted purchase'), record(2, 'Other purchase')], nextCursor: 'tail' });
+    let finishAppend!: (page: { items: RecordItem[]; nextCursor: null }) => void;
+    const pendingAppend = new Promise<{ items: RecordItem[]; nextCursor: null }>((resolve) => { finishAppend = resolve; });
+    apiGet.mockImplementation(async (_path: string, query?: Record<string, unknown>) => query?.cursor ? pendingAppend : { items: [record(1, 'Deleted purchase'), record(2, 'Other purchase')], nextCursor: 'tail' });
     const alert = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
     const q = await renderScreen();
     await q.findByText('Deleted purchase');
@@ -413,7 +408,7 @@ describe('Records loaded-batch pagination', () => {
     let deleting: unknown;
     await act(async () => { deleting = confirm?.onPress?.(); });
     expect(q.queryByText('Deleted purchase')).toBeNull();
-    await fireEvent.press(q.getByRole('button', { name: 'Load more records' }));
+    await act(async () => { finishAppend({ items: [record(3, 'Appended purchase')], nextCursor: null }); await pendingAppend; });
     expect(await q.findByText('Appended purchase')).toBeTruthy();
     await act(async () => { failDelete(new Error('Delete failed')); await deleting; });
     expect(await q.findByText('Deleted purchase')).toBeTruthy();
@@ -429,7 +424,7 @@ describe('Records loaded-batch pagination', () => {
     apiGet.mockImplementation((path: string, query?: Record<string, unknown>) => refreshed ? Promise.resolve({ items: [record(99, 'Refreshed purchase')], nextCursor: null }) : base(path, query));
     const q = await renderScreen();
     await q.findByText('Purchase 10');
-    await fireEvent.press(q.getByRole('button', { name: 'Load more records' }));
+    await fireEvent.press(q.getByRole('button', { name: 'Last page' }));
     await waitFor(() => expect(q.getByRole('button', { name: 'Go to page 20' })).toBeTruthy());
     await fireEvent.press(q.getByRole('button', { name: 'Last page' }));
     await q.findByText('Purchase 200');

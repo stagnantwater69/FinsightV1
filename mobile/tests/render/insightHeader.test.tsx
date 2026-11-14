@@ -24,10 +24,11 @@ describe('InsightHeader title switcher', () => {
       'Spending impact', 'How spending affects your business',
       'Recovery target', 'How much to sell to cover costs',
       'Where your money goes',
-      'Payment calendar', 'Bills and regular payments by date',
     ]) {
       expect(q.getAllByText(text).length).toBeGreaterThan(0);
     }
+    // The payment calendar opens from Home's header, not from this list.
+    expect(q.queryByText('Payment calendar')).toBeNull();
     expect(q.queryByText('Ask FinSight')).toBeNull();
   });
 

@@ -11,6 +11,7 @@ const business = { ...fixtures.businessProfile, timezone: 'Asia/Manila' };
 
 vi.mock('@react-navigation/native', () => ({
   useFocusEffect: (effect: () => void | (() => void)) => React.useEffect(effect, [effect]),
+  useIsFocused: () => true,
 }));
 vi.mock('../../src/lib/api', () => ({
   api: {

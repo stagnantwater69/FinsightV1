@@ -60,12 +60,14 @@ export function HomeHeader({
   onSwitch,
   unreadCount,
   onBellPress,
+  onCalendarPress,
 }: {
   selected: BusinessProfile;
   profiles: BusinessProfile[];
   onSwitch: (id: number) => void;
   unreadCount: number;
   onBellPress: () => void;
+  onCalendarPress: () => void;
 }) {
   const t = useTheme();
   const { ink, paper } = t;
@@ -119,6 +121,23 @@ export function HomeHeader({
           <View style={{ flex: 1 }} />
         </Pressable>
 
+        {/* The two icon buttons sit as one group, closer to each other than
+            to the business name. */}
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+        <Pressable
+          onPress={onCalendarPress}
+          accessibilityRole="button"
+          accessibilityLabel="Payment calendar"
+          style={({ pressed }) => ({
+            width: TAP,
+            height: TAP,
+            alignItems: "center",
+            justifyContent: "center",
+            opacity: pressed ? 0.7 : 1,
+          })}
+        >
+          <Ionicons name="calendar-outline" size={24} color={ink[700]} />
+        </Pressable>
         <Pressable
           {...bellTourTarget}
           onPress={onBellPress}
@@ -167,6 +186,7 @@ export function HomeHeader({
             ) : null}
           </View>
         </Pressable>
+        </View>
       </View>
 
       <Modal

@@ -139,11 +139,21 @@ afterEach(() => {
 });
 
 describe("ConfirmEmail", () => {
+  it("checks a six-digit signup code as soon as the last box is filled", async () => {
+    setLinkUrl("");
+    apiPost.mockResolvedValue({ data: { message: "Your email is confirmed.", profile: PROFILE, needsOnboarding: true } });
+    const user = userEvent.setup();
+    renderConfirm({ email: PROFILE.email, codeSent: true });
+    await user.type(await screen.findByLabelText(/confirmation code/i), "082450");
+    await waitFor(() => expect(setSession).toHaveBeenCalled());
+    expect(verifyOtp).toHaveBeenCalledTimes(1);
+    expect(verifyOtp).toHaveBeenCalledWith({ email: PROFILE.email, token: "082450", type: "email" });
+  });
+
   it.each([
-    ["08 2450", "082450"],
     ["7532-4744", "75324744"],
     ["01234 56789", "0123456789"],
-  ])("verifies signup code %s before backend approval and session installation", async (raw, token) => {
+  ])("verifies the longer pasted signup code %s before backend approval and session installation", async (raw, token) => {
     setLinkUrl("");
     apiPost.mockResolvedValue({ data: { message: "Your email is confirmed.", profile: PROFILE, needsOnboarding: true } });
     const user = userEvent.setup();
@@ -151,7 +161,8 @@ describe("ConfirmEmail", () => {
     expect(await screen.findByText(PROFILE.email)).toBeInTheDocument();
     expect(screen.queryByLabelText(/^email/i)).toBeNull();
     expect(screen.getByRole("button", { name: /resend code in/i })).toBeDisabled();
-    await user.type(screen.getByLabelText(/confirmation code/i), raw);
+    await user.click(screen.getByLabelText(/confirmation code/i));
+    await user.paste(raw);
     expect(verifyOtp).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Confirm email" }));
     await waitFor(() => expect(setSession).toHaveBeenCalled());
@@ -172,7 +183,8 @@ describe("ConfirmEmail", () => {
     verifyOtp.mockResolvedValue(result);
     const user = userEvent.setup();
     renderConfirm({ email: PROFILE.email });
-    await user.type(await screen.findByLabelText(/confirmation code/i), "75324744");
+    await user.click(await screen.findByLabelText(/confirmation code/i));
+    await user.paste("75324744");
     await user.click(screen.getByRole("button", { name: "Confirm email" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/code couldn't be verified/i);
     expect(apiPost).not.toHaveBeenCalled();
@@ -186,7 +198,8 @@ describe("ConfirmEmail", () => {
     apiPost.mockRejectedValue(new Error("Account suspended"));
     const user = userEvent.setup();
     renderConfirm({ email: PROFILE.email });
-    await user.type(await screen.findByLabelText(/confirmation code/i), "75324744");
+    await user.click(await screen.findByLabelText(/confirmation code/i));
+    await user.paste("75324744");
     await user.click(screen.getByRole("button", { name: "Confirm email" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't finish confirming/i);
     expect(setSession).not.toHaveBeenCalled();
@@ -318,7 +331,7 @@ describe("ConfirmEmail", () => {
     apiPost.mockResolvedValue({ data: { message: "If eligible, a code is on its way." } });
     const user = userEvent.setup();
     renderConfirm({ email: PROFILE.email });
-    await user.type(await screen.findByLabelText(/confirmation code/i), "082450");
+    await user.type(await screen.findByLabelText(/confirmation code/i), "08245");
     await user.click(screen.getByRole("button", { name: "Change email" }));
     const email = await screen.findByLabelText(/^email/i);
     expect(email).toHaveValue(PROFILE.email);

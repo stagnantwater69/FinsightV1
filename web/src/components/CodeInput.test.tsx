@@ -77,7 +77,7 @@ describe("segmented code entry", () => {
     rerender(<CodeResend remaining={0} sending disabled={false} onResend={onResend} />);
     expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
     rerender(<CodeResend remaining={0} sending={false} disabled={false} onResend={onResend} />);
-    fireEvent.click(screen.getByRole("button", { name: "Get another code" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resend code" }));
     expect(onResend).toHaveBeenCalledOnce();
   });
 });

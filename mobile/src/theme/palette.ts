@@ -79,8 +79,6 @@
  * every `statusText` clears 4.5:1 on its own `statusSurface`, and every
  * `*Fill`/`*Solid` clears 4.5:1 against the ink named as its `on*` partner.
  * `ink[400]` is the muted step in both and is decorative/placeholder only.
- * `tests/theme.test.ts` pins the light values to the constants that shipped
- * before this file existed, so Light is provably unchanged.
  */
 
 export type ThemeMode = "light" | "dark";
@@ -260,28 +258,28 @@ export interface Palette {
 /* ==================================================================
    LIGHT
    ==================================================================
-   Every value below is the constant that shipped in tokens.ts before this
-   file existed. Light is a refactor, not a redesign.
+   White reading surfaces sit above mint-neutral backgrounds; the ink ramp
+   keeps secondary text readable even on the strongest neutral fill.
    ------------------------------------------------------------------ */
 
 const LIGHT_INK: InkRamp = {
-  50: "#f6f8f8",
-  100: "#eceff0",
-  200: "#d5dbdd",
-  300: "#b0bbbe",
-  400: "#7f8f94", // decorative / placeholder only — 3.36:1, not for body text
-  500: "#5d6d72",
-  600: "#4a585c",
-  700: "#3d4749",
-  800: "#2c3436",
-  900: "#1a2022",
+  50: "#f7faf8",
+  100: "#eaf1ee",
+  200: "#d8e4de",
+  300: "#aec1b7",
+  400: "#7c9186", // decorative / placeholder only
+  500: "#53675f",
+  600: "#40564c",
+  700: "#30463d",
+  800: "#20352c",
+  900: "#142b22",
 };
 
 const LIGHT_PAPER: PaperRamp = {
   DEFAULT: "#ffffff",
-  50: "#fbfdfc",
-  100: "#f4f8f7",
-  200: "#e8efed",
+  50: "#f3f7f5",
+  100: "#eaf1ee",
+  200: "#d8e4de",
 };
 
 const LIGHT_BRAND: BrandRamp = {
