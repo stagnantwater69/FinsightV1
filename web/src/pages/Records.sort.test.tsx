@@ -55,7 +55,9 @@ const SERVER_ORDER = [
 ];
 
 let searchResponses: { items: RecordItem[]; nextCursor: string | null }[];
-let failNextSearch = false;
+// The sort whose next request fails. Keyed by sort, not "the next search", so
+// a background revalidation landing first cannot take the failure instead.
+let failSearchForSort: string | null = null;
 let searchHandler: ((params: Record<string, unknown>) => Promise<{ data: { items: RecordItem[]; nextCursor: string | null } }>) | null;
 let importHandler: (params: Record<string, unknown>) => unknown;
 const importCalls: Record<string, unknown>[] = [];
@@ -66,8 +68,8 @@ vi.mock("../lib/api", () => ({
     get: async (url: string, config?: { params?: Record<string, unknown> }) => {
       if (url === "/records/search") {
         searchCalls.push(config?.params ?? {});
-        if (failNextSearch) {
-          failNextSearch = false;
+        if (failSearchForSort && config?.params?.sort === failSearchForSort) {
+          failSearchForSort = null;
           throw new Error("Request failed with status code 500");
         }
         if (searchHandler) return searchHandler(config?.params ?? {});
@@ -120,7 +122,7 @@ const lastSearch = () => searchCalls[searchCalls.length - 1];
 beforeEach(() => {
   searchCalls.length = 0;
   searchResponses = [];
-  failNextSearch = false;
+  failSearchForSort = null;
   searchHandler = null;
   importCalls.length = 0;
   importHandler = () => ({ items: [], nextCursor: null });
@@ -261,7 +263,7 @@ describe("Records sorting", () => {
     renderPage();
     await screen.findByRole("table");
 
-    failNextSearch = true;
+    failSearchForSort = "amount_desc";
     await user.click(screen.getByRole("button", { name: /Amount/ }));
 
     expect(await screen.findByText(/status code 500/)).toBeInTheDocument();
