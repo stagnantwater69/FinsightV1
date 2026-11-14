@@ -47,6 +47,8 @@ export function buildCsp({ html, supabaseUrl, sentryDsn }) {
     ["img-src", "'self'", "data:", "blob:", supabase],
     ["font-src", "'self'", "data:"],
     ["connect-src", "'self'", supabase, realtime, ...(sentry ? [sentry] : [])],
+    // Tutorial videos: the privacy-enhanced YouTube player, loaded only when a visitor presses play.
+    ["frame-src", "https://www.youtube-nocookie.com"],
     ["object-src", "'none'"],
     ["base-uri", "'self'"],
     ["form-action", "'self'"],
