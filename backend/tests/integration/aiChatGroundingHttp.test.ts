@@ -267,9 +267,13 @@ describe("record links", () => {
   });
 
   it("trims a figure the model invented after one retry", async () => {
+    // Above every figure the context can hold (the 125,000 monthly target is
+    // the largest). A smaller one can land within the 0.5 rounding tolerance
+    // of a date-derived figure: 594.86 matched "increased by PHP 595.24" on
+    // days with 14 operating days left.
     askSpy
-      .mockResolvedValueOnce({ answer: "You're PHP 594.86 over. Worth checking.", provider: "gemini" })
-      .mockResolvedValueOnce({ answer: "You're PHP 594.86 over. Worth checking.", provider: "gemini" });
+      .mockResolvedValueOnce({ answer: "You're PHP 987,594.86 over. Worth checking.", provider: "gemini" })
+      .mockResolvedValueOnce({ answer: "You're PHP 987,594.86 over. Worth checking.", provider: "gemini" });
 
     const response = await request(app)
       .post(BASE)
@@ -278,7 +282,7 @@ describe("record links", () => {
       .expect(201);
 
     expect(askSpy).toHaveBeenCalledTimes(2);
-    expect(askSpy.mock.calls[1]![0].revisionNote).toContain("594.86");
+    expect(askSpy.mock.calls[1]![0].revisionNote).toContain("987,594.86");
     expect(response.body.assistantMessage.content).toBe("Worth checking.");
     expect(response.body.assistantMessage.metadata.amountCheck).toBe("trimmed");
   });
