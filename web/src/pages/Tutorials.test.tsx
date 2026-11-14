@@ -22,6 +22,12 @@ describe("Tutorials", () => {
     expect(frame.getAttribute("src")).toMatch(/^https:\/\/www\.youtube-nocookie\.com\/embed\/xjJDLnzW4DU\?/);
   });
 
+  it("keeps thumbnails out of the page's own path, where the server would answer with a folder instead of the page", () => {
+    for (const v of WEB_TUTORIAL_VIDEOS.flatMap((g) => g.videos)) {
+      if (v.thumbnailSrc) expect(v.thumbnailSrc.startsWith("/tutorials/")).toBe(false);
+    }
+  });
+
   it("marks a chapter without an uploaded video as coming soon instead of offering a dead player", () => {
     renderAt();
     expect(screen.queryByRole("button", { name: /Play video: W32 / })).toBeNull();
