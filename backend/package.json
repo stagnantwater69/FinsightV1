@@ -63,7 +63,7 @@
     "test:db:reset": "npm run test:db:down --silent || true && npm run test:db:up"
   },
   "dependencies": {
-    "@prisma/client": "^6.1.0",
+    "@prisma/client": "^7.10.1",
     "@sentry/node": "^11.12.0",
     "@supabase/supabase-js": "^2.119.0",
     "cors": "^2.8.5",
