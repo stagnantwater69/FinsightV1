@@ -14,11 +14,15 @@ const SIZES = {
 export function IconTile({
   icon: Icon,
   size = "md",
+  onDark = false,
   className = "",
 }: {
   icon: LucideIcon;
   size?: keyof typeof SIZES;
+  /** On a dark brand card (the same in every theme), where the grey ink would barely show. */
+  onDark?: boolean;
   className?: string;
 }) {
-  return <Icon aria-hidden strokeWidth={1.75} className={`shrink-0 text-ink-500 ${SIZES[size]} ${className}`} />;
+  const color = onDark ? "text-brand-200" : "text-ink-500";
+  return <Icon aria-hidden strokeWidth={1.75} className={`shrink-0 ${color} ${SIZES[size]} ${className}`} />;
 }
