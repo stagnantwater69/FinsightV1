@@ -1,59 +1,35 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { IconTile } from "../components/IconTile";
 import { Link } from "react-router-dom";
-import { isAxiosError } from "axios";
 import {
   ArrowDownRight,
   ArrowUpRight,
   Boxes,
   ChartPie,
-  ChevronLeft,
-  ChevronRight,
   Flag,
-  Info,
   Lightbulb,
-  ListFilter,
-  MessageCircleQuestion,
   Repeat,
   ShieldCheck,
-  SlidersHorizontal,
-  ThumbsDown,
-  ThumbsUp,
   TrendingUp,
 } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
-import { api } from "../lib/api";
 import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
 import { expenseOverviewDetailRequest } from "../lib/screenRequests";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
-import {
-  AskFinSightButton,
-  useAskFinSight,
-} from "../components/AskFinSightButton";
+import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButton";
 import { DailySpendChart } from "../components/DailySpendChart";
-import {
-  SkeletonLine,
-  SkeletonPanel,
-  SkeletonStatTile,
-} from "../components/Skeleton";
+import { SkeletonPanel, SkeletonStatTile } from "../components/Skeleton";
 import { EmptyState } from "../components/EmptyState";
 import { SectionNav, type SectionNavItem } from "../components/SectionNav";
 import { Button, ButtonLink } from "../components/Button";
 import { useAddRecordPopups } from "../components/useAddRecordPopups";
 import { formatMoney } from "../components/Money";
-import { CATEGORICAL_PALETTE, STATUS_INK } from "../lib/chartPalette";
-
-// The donut colours categories by rank, so the largest one is always slot 1.
-// Slot 1 is byte-identical in the light and dark palettes (see the table in
-// chartPalette.ts), which is why it can be read here without the theme hook.
-const TOP_CATEGORY_COLOR = CATEGORICAL_PALETTE[0]!;
+import { CATEGORICAL_PALETTE } from "../lib/chartPalette";
 import { RecurringAgenda } from "../components/RecurringAgenda";
 import { ScheduleFormModal } from "./RecurringScheduleForm";
-import { PageHead, Panel, Callout, Pill } from "../components/ui";
-import { ReductionSimulationModal } from "../components/ReductionSimulationModal";
-import { Modal } from "../components/Modal";
+import { PageHead, Panel, Callout } from "../components/ui";
 import { PeriodFilter } from "../components/PeriodFilter";
 import { SeeAllFooter } from "../components/SeeAllFooter";
 import { CandidateRow } from "./expenseInsight/reviewItems";
@@ -67,13 +43,15 @@ import {
   recurringSchedulesRequest,
   watchRecurringPattern,
 } from "./expenseInsight/reviewRequests";
-import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
+import {
+  ReportingPeriodScope,
+  useReportingPeriod,
+} from "../context/ReportingPeriodContext";
 import {
   THIS_WEEK,
   periodLabel as periodCaptionOf,
   periodPhrase,
   previousLabel as previousLabelOf,
-  formatDayRange,
   type PeriodSelection,
 } from "../lib/reportingPeriod";
 import type {
@@ -86,20 +64,32 @@ import type {
   RecordItem,
   RecurringPattern,
   RecurringSchedule,
-  ReductionOpportunity,
   ReductionOpportunityResponse,
 } from "../lib/types";
 import type { DetailExpenseOverview } from "../lib/expenseOverview";
 import { useServerStateRefresh } from "../lib/useServerStateRefresh";
-import {
-  KpiTile,
-  PairBars,
-  ShareBar,
-  Sparkline,
-  UnusualExpenseRow,
-} from "./expenseInsight/ExpenseVisuals";
+import { KpiTile, PairBars, ShareBar, Sparkline } from "./expenseInsight/ExpenseVisuals";
 import { ExpenseSummaryCard } from "./expenseInsight/ExpenseSummaryCard";
-import { ListDisclosureControl, useListDisclosure } from "../components/ListDisclosure";
+import { useListDisclosure } from "../components/ListDisclosure";
+import {
+  loadPanel,
+  type SupplementState,
+  failedSupplementState,
+  combinedSupplementState,
+  isDefinitiveScheduleUnavailable,
+} from "./expenseInsight/supplement";
+import { CategorySummary } from "./expenseInsight/CategorySummary";
+import { ReductionOpportunitiesPanel } from "./expenseInsight/ReductionOpportunities";
+import {
+  SupplementNotice,
+  FlaggedExpensesPanel,
+  UnusualExpensesPanel,
+} from "./expenseInsight/ExpenseReview";
+
+// The donut colours categories by rank, so the largest one is always slot 1.
+// Slot 1 is byte-identical in the light and dark palettes (see the table in
+// chartPalette.ts), which is why it can be read here without the theme hook.
+const TOP_CATEGORY_COLOR = CATEGORICAL_PALETTE[0]!;
 
 /**
  * Expense Insight.
@@ -121,105 +111,6 @@ import { ListDisclosureControl, useListDisclosure } from "../components/ListDisc
  * dashboards get wrong — a donut saying 59.6% beside a table saying 45.7% for
  * the same category destroys trust in every other number on the page.
  */
-
-/**
- * Why a record showed up on the Large Expense Flags panel.
- *
- * Grounded in the exact rule the backend applies (expenseRecord.service.ts:
- * `amount >= expectedMonthlyExpenses * (largeExpenseThresholdPercent / 100)`),
- * so the reason line names a real, checkable threshold rather than a vague
- * "this seemed big". A record can carry a large-expense flag, a duplicate
- * flag, or both — the sentence says whichever actually applied.
- */
-function flagReasons(
-  record: RecordItem,
-  profile: {
-    expectedMonthlyExpenses: number;
-    largeExpenseThresholdPercent: number;
-  },
-): ReactNode[] {
-  const reasons: ReactNode[] = [];
-  if (record.largeExpenseFlag) {
-    const thresholdAmount =
-      profile.expectedMonthlyExpenses *
-      (profile.largeExpenseThresholdPercent / 100);
-    reasons.push(
-      <>
-        above your large-expense threshold (
-        {profile.largeExpenseThresholdPercent}% of your starting monthly estimate ={" "}
-        <span className="figure">{formatMoney(thresholdAmount)}</span>)
-      </>,
-    );
-  }
-  if (record.duplicateStatus === "Flagged") {
-    // The other record's database id means nothing to an owner; Needs review shows the pair side by side.
-    reasons.push("a possible duplicate of another record");
-  }
-  return reasons.length > 0 ? reasons : ["flagged for a second look"];
-}
-
-/** Renders `flagReasons` joined with " · ", the same separator the plain-string version used. */
-function FlagReason({
-  record,
-  profile,
-}: {
-  record: RecordItem;
-  profile: {
-    expectedMonthlyExpenses: number;
-    largeExpenseThresholdPercent: number;
-  };
-}) {
-  const reasons = flagReasons(record, profile);
-  return (
-    <>
-      {reasons.map((reason, i) => (
-        <Fragment key={i}>
-          {i > 0 ? " · " : null}
-          {reason}
-        </Fragment>
-      ))}
-    </>
-  );
-}
-
-/** "▲ PHP 7,000" in the right status colour, or an em-dash for no movement. */
-function ChangeFigure({
-  change,
-  percent,
-}: {
-  change: number;
-  percent: number | null;
-}) {
-  if (change === 0) {
-    return <span className="figure text-ink-500">{formatMoney(0)}</span>;
-  }
-  const up = change > 0;
-  return (
-    // Spending MORE is the serious direction here, not the good one — this is
-    // an expense screen, so up is bad. Colour is never the only signal: the
-    // arrow and the sign say the same thing.
-    <span
-      className="figure inline-flex flex-wrap items-center justify-end font-semibold"
-      style={{ color: up ? STATUS_INK.serious : STATUS_INK.good }}
-    >
-      {/* Sign and amount never split ("+PHP" over "5,000"); only the percent may wrap. */}
-      <span className="inline-flex items-center whitespace-nowrap">
-        {up ? (
-          <ArrowUpRight aria-hidden className="mr-1 size-3.5" />
-        ) : (
-          <ArrowDownRight aria-hidden className="mr-1 size-3.5" />
-        )}
-        {up ? "+" : "−"}
-        {formatMoney(Math.abs(change))}
-      </span>
-      {percent !== null && percent !== 0 ? (
-        <span className="ml-1 text-xs font-medium opacity-80">
-          {Math.abs(percent).toFixed(0)}%
-        </span>
-      ) : null}
-    </span>
-  );
-}
 
 /**
  * This page is intentionally comprehensive, but comprehensive should not mean
@@ -272,550 +163,6 @@ const MAX_FLAGGED_SHOWN = 5;
  * rows and a count. The count comes from /records/flagged/count now.
  */
 const FLAGGED_PANEL_PAGE_SIZE = 100;
-
-// Three, not five: each unusual row carries a bar, so five ran well past the
-// large-expense flags beside it.
-const UNUSUAL_PREVIEW_COUNT = 3;
-
-const OPPORTUNITY_PRIORITY_LABEL: Record<
-  ReductionOpportunity["priority"],
-  string
-> = {
-  high: "High priority",
-  medium: "Medium priority",
-  low: "Low priority",
-};
-
-const OPPORTUNITY_PRIORITY_TONE: Record<
-  ReductionOpportunity["priority"],
-  "danger" | "warn" | "neutral"
-> = {
-  high: "danger",
-  medium: "warn",
-  low: "neutral",
-};
-
-const OPPORTUNITY_CONFIDENCE_LABEL: Record<
-  ReductionOpportunity["confidence"],
-  string
-> = {
-  strong: "Very sure",
-  moderate: "Fairly sure",
-  limited: "Not very sure",
-};
-
-/**
- * Cost-behavior classification — plan §5.2/§15 Phase 5. The badge and the
- * caution note below are evidence/copy only: the backend's suggested-check
- * catalogue (`COST_BEHAVIOR_SUGGESTED_CHECK_CATALOGUE`) already tailors the
- * checks this card renders per cost-behavior, so this file adds only what
- * that catalogue does NOT already say — the label itself, and a short note
- * for the two classifications where "review the usual way" undersells what's
- * actually worth checking. `variant`/`unclassified` get no note: the base
- * checks already cover ordinary review, and unclassified is the default for
- * most categories today.
- */
-const OPPORTUNITY_COST_BEHAVIOR_LABEL: Record<
-  ReductionOpportunity["costBehavior"],
-  string
-> = {
-  fixed: "Fixed cost",
-  variable: "Variable cost",
-  mixed: "Mixed cost",
-  unclassified: "",
-};
-
-const OPPORTUNITY_COST_BEHAVIOR_NOTE: Partial<
-  Record<ReductionOpportunity["costBehavior"], string>
-> = {
-  fixed: "Fixed cost: check the contract or whether it is still needed.",
-  mixed: "Mixed cost: part stays flat, part changes with activity.",
-};
-
-/**
- * The two or three evidence figures printed on each card, per plan §10.2.
- *
- * Chosen per opportunity type so the figures actually explain the type's own
- * eligibility rule (§7.2) rather than repeating the same generic pair on every
- * card regardless of why it appeared.
- */
-function evidenceFigures(
-  o: ReductionOpportunity,
-): { label: string; value: ReactNode }[] {
-  const e = o.evidence;
-  const currentAmount = {
-    label: "Current spend",
-    value: <span className="figure">{formatMoney(e.currentAmount)}</span>,
-  };
-  const share = {
-    label: "Share of expenses",
-    value: <span className="figure">{e.expenseSharePercent.toFixed(1)}%</span>,
-  };
-  const change =
-    e.changeAmount !== null
-      ? {
-          label: "Change",
-          value: (
-            <ChangeFigure change={e.changeAmount} percent={e.changePercent} />
-          ),
-        }
-      : {
-          label: "Change",
-          value: <span className="text-ink-500">No earlier data</span>,
-        };
-  const records = {
-    label: "Records",
-    value: <span className="figure">{e.recordCount}</span>,
-  };
-  const flagged = {
-    label: "Flagged for review",
-    value: (
-      <span className="figure">
-        {e.possibleDuplicateCount + e.unusualRecordCount}
-      </span>
-    ),
-  };
-
-  if (o.type === "RECORD_REVIEW_FIRST")
-    return [currentAmount, flagged, records];
-  if (o.type === "FREQUENT_PURCHASE_ACCUMULATION")
-    return [currentAmount, records, share];
-  return [currentAmount, share, change];
-}
-
-/** Plan §11.1's own worked example — kept as one constant so every card asks it identically. */
-const OPPORTUNITY_ASK_QUESTION =
-  "Why was this reduction opportunity selected, and what should I check first?";
-
-/**
- * One opportunity card — priority/confidence, observation, evidence,
- * rationale, suggested checks, limitations, and its three implemented
- * actions in the plan's own order (§10.2: "Do not render disabled
- * placeholder actions" — every action below has an implemented destination).
- */
-/**
- * Reduction opportunities in a single horizontal row. Cards keep a readable
- * width instead of being squeezed into columns; the rest are a swipe, a
- * trackpad scroll or a Previous/Next press away. Snap points stop a card from
- * resting half off the edge.
- *
- * Cards grow to share the row's width, so a short list fills the panel
- * instead of floating in the middle; below their minimum width they stop
- * shrinking and the row scrolls. The bar is hidden; the next card peeking
- * past the edge says there is more.
- */
-function OpportunityRow({
-  count,
-  className = "",
-  children,
-}: {
-  count: number;
-  className?: string;
-  children: ReactNode;
-}) {
-  const scrollerRef = useRef<HTMLUListElement>(null);
-  const [edges, setEdges] = useState({ atStart: true, atEnd: true });
-
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    const update = () =>
-      setEdges({
-        atStart: el.scrollLeft <= 1,
-        atEnd: el.scrollLeft + el.clientWidth >= el.scrollWidth - 1,
-      });
-    update();
-    el.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update);
-    return () => {
-      el.removeEventListener("scroll", update);
-      window.removeEventListener("resize", update);
-    };
-  }, [count]);
-
-  // One card per press: the first card's width plus the gap between cards.
-  const step = (direction: 1 | -1) => {
-    const el = scrollerRef.current;
-    const card = el?.firstElementChild as HTMLElement | null;
-    if (!el || !card) return;
-    el.scrollBy({ left: direction * (card.offsetWidth + 12), behavior: "smooth" });
-  };
-
-  // Up to three cards is the usual case and needs no controls; past that,
-  // the buttons appear whenever the row actually overflows.
-  const showControls = count > 3 && !(edges.atStart && edges.atEnd);
-
-  return (
-    <div className={className}>
-      {/* `relative` makes the scroller the containing block for the
-          absolutely positioned sr-only labels inside its cards. Without it
-          they escape the overflow clip and widen the whole page on a phone. */}
-      <ul
-        ref={scrollerRef}
-        role="list"
-        aria-label={`Reduction opportunities, ${count} in all`}
-        tabIndex={0}
-        className="scroll-none relative flex snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain scroll-smooth rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 [&>li]:shrink-0 [&>li]:grow [&>li]:basis-[min(20rem,88%)] [&>li]:snap-start"
-      >
-        {children}
-      </ul>
-      {showControls ? (
-        <div className="mt-3 flex items-center justify-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={() => step(-1)}
-            disabled={edges.atStart}
-            aria-label="Previous opportunity"
-          >
-            <ChevronLeft className="h-4 w-4" aria-hidden="true" />
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={() => step(1)}
-            disabled={edges.atEnd}
-            aria-label="Next opportunity"
-          >
-            <ChevronRight className="h-4 w-4" aria-hidden="true" />
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-const OPPORTUNITY_ACTION =
-  "tap flex min-h-tap items-center justify-center rounded-lg border font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500";
-// Icon over label keeps three tiles side by side even in the narrowest card.
-const OPPORTUNITY_TILE = `${OPPORTUNITY_ACTION} flex-col gap-1 border-paper-200 bg-paper px-1.5 py-2 text-xs leading-tight text-ink-700 hover:border-edge-brand hover:bg-tint-brand hover:text-tone-brand`;
-
-function OpportunityCard({
-  opportunity,
-  businessProfileId,
-  period,
-}: {
-  opportunity: ReductionOpportunity;
-  businessProfileId: number;
-  period: PeriodSelection;
-}) {
-  // Its own hook instance rather than a prop threaded down from the page:
-  // the card is the thing that knows which opportunity was clicked, and the
-  // module never varies, so there is nothing for a shared instance to buy.
-  const askFinSight = useAskFinSight("Expense Insights");
-  const [simulateOpen, setSimulateOpen] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
-
-  // Feedback — plan §15 Phase 5. Write-only: the backend has no read-back
-  // endpoint for prior feedback, so this always starts unset on load, even
-  // for an opportunity the owner already rated on a previous visit. Kept
-  // per-card rather than lifted to the page: nothing else on the page needs
-  // to know it.
-  const [feedbackRating, setFeedbackRating] = useState<
-    "helpful" | "not_relevant" | null
-  >(null);
-  const [feedbackSubmitting, setFeedbackSubmitting] = useState<
-    "helpful" | "not_relevant" | null
-  >(null);
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
-
-  async function submitFeedback(rating: "helpful" | "not_relevant") {
-    setFeedbackSubmitting(rating);
-    setFeedbackError(null);
-    try {
-      await api.post("/insights/reduction-opportunities/feedback", {
-        businessProfileId,
-        opportunityId: opportunity.id,
-        rating,
-      });
-      // Upserted server-side, so clicking the other button afterwards reads
-      // as "changing your answer" rather than an error — never blocked once
-      // a rating is already set.
-      setFeedbackRating(rating);
-    } catch (err) {
-      setFeedbackError(getErrorMessage(err));
-    } finally {
-      setFeedbackSubmitting(null);
-    }
-  }
-
-  const costBehaviorLabel =
-    OPPORTUNITY_COST_BEHAVIOR_LABEL[opportunity.costBehavior];
-  const costBehaviorNote =
-    OPPORTUNITY_COST_BEHAVIOR_NOTE[opportunity.costBehavior];
-
-  return (
-    <li className="overflow-hidden rounded-2xl border border-paper-200 bg-paper transition hover:border-brand-200">
-      <div className="p-4 sm:p-5">
-        <div className="flex items-start gap-3">
-          <span
-            aria-hidden
-            className="flex size-8 shrink-0 items-center justify-center text-ink-500"
-          >
-            <TrendingUp className="size-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <p className="text-base font-semibold text-ink-900">
-                  {opportunity.categoryName}
-                </p>
-                <p className="mt-0.5 text-sm text-ink-600">
-                  {opportunity.observation}
-                </p>
-              </div>
-              <Pill tone={OPPORTUNITY_PRIORITY_TONE[opportunity.priority]}>
-                {OPPORTUNITY_PRIORITY_LABEL[opportunity.priority]}
-              </Pill>
-            </div>
-          </div>
-        </div>
-
-        <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-paper-200 py-3 sm:grid-cols-3">
-          {evidenceFigures(opportunity).map((fig) => (
-            <div key={fig.label} className="min-w-0">
-              <dt className="text-xs font-semibold uppercase tracking-[0.04em] text-ink-500">
-                {fig.label}
-              </dt>
-              <dd className="mt-0.5 text-sm font-semibold text-ink-900">
-                {fig.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-
-        {/* Simulate is the card's main action, so it gets the full width;
-            the other three are equal tiles below it. Details is a popup
-            rather than an inline disclosure: in the horizontal row an
-            expanded card grew every card beside it to the same height. */}
-        <div className="mt-3 space-y-2">
-          <button
-            type="button"
-            onClick={() => setSimulateOpen(true)}
-            className={`${OPPORTUNITY_ACTION} w-full flex-row gap-2 border-edge-brand bg-tint-brand py-2 text-sm text-tone-brand hover:border-brand-600 hover:bg-brand-600 hover:text-white`}
-          >
-            <SlidersHorizontal aria-hidden className="size-4" />
-            Simulate reduction
-            <span className="sr-only"> for {opportunity.categoryName}</span>
-          </button>
-          <div className="grid grid-cols-3 gap-2">
-            <Link
-              to={`/records?type=expense&categoryId=${opportunity.categoryId}`}
-              aria-label={`View related records for ${opportunity.categoryName}`}
-              className={OPPORTUNITY_TILE}
-            >
-              <ListFilter aria-hidden className="size-4" />
-              View records
-              <span className="sr-only"> for {opportunity.categoryName}</span>
-            </Link>
-            <button
-              type="button"
-              aria-label={`Ask FinSight about this reduction opportunity for ${opportunity.categoryName}`}
-              onClick={() => askFinSight(OPPORTUNITY_ASK_QUESTION, opportunity)}
-              className={OPPORTUNITY_TILE}
-            >
-              <MessageCircleQuestion aria-hidden className="size-4" />
-              Ask FinSight
-              <span className="sr-only">
-                {" "}
-                reduction opportunity for {opportunity.categoryName}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setDetailsOpen(true)}
-              className={OPPORTUNITY_TILE}
-            >
-              <Info aria-hidden className="size-4" />
-              Details
-              <span className="sr-only"> for {opportunity.categoryName}</span>
-            </button>
-          </div>
-        </div>
-
-        {/*
-        Helpful / Not relevant — plan §15 Phase 5. Two toggle-style buttons
-        rather than a single control: the question is "was this worth
-        showing you", and either answer is a legitimate, equally-weighted
-        response, not a default/override pair.
-      */}
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-paper-200 pt-3">
-          <span className="text-xs text-ink-500">Useful?</span>
-          <button
-            type="button"
-            aria-pressed={feedbackRating === "helpful"}
-            disabled={feedbackSubmitting !== null}
-            onClick={() => void submitFeedback("helpful")}
-            className={`tap-inline inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 transition ${
-              feedbackRating === "helpful"
-                ? "bg-tint-brand text-tone-brand ring-edge-brand"
-                : "text-ink-500 ring-ink-200 hover:bg-paper-100"
-            }`}
-          >
-            <ThumbsUp aria-hidden className="mr-1 size-3.5" />
-            Helpful
-            <span className="sr-only"> — {opportunity.categoryName}</span>
-          </button>
-          <button
-            type="button"
-            aria-pressed={feedbackRating === "not_relevant"}
-            disabled={feedbackSubmitting !== null}
-            onClick={() => void submitFeedback("not_relevant")}
-            className={`tap-inline inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 transition ${
-              feedbackRating === "not_relevant"
-                ? "bg-tint-neutral text-tone-neutral ring-edge-neutral"
-                : "text-ink-500 ring-ink-200 hover:bg-paper-100"
-            }`}
-          >
-            <ThumbsDown
-              aria-hidden
-              className="mr-1 size-3.5"
-            />
-            Not relevant
-            <span className="sr-only"> — {opportunity.categoryName}</span>
-          </button>
-          {feedbackRating ? (
-            <span className="text-xs text-ink-500" role="status">
-              Saved
-            </span>
-          ) : feedbackError ? (
-            <span className="text-xs text-tone-danger" role="alert">
-              {feedbackError}
-            </span>
-          ) : null}
-        </div>
-      </div>
-
-      <Modal
-        open={detailsOpen}
-        onClose={() => setDetailsOpen(false)}
-        title={`${opportunity.categoryName} — details`}
-      >
-        <p className="text-sm text-ink-600">{opportunity.observation}</p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Pill tone="neutral">
-            {OPPORTUNITY_CONFIDENCE_LABEL[opportunity.confidence]}
-          </Pill>
-          {costBehaviorLabel ? (
-            <Pill tone="info">{costBehaviorLabel}</Pill>
-          ) : null}
-        </div>
-        <p className="mt-3 text-sm text-ink-600">
-          <span className="font-semibold text-ink-700">Why: </span>
-          {opportunity.rationale}
-        </p>
-        {costBehaviorNote ? (
-          <div className="mt-3">
-            <Callout tone="info">{costBehaviorNote}</Callout>
-          </div>
-        ) : null}
-        {opportunity.suggestedChecks.length > 0 ? (
-          <div className="mt-3">
-            <p className="text-sm font-semibold text-ink-700">
-              Suggested checks
-            </p>
-            <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-ink-600">
-              {opportunity.suggestedChecks.map((check) => (
-                <li key={check}>{check}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {opportunity.limitations.length > 0 ? (
-          <div className="mt-3">
-            <p className="text-sm font-semibold text-ink-700">
-              Limitations
-            </p>
-            <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-ink-600">
-              {opportunity.limitations.map((limitation) => (
-                <li key={limitation}>{limitation}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-      </Modal>
-
-      <ReductionSimulationModal
-        open={simulateOpen}
-        onClose={() => setSimulateOpen(false)}
-        businessProfileId={businessProfileId}
-        categoryId={opportunity.categoryId}
-        categoryName={opportunity.categoryName}
-        period={period}
-        baseline={opportunity.evidence.currentAmount}
-      />
-    </li>
-  );
-}
-
-/**
- * Runs one SUPPLEMENTARY fetch in a way that cannot take the page down with it.
- *
- * This page draws from several endpoints, and it used to await them in a
- * single `Promise.all`. `Promise.all` is all-or-nothing: one rejection
- * discarded the four responses that had already arrived, so a disabled
- * `/insights/recurring-schedules` — an optional panel at the very bottom —
- * replaced the KPI row, every chart, the category table and the flags with an
- * error banner. A transient 500 on `/insights/findings` would have done exactly
- * the same thing, which is why the fix is structural rather than a check for
- * status 404: nothing here asks WHY a supplement failed, only that its failure
- * stays inside its own panel. Status-sniffing would have left the identical
- * defect in place for every other failure mode.
- *
- * The composite expense-overview read deliberately does NOT go through this.
- * Without its behavior panel there is no page to degrade, so that panel's
- * failure is still the page's error.
- */
-async function loadPanel<T>(
-  request: Promise<{ data: T }>,
-  apply: (value: T) => void,
-  onUnavailable: (error: unknown) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  try {
-    const value = (await request).data;
-    // A superseded request must not write anything: the panel belongs to the
-    // business profile that is on screen NOW, not the one this was asked for.
-    if (signal?.aborted) return;
-    apply(value);
-  } catch (error) {
-    if (signal?.aborted || (error as { name?: string })?.name === "AbortError") return;
-    // Swallowed on purpose. The panel's own state now says "unavailable", and
-    // an error banner for a secondary panel over a page that rendered fine
-    // would be telling the owner their numbers are suspect when they are not.
-    onUnavailable(error);
-  }
-}
-
-type SupplementState = "loading" | "ready" | "stale" | "unavailable";
-
-function failedSupplementState(current: SupplementState): SupplementState {
-  return current === "ready" || current === "stale" ? "stale" : "unavailable";
-}
-
-function combinedSupplementState(states: readonly SupplementState[]): SupplementState {
-  if (states.some((state) => state === "unavailable")) return "unavailable";
-  if (states.some((state) => state === "stale")) return "stale";
-  if (states.some((state) => state === "loading")) return "loading";
-  return "ready";
-}
-
-function SupplementNotice({ state, label }: { state: SupplementState; label: string }) {
-  if (state === "ready" || state === "loading") return null;
-  return (
-    <p role="status" className="mb-3 text-xs text-tone-accent">
-      {state === "stale"
-        ? `Showing recently loaded ${label}; the latest refresh failed.`
-        : `${label[0]!.toUpperCase()}${label.slice(1)} are temporarily unavailable.`}
-    </p>
-  );
-}
-
-function isDefinitiveScheduleUnavailable(error: unknown): boolean {
-  return isAxiosError(error) && error.response?.status === 404;
-}
 
 export function ExpenseInsight() {
   return (
@@ -1956,233 +1303,16 @@ function ExpenseInsightPage() {
             </Panel>
           </div>
 
-          <div id="expense-categories" className="scroll-mt-6">
-            {/* ===================== 4. THE TABLE ===================== */}
-            {/* The accessible reading of every chart above, and the relief the
-                palette's contrast check requires: nothing on this page is
-                knowable only by colour. */}
-            <Panel
-              title="Category summary"
-              action={
-                <span className="text-xs text-ink-500">
-                  {formatDayRange(data.periodStart.slice(0, 10), data.periodEnd.slice(0, 10))}
-                </span>
-              }
-              bodyClassName="px-0 pb-0"
-            >
-              {/* On a phone, a six-column table turns comparison into horizontal
-                  scavenger hunting. The same values become compact category
-                  records; the semantic table remains the desktop reading. */}
-              <div id={categoryDisclosure.contentId}>
-                <ul className="space-y-2 px-4 pb-4 md:hidden">
-                  {data.categoryTrends.slice(0, categoryDisclosure.visibleCount).map((trend) => (
-                    <li
-                      key={trend.categoryId}
-                      className="rounded-xl border border-paper-200 bg-paper-100/50 p-3.5"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="font-semibold text-ink-900">
-                            {trend.categoryName}
-                          </p>
-                          <p className="mt-0.5 text-xs text-ink-500">
-                            {trend.recordCount} expense
-                            {trend.recordCount === 1 ? "" : "s"} ·{" "}
-                            {summary.total > 0
-                              ? ((trend.current / summary.total) * 100).toFixed(1)
-                              : "0.0"}
-                            %
-                          </p>
-                        </div>
-                        <p className="figure shrink-0 text-sm font-bold text-ink-900">
-                          {formatMoney(trend.current)}
-                        </p>
-                      </div>
-                      <ShareBar
-                        percent={summary.total > 0 ? (trend.current / summary.total) * 100 : 0}
-                        color="rgb(var(--chart-emphasis))"
-                        className="mt-2.5 h-1.5"
-                      />
-                      {!allTime ? (
-                      <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-paper-200 pt-3">
-                        <div>
-                          <dt className="text-xs font-semibold uppercase tracking-[0.04em] text-ink-500">
-                            {comparedWith}
-                          </dt>
-                          <dd className="figure mt-1 text-sm text-ink-600">
-                            {formatMoney(trend.previous)}
-                          </dd>
-                        </div>
-                        <div className="text-right">
-                          <dt className="text-xs font-semibold uppercase tracking-[0.04em] text-ink-500">
-                            Change
-                          </dt>
-                          <dd className="mt-1 text-sm">
-                            <ChangeFigure
-                              change={trend.change}
-                              percent={trend.percentChange}
-                            />
-                          </dd>
-                        </div>
-                      </dl>
-                      ) : null}
-                    </li>
-                  ))}
-                  <li className="flex items-center justify-between gap-3 border-t border-paper-200 px-1 pt-3 text-sm">
-                    <span className="font-semibold text-ink-600">Total</span>
-                    <span className="figure font-bold text-ink-900">
-                      {formatMoney(summary.total)}
-                    </span>
-                  </li>
-                </ul>
-
-                <div className="scroll-slim hidden overflow-x-auto md:block">
-                  <table className="w-full border-collapse text-left text-sm">
-                    <caption className="sr-only">
-                      Expenses by category for {selected.name}, {periodText}
-                      {allTime ? "" : `, compared with ${comparedWith}`}.
-                    </caption>
-                    <thead>
-                      <tr className="border-y border-paper-200 bg-paper-100/60">
-                        <th
-                          scope="col"
-                          className="px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                        >
-                          Category
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                        >
-                          {periodCaption}
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                        >
-                          Share
-                        </th>
-                        {!allTime ? (
-                          <>
-                            <th
-                              scope="col"
-                              className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                            >
-                              {comparedWith}
-                            </th>
-                            <th
-                              scope="col"
-                              className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                            >
-                              Change
-                            </th>
-                          </>
-                        ) : null}
-                        <th
-                          scope="col"
-                          className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                        >
-                          Count
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.categoryTrends.slice(0, categoryDisclosure.visibleCount).map((t) => (
-                        <tr
-                          key={t.categoryId}
-                          className="border-b border-paper-200 last:border-0"
-                        >
-                          <th
-                            scope="row"
-                            className="px-5 py-3 text-left font-medium text-ink-900"
-                          >
-                            {t.categoryName}
-                          </th>
-                          <td className="figure px-4 py-3 text-right font-semibold text-ink-900">
-                            {formatMoney(t.current)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-ink-600">
-                            <div className="flex items-center justify-end gap-2.5">
-                              <div className="w-20">
-                                <ShareBar
-                                  percent={summary.total > 0 ? (t.current / summary.total) * 100 : 0}
-                                  color="rgb(var(--chart-emphasis))"
-                                  className="h-1.5"
-                                />
-                              </div>
-                              <span className="figure w-12">
-                                {summary.total > 0
-                                  ? ((t.current / summary.total) * 100).toFixed(1)
-                                  : "0.0"}
-                                %
-                              </span>
-                            </div>
-                          </td>
-                          {!allTime ? (
-                            <>
-                              <td className="figure px-4 py-3 text-right text-ink-500">
-                                {formatMoney(t.previous)}
-                              </td>
-                              <td className="px-4 py-3 text-right">
-                                <ChangeFigure
-                                  change={t.change}
-                                  percent={t.percentChange}
-                                />
-                              </td>
-                            </>
-                          ) : null}
-                          <td className="figure px-5 py-3 text-right text-ink-600">
-                            {t.recordCount}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr className="border-t border-paper-200 bg-paper-100/60">
-                        <th
-                          scope="row"
-                          className="px-5 py-3 text-left text-xs font-bold uppercase tracking-[0.06em] text-ink-600"
-                        >
-                          Total
-                        </th>
-                        <td className="figure px-4 py-3 text-right font-bold text-ink-900">
-                          {formatMoney(summary.total)}
-                        </td>
-                        <td className="figure px-4 py-3 text-right text-ink-600">
-                          100.0%
-                        </td>
-                        {!allTime ? (
-                          <>
-                            <td className="figure px-4 py-3 text-right text-ink-600">
-                              {formatMoney(data.totals.previous)}
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              <ChangeFigure
-                                change={summary.periodDelta}
-                                percent={summary.periodPercent}
-                              />
-                            </td>
-                          </>
-                        ) : null}
-                        <td className="figure px-5 py-3 text-right text-ink-600">
-                          {data.categoryTrends.reduce(
-                            (s, t) => s + t.recordCount,
-                            0,
-                          )}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              </div>
-              <ListDisclosureControl
-                disclosure={categoryDisclosure}
-                total={data.categoryTrends.length}
-                itemLabel="categories"
-                className="mx-4 pb-3"
-              />
-            </Panel>
-          </div>
+          <CategorySummary
+            data={data}
+            summary={summary}
+            disclosure={categoryDisclosure}
+            businessName={selected.name}
+            periodText={periodText}
+            periodCaption={periodCaption}
+            comparedWith={comparedWith}
+            allTime={allTime}
+          />
 
           {/* ============ 4.5 REDUCTION OPPORTUNITIES — the next step ============
               Placed right after "what changed" and before the lower-priority
@@ -2190,78 +1320,16 @@ function ExpenseInsightPage() {
               naturally leads to "so what should I check first?", and this
               panel is the deterministic answer to that question. */}
           {showReductionPanel ? (
-            <div id="expense-opportunities" className="scroll-mt-6">
-              <Panel title="Reduction opportunities">
-                {reductionLoading &&
-                !reductionHasOpportunities &&
-                !reductionError ? (
-                  <div
-                    className="space-y-3"
-                    aria-busy="true"
-                    aria-live="polite"
-                  >
-                    <span className="sr-only">
-                      Loading reduction opportunities…
-                    </span>
-                    {[0, 1].map((i) => (
-                      <div
-                        key={i}
-                        className="rounded-xl border border-paper-200 p-4"
-                      >
-                        <SkeletonLine className="w-32" />
-                        <SkeletonLine className="mt-3 w-1/2" />
-                        <SkeletonLine className="mt-2 w-full" />
-                        <SkeletonLine className="mt-2 w-3/4" />
-                      </div>
-                    ))}
-                  </div>
-                ) : reductionError ? (
-                  <Callout tone="warn">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <span>Opportunities couldn’t load. {reductionError}</span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          void loadExpenseOverview(undefined, true)
-                        }
-                      >
-                        Retry
-                      </Button>
-                    </div>
-                  </Callout>
-                ) : refreshError && !reductionHasOpportunities ? (
-                  <p role="status" className="text-sm text-tone-accent">
-                    Showing recently loaded opportunity data; the latest
-                    refresh failed.
-                  </p>
-                ) : !reductionOpportunities ||
-                  !reductionHasOpportunities ? null : (
-                  <>
-                    {reductionOpportunities.dataQuality.status === "limited" &&
-                    reductionOpportunities.dataQuality.message ? (
-                      <Callout tone="info">
-                        {reductionOpportunities.dataQuality.message}
-                      </Callout>
-                    ) : null}
-                    <OpportunityRow
-                      count={reductionOpportunities.opportunities.length}
-                      className={reductionOpportunities.dataQuality.status === "limited" ? "mt-3" : ""}
-                    >
-                      {reductionOpportunities.opportunities.map((o) => (
-                        <OpportunityCard
-                          key={o.id}
-                          opportunity={o}
-                          businessProfileId={selected.id}
-                          period={selection}
-                        />
-                      ))}
-                    </OpportunityRow>
-                  </>
-                )}
-              </Panel>
-            </div>
+            <ReductionOpportunitiesPanel
+              reductionOpportunities={reductionOpportunities}
+              reductionLoading={reductionLoading}
+              reductionError={reductionError}
+              reductionHasOpportunities={reductionHasOpportunities}
+              refreshError={refreshError}
+              onRetry={() => void loadExpenseOverview(undefined, true)}
+              businessProfileId={selected.id}
+              period={selection}
+            />
           ) : null}
 
           {/* ===================== 5. FLAGS + AI ===================== */}
@@ -2287,130 +1355,23 @@ function ExpenseInsightPage() {
                 className={`grid gap-5 ${showFlaggedPanel && showUnusualPanel ? "lg:grid-cols-2" : ""}`}
               >
               {showFlaggedPanel ? (
-                <Panel
-                  title="Large expense flags"
-                  className="h-full min-w-0"
-                  action={
-                    flaggedState === "stale" ? (
-                      <Pill>Saved data</Pill>
-                    ) : flaggedState === "unavailable" ? (
-                      <Pill>Unavailable</Pill>
-                    ) : flaggedState === "ready" && flaggedTotal > 0 ? (
-                      <Pill tone="danger">{flaggedTotal} flagged</Pill>
-                    ) : null
-                  }
-                >
-                  <SupplementNotice
-                    state={flaggedState}
-                    label="flagged record details"
-                  />
-                  {flaggedState === "loading" ? (
-                    <p
-                      aria-live="polite"
-                      className="py-6 text-center text-sm text-ink-500"
-                    >
-                      Loading flagged records…
-                    </p>
-                  ) : flaggedState === "unavailable" ||
-                    (flaggedState === "stale" && flaggedTotal === 0) ||
-                    flaggedTotal === 0 ? null : (
-                    <>
-                      <ul id={flaggedDisclosure.contentId} className="space-y-2">
-                        {flaggedExpenses
-                          .slice(0, flaggedDisclosure.visibleCount)
-                          .map((r) => (
-                            <li
-                              key={r.id}
-                              className="flex items-start gap-3 rounded-xl border border-paper-200 bg-paper-50 px-3.5 py-3"
-                            >
-                              <IconTile icon={Flag} />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                                  <p className="min-w-0 text-sm font-semibold text-ink-900">
-                                    {r.description}
-                                  </p>
-                                  <p className="figure shrink-0 text-sm font-bold text-tone-danger">
-                                    {formatMoney(r.amount)}
-                                  </p>
-                                </div>
-                                <p className="mt-1 text-xs text-ink-500">
-                                  {categoryName(r.categoryId)} ·{" "}
-                                  {r.date.slice(0, 10)} ·{" "}
-                                  <FlagReason record={r} profile={selected} />
-                                </p>
-                              </div>
-                            </li>
-                          ))}
-                      </ul>
-                      <ListDisclosureControl
-                        disclosure={flaggedDisclosure}
-                        total={flaggedExpenses.length}
-                        itemLabel={flaggedTotal > flaggedExpenses.length ? "loaded flags" : "flags"}
-                        className="mt-3"
-                      />
-                      {hasFlaggedRecordLink ? (
-                        <Link
-                          to="/records/flagged"
-                          className="tap-inline mt-3 block text-sm link-action"
-                        >
-                          Review all {flaggedTotal} flagged
-                        </Link>
-                      ) : null}
-                    </>
-                  )}
-                </Panel>
+                <FlaggedExpensesPanel
+                  flaggedState={flaggedState}
+                  flaggedTotal={flaggedTotal}
+                  flaggedExpenses={flaggedExpenses}
+                  disclosure={flaggedDisclosure}
+                  categoryName={categoryName}
+                  profile={selected}
+                  hasFlaggedRecordLink={hasFlaggedRecordLink}
+                />
               ) : null}
             {/* ===================== 7. ANYTHING ODD (statistical) ===================== */}
             {showUnusualPanel ? (
-              <Panel
-                title="Unusual expenses"
-                className="h-full min-w-0"
-                action={
-                  data.unusualExpenses.length > 0 ? (
-                    <span className="text-xs text-ink-500">
-                      {data.unusualExpenses.length} flagged
-                    </span>
-                  ) : null
-                }
-              >
-              {isRefreshing && data.unusualExpenses.length === 0 ? (
-                <p aria-live="polite" className="py-6 text-center text-sm text-ink-500">
-                  Refreshing unusual expenses…
-                </p>
-              ) : refreshError && data.unusualExpenses.length === 0 ? (
-                <p role="status" className="text-sm text-tone-accent">
-                  Showing recently loaded unusual-expense results; the latest
-                  refresh failed.
-                </p>
-              ) : (
-                <>
-                  <ul className="space-y-2">
-                    {data.unusualExpenses.slice(0, UNUSUAL_PREVIEW_COUNT).map((u) => (
-                      <UnusualExpenseRow key={u.id} expense={u} />
-                    ))}
-                  </ul>
-                  {/* The full list opens on its own page rather than growing
-                      this panel past the flags panel beside it. */}
-                  {data.unusualExpenses.length > UNUSUAL_PREVIEW_COUNT ? (
-                    <SeeAllFooter
-                      shown={UNUSUAL_PREVIEW_COUNT}
-                      total={data.unusualExpenses.length}
-                      noun="unusual expenses"
-                      to="/insights/expense-behavior/unusual"
-                    />
-                  ) : null}
-                </>
-              )}
-
-              {data.insufficientHistoryCategories.length > 0 ? (
-                <p className="mt-3 text-xs text-ink-500">
-                  Not enough history to check:{" "}
-                  {data.insufficientHistoryCategories
-                    .map((c) => c.categoryName)
-                    .join(", ")}
-                </p>
-              ) : null}
-              </Panel>
+              <UnusualExpensesPanel
+                data={data}
+                isRefreshing={isRefreshing}
+                refreshError={refreshError}
+              />
             ) : null}
 
               </div>
