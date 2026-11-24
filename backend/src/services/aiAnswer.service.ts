@@ -255,6 +255,8 @@ export function knownNumbers(...sources: string[]): KnownFigure[] {
  * "PHP 11k" for 11,000. It does NOT allow arithmetic — a difference or a sum
  * the model worked out itself is exactly what RULE 1 forbids.
  */
+const MAX_ROUNDING_SHARE = 0.2;
+
 export function isKnownFigure(figure: StatedFigure, known: KnownFigure[]): boolean {
   const value = Object.is(figure.value, -0) ? 0 : figure.value;
   if (figure.kind === "percent") {
@@ -268,6 +270,8 @@ export function isKnownFigure(figure: StatedFigure, known: KnownFigure[]): boole
     if (Math.sign(value) !== Math.sign(candidate.value)) return false;
     const diff = Math.abs(value - candidate.value);
     if (diff < 0.5 + 1e-9) return true;
+    // Rounding to a round figure must stay close: PHP 1,000 for 500 is a doubling (or 500 + 500), not rounding.
+    if (diff > Math.abs(candidate.value) * MAX_ROUNDING_SHARE) return false;
     const magnitude = Math.abs(value);
     if (magnitude >= 1000 && magnitude % 1000 === 0 && diff <= 500) return true;
     if (magnitude >= 100 && magnitude % 100 === 0 && diff <= 50) return true;
