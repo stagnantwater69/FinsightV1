@@ -280,7 +280,7 @@ export function RecoveryHero({
       className="relative flex min-w-0 flex-col overflow-hidden rounded-2xl bg-gradient-to-br from-brand-800 via-brand-900 to-brand-950 p-5 text-white shadow-md sm:p-6"
     >
       <div className="relative flex items-start gap-4">
-        <IconTile icon={Target} size="lg" className="hidden sm:inline-flex" />
+        <IconTile icon={Target} size="lg" onDark className="hidden sm:inline-flex" />
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <h2

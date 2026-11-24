@@ -215,7 +215,7 @@ export function ExpenseSummaryCard({
               key={i}
               className="flex items-start gap-3 rounded-xl bg-white/[0.06] p-3 ring-1 ring-white/10"
             >
-              <IconTile icon={Icon} />
+              <IconTile icon={Icon} onDark />
               <div className="min-w-0 flex-1 text-[13.5px] leading-snug">
                 <p>{body}</p>
                 {visual}
