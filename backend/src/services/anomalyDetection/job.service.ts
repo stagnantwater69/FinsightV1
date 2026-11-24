@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { AnalysisJobKind, AnalysisJobStatus, ExpenseRecordSource, Prisma } from "@prisma/client";
+import { AnalysisJobKind, AnalysisJobStatus, AnomalyFindingStatus, ExpenseRecordSource, Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { logger } from "../../config/logger";
 import { resolveBusinessToday, utcToday } from "../../lib/dates";
@@ -194,6 +194,8 @@ async function processJob(job: ClaimedJob, mutate: AnalysisMutationGuard) {
     ]);
     const notifiable = findings
       .filter((value): value is NonNullable<typeof value> => value !== null)
+      // A finding the owner already reviewed keeps its review on re-detection; it must not interrupt them again.
+      .filter((finding) => finding.status === AnomalyFindingStatus.OPEN)
       .filter((finding) => meetsNotificationSeverity(finding.severity, RUNTIME_DETECTION_CONFIG));
     if (notifiable.length === 0) return;
     const [owner, record] = await Promise.all([

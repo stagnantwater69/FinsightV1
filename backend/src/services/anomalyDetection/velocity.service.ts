@@ -1,12 +1,13 @@
 import { AnomalyFindingSeverity, AnomalyFindingStatus, AnomalyFindingType } from "@prisma/client";
 import { prisma } from "../../config/prisma";
-import { utcAddDays, utcEndOfDay } from "../../lib/dates";
+import { utcAddDays, utcEndOfDay, utcStartOfDay } from "../../lib/dates";
 import { DEFAULT_DETECTION_CONFIG, type DetectionConfig } from "./config";
 import { saveFinding } from "./finding.service";
 import { normalizeComparisonText } from "./nearDuplicate.service";
 import { runAnalysisMutation, type AnalysisMutationGuard } from "./mutationGuard";
 
-export const VELOCITY_VERSION = "velocity-v1";
+// v2: baseline windows now include their first day (v1 dropped it).
+export const VELOCITY_VERSION = "velocity-v2";
 export const VELOCITY_WINDOWS = [1, 7, 30] as const;
 const BASELINE_WINDOW_COUNT = 4;
 const MINIMUM_CURRENT_COUNT = 3;
@@ -58,15 +59,16 @@ export function evaluateVelocity(
           ? normalizeComparisonText(record.vendor) === vendor
           : record.categoryId === candidate.categoryId,
       );
-      const currentStart = utcAddDays(candidate.date, -(windowDays - 1));
+      const currentStart = utcStartOfDay(utcAddDays(candidate.date, -(windowDays - 1)));
       const currentEnd = utcEndOfDay(candidate.date);
       const current = scoped.filter((record) => inWindow(record.date, currentStart, currentEnd));
       const baselineCounts: number[] = [];
       const baselineAmounts: number[] = [];
 
       for (let index = 0; index < BASELINE_WINDOW_COUNT; index++) {
-        const end = utcEndOfDay(utcAddDays(currentStart, -(index * windowDays + 1)));
-        const start = utcAddDays(end, -(windowDays - 1));
+        // Whole UTC days, back to back: window `index` ends the day before window `index - 1` starts.
+        const start = utcAddDays(currentStart, -((index + 1) * windowDays));
+        const end = utcEndOfDay(utcAddDays(start, windowDays - 1));
         const window = scoped.filter((record) => inWindow(record.date, start, end));
         baselineCounts.push(window.length);
         baselineAmounts.push(window.reduce((sum, record) => sum + record.amount, 0));
@@ -137,29 +139,53 @@ export async function detectVelocityForExpense(
 
   const strongest = [...signals].sort((a, b) => b.countRatio - a.countRatio)[0]!;
   const scopeName = strongest.scope === "vendor" ? `vendor ${candidate.vendor}` : "category";
-  return mutate((db) => saveFinding({
-    fingerprint,
-    businessProfileId: candidate.businessProfileId,
-    expenseRecordId: candidate.id,
-    type: AnomalyFindingType.VELOCITY_ANOMALY,
-    severity: strongest.countRatio >= 5 ? AnomalyFindingSeverity.HIGH : AnomalyFindingSeverity.MEDIUM,
-    score: Math.min(strongest.countRatio / 5, 1),
-    method: "rolling-velocity",
-    title: "Unusual transaction frequency",
-    reasons: [
-      `${strongest.currentCount} transactions occurred for this ${scopeName} in ${strongest.windowDays} day${strongest.windowDays === 1 ? "" : "s"}`,
-      `Comparable periods normally contain about ${strongest.baselineMedianCount} transaction${strongest.baselineMedianCount === 1 ? "" : "s"}`,
-    ],
-    metadata: {
-      windowDays: strongest.windowDays,
-      scope: strongest.scope,
-      currentCount: strongest.currentCount,
-      currentAmount: strongest.currentAmount,
-      baselineMedianCount: strongest.baselineMedianCount,
-      baselineMedianAmount: strongest.baselineMedianAmount,
-      countRatio: strongest.countRatio,
-      signalCount: signals.length,
-    },
-    detectorVersion: VELOCITY_VERSION,
-  }, db));
+  return mutate(async (db) => {
+    const saved = await saveFinding({
+      fingerprint,
+      businessProfileId: candidate.businessProfileId,
+      expenseRecordId: candidate.id,
+      type: AnomalyFindingType.VELOCITY_ANOMALY,
+      severity: strongest.countRatio >= 5 ? AnomalyFindingSeverity.HIGH : AnomalyFindingSeverity.MEDIUM,
+      score: Math.min(strongest.countRatio / 5, 1),
+      method: "rolling-velocity",
+      title: "Unusual transaction frequency",
+      reasons: [
+        `${strongest.currentCount} transactions occurred for this ${scopeName} in ${strongest.windowDays} day${strongest.windowDays === 1 ? "" : "s"}`,
+        `Comparable periods normally contain about ${strongest.baselineMedianCount} transaction${strongest.baselineMedianCount === 1 ? "" : "s"}`,
+      ],
+      metadata: {
+        windowDays: strongest.windowDays,
+        scope: strongest.scope,
+        currentCount: strongest.currentCount,
+        currentAmount: strongest.currentAmount,
+        baselineMedianCount: strongest.baselineMedianCount,
+        baselineMedianAmount: strongest.baselineMedianAmount,
+        countRatio: strongest.countRatio,
+        signalCount: signals.length,
+      },
+      detectorVersion: VELOCITY_VERSION,
+    }, db);
+    const olderVersions = {
+      businessProfileId: candidate.businessProfileId,
+      expenseRecordId: candidate.id,
+      type: AnomalyFindingType.VELOCITY_ANOMALY,
+      detectorVersion: { not: VELOCITY_VERSION },
+    };
+    // The owner already answered an older version's finding for this expense; don't raise it again as new.
+    const priorReview = saved.status === AnomalyFindingStatus.OPEN && !saved.reviewedAt
+      ? await db.anomalyFinding.findFirst({
+        where: {
+          ...olderVersions,
+          status: { in: [AnomalyFindingStatus.CONFIRMED, AnomalyFindingStatus.DISMISSED, AnomalyFindingStatus.RESOLVED] },
+        },
+        orderBy: [{ reviewedAt: { sort: "desc", nulls: "last" } }, { id: "desc" }],
+        select: { status: true, feedback: true, reviewedAt: true },
+      })
+      : null;
+    await db.anomalyFinding.updateMany({
+      where: { ...olderVersions, status: AnomalyFindingStatus.OPEN },
+      data: { status: AnomalyFindingStatus.SUPERSEDED },
+    });
+    return priorReview ? db.anomalyFinding.update({ where: { id: saved.id }, data: priorReview }) : saved;
+  });
 }

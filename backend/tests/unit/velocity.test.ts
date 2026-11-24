@@ -30,4 +30,29 @@ describe("velocity evaluation", () => {
     const signals = evaluateVelocity(candidate, [record(1, 0, "Other"), record(2, 0, "Other"), candidate]);
     expect(signals.some((signal) => signal.scope === "vendor")).toBe(false);
   });
+
+  it("counts the first day of every 1-day baseline window", () => {
+    // Three rows a day for five days: the candidate's day is normal, not a burst.
+    const rows = [0, -1, -2, -3, -4].flatMap((offset, d) =>
+      [1, 2, 3].map((n) => record(d * 3 + n, offset)));
+    const signals = evaluateVelocity(rows[0]!, rows);
+    expect(signals.filter((signal) => signal.windowDays === 1)).toEqual([]);
+  });
+
+  it("counts the first day of every 7-day baseline window", () => {
+    // Three rows per week in the current window, and three on the opening day of each prior week.
+    const offsets = [0, -2, -4, ...[-13, -20, -27, -34].flatMap((offset) => [offset, offset, offset])];
+    const rows = offsets.map((offset, index) => record(index + 1, offset));
+    const signals = evaluateVelocity(rows[0]!, rows);
+    expect(signals.filter((signal) => signal.windowDays === 7)).toEqual([]);
+  });
+
+  it("puts a non-midnight timestamp in exactly one window", () => {
+    // Late-evening rows on each of the four prior days must land in that day's 1-day baseline window.
+    const late = (id: number, offset: number) => ({ ...record(id, offset), date: new Date(day(offset).getTime() + 23 * 3_600_000) });
+    const rows = [record(1, 0), record(2, 0), record(3, 0),
+      ...[-1, -2, -3, -4].flatMap((offset, d) => [1, 2, 3].map((n) => late(3 + d * 3 + n, offset)))];
+    const signals = evaluateVelocity(rows[0]!, rows);
+    expect(signals.filter((signal) => signal.windowDays === 1)).toEqual([]);
+  });
 });
