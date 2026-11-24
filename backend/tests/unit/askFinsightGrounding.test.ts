@@ -117,6 +117,19 @@ describe("amount grounding", () => {
     expect(unknownFigures("Supplies were about PHP 1,500.", utilities)).toEqual([]);
   });
 
+  it("checks a bare amount written after a spending word", () => {
+    const rent = knownNumbers("Rent: PHP 9,500.00");
+    expect(unknownFigures("Rent was 9500 this month.", rent)).toEqual([]);
+    expect(unknownFigures("Rent was 9800 this month.", rent)).toEqual(["9800"]);
+    expect(unknownFigures("Gumastos ka ng 9800 sa upa.", rent)).toEqual(["9800"]);
+  });
+
+  it("does not read a bare year or count as money", () => {
+    expect(statedFigures("Your best year was 2025.")).toEqual([]);
+    expect(statedFigures("There were 1500 records in March, more than in 2024.")).toEqual([]);
+    expect(statedFigures("Sales were 1200 transactions this week.")).toEqual([]);
+  });
+
   it("rejects figures the model worked out itself", () => {
     // 11,000 - 347.33 — arithmetic, which RULE 1 forbids.
     expect(unknownFigures("That leaves PHP 10,652.67 for the rest.", known)).toEqual(["PHP 10,652.67"]);
