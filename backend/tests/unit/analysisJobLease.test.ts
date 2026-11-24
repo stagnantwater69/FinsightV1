@@ -303,7 +303,7 @@ describe("analysis job lease", () => {
       detector.mockImplementationOnce(async (...args: unknown[]) => {
         const mutate = args[2] as (body: () => Promise<unknown>) => Promise<unknown>;
         await mutate(async () => null);
-        return index === 0 ? { title: "Unusual amount", severity: "HIGH" } : null;
+        return index === 0 ? { title: "Unusual amount", severity: "HIGH", status: "OPEN" } : null;
       });
     });
 
