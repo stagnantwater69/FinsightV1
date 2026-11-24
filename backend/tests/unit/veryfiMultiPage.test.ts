@@ -113,3 +113,25 @@ describe("Veryfi multi-page reads", () => {
     expect(await extractReceiptWithVeryfi([page, page])).toBeNull();
   });
 });
+
+describe("Veryfi dates", () => {
+  it("drops an impossible date but keeps the rest of the reading", async () => {
+    vi.stubGlobal("fetch", async () =>
+      ok({ total: 150, vendor: { name: "Corner Store" }, date: "2026-02-30 00:00:00", line_items: [{ description: "Rice", total: 150 }] }),
+    );
+
+    const result = await extractReceiptWithVeryfi([page]);
+
+    expect(result?.rejectReason).toBeNull();
+    expect(result?.receipt).toMatchObject({ date: null, amount: 150, vendor: "Corner Store" });
+    expect(result?.receipt?.items).toHaveLength(1);
+  });
+
+  it("keeps a real date", async () => {
+    vi.stubGlobal("fetch", async () => ok({ total: 150, date: "2026-02-28 00:00:00", line_items: [] }));
+
+    const result = await extractReceiptWithVeryfi([page]);
+
+    expect(result?.receipt?.date).toBe("2026-02-28");
+  });
+});

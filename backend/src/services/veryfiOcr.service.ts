@@ -1,7 +1,7 @@
 import { env } from "../config/env";
 import { logger } from "../config/logger";
 import { moneyAmountSchema } from "../lib/money";
-import { receiptQuantitySchema } from "./receiptProviderContract";
+import { realDateSchema, receiptQuantitySchema } from "./receiptProviderContract";
 
 /**
  * Veryfi receipt extraction transport. Production calls originate only from
@@ -85,7 +85,9 @@ function coerceDate(v: unknown): string | null {
   // YYYY-MM-DD the rest of this pipeline uses — this is Veryfi's own
   // documented response shape, not a guess (see veryfi-spike.ts's `coerce`).
   if (typeof v !== "string") return null;
-  return /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
+  // An impossible day ("2026-02-30") would fail the contract and throw away the whole reading.
+  const date = v.slice(0, 10);
+  return realDateSchema.safeParse(date).success ? date : null;
 }
 
 function coerceVendor(v: unknown): string | null {
