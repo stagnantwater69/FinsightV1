@@ -170,6 +170,8 @@ export function Money({
 
 // ---------------------------------------------------------------- Button
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
 type ButtonVariant = "primary" | "brand" | "secondary" | "ghost" | "danger";
 
 export function Button({
@@ -227,9 +229,31 @@ export function Button({
       : variant === "danger"
         ? t.statusText.critical + "40"
         : "transparent";
+  // A pressed button deepens its own fill instead of fading, so it reads as pushed, not disabled.
+  const pressedBg = {
+    primary: t.ACCENT.fillStrong,
+    brand: t.brandFillPressed,
+    secondary: t.surfaceMuted,
+    ghost: t.surfaceMuted,
+    danger: t.statusSurface.critical,
+  }[variant];
+  const inactive = !!disabled || !!loading;
+  const filled = variant === "primary" || variant === "brand";
+  const lift = filled && !inactive
+    ? shadowStyle({ color: t.shadow, offsetY: 2, opacity: 0.14 * t.shadowStrength, blurRadius: 6, elevation: 2 })
+    : null;
+
+  const reduceMotion = useReducedMotion();
+  const scale = useRef(new Animated.Value(1)).current;
+  const [pressed, setPressed] = useState(false);
+  const springTo = (to: number) => {
+    setPressed(to < 1);
+    if (reduceMotion) return;
+    Animated.spring(scale, { toValue: to, useNativeDriver: Platform.OS !== "web", speed: 40, bounciness: 0 }).start();
+  };
 
   return (
-    <Pressable
+    <AnimatedPressable
       testID={testID}
       accessibilityRole="button"
       /*
@@ -257,22 +281,26 @@ export function Button({
       onPress={onPress}
       onFocus={focusRingColor ? () => setFocused(true) : undefined}
       onBlur={focusRingColor ? () => setFocused(false) : undefined}
+      onPressIn={() => springTo(0.97)}
+      onPressOut={() => springTo(1)}
       disabled={disabled || loading}
-      style={({ pressed }) => [
+      style={[
         styles.button,
-        { backgroundColor: bg, borderColor: border, opacity: disabled || loading ? 0.6 : pressed ? 0.85 : 1 },
+        { backgroundColor: pressed ? pressedBg : bg, borderColor: border, opacity: inactive ? 0.5 : 1 },
+        lift,
         style,
         focusStyle,
+        { transform: [{ scale }] },
       ]}
     >
       {loading ? (
         <ActivityIndicator color={fg} />
       ) : (
-        <Text style={{ flexShrink: 1, textAlign: "center", fontFamily: font.sansSemibold, fontSize: typeScale.body, color: fg }}>
+        <Text style={{ flexShrink: 1, textAlign: "center", fontFamily: font.sansSemibold, fontSize: typeScale.body, letterSpacing: 0.1, color: fg }}>
           {title}
         </Text>
       )}
-    </Pressable>
+    </AnimatedPressable>
   );
 }
 
