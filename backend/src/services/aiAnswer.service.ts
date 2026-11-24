@@ -150,6 +150,15 @@ const ACCOUNTING_WORD_MONEY_PATTERN = /\([ \t]*(?:[-−][ \t]*)?(\d[\d,]*(?:\.\d
 // without a currency mark ("about 11,000", "347.33").
 const ACCOUNTING_BARE_MONEY_PATTERN = /\([ \t]*(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d{2})[ \t]*\)/g;
 const BARE_MONEY_PATTERN = /(?<![\d.,])([-−]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d{2}))(?![\d%])/g;
+// A plain 4+ digit number ("rent was 9500", "gumastos ka ng 9500") is money only
+// right after a spending word; anywhere else it may be a year or a count.
+const VERB_BARE_MONEY_PATTERN = new RegExp(
+  String.raw`(?<=\b(?:spent|spend|spends|paid|pay|pays|cost|costs|was|were|is|are|gastos|ginastos|gumastos|nagastos|binayaran|nagbayad|bayad)` +
+  String.raw`(?:\s+(?:about|around|roughly|approximately|only|just|ng|nang|mo|ka|ako|na))*\s+)` +
+  String.raw`([-−]?\d{4,})(?![\d.,%/-])` +
+  String.raw`(?!\s*(?:records?|days?|items?|transactions?|entries|receipts?|times|pieces|pcs|units|araw|beses|piraso)\b)`,
+  "gi",
+);
 const ACCOUNTING_PERCENT_PATTERN = /\([ \t]*(?:[-−][ \t]*)?(\d+(?:\.\d+)?)[ \t]*%[ \t]*\)/g;
 const PERCENT_PATTERN = /(?:(?<![\d.,])([-−])[ \t]*)?(\d+(?:\.\d+)?)[ \t]?%/g;
 
@@ -206,6 +215,14 @@ export function statedFigures(text: string): StatedFigure[] {
     // A date like 2022-01-10 or a time is not money.
     if (/\d{4}-\d{2}$/.test(text.slice(Math.max(0, start - 8), start))) continue;
     moneyFigures.push({ start, figure: { raw: match[0], value: toNumber(match[1]!), kind: "money" } });
+  }
+  for (const match of text.matchAll(VERB_BARE_MONEY_PATTERN)) {
+    const start = match.index!;
+    if (covered.some(([a, b]) => start >= a && start < b)) continue;
+    const value = toNumber(match[1]!);
+    // "The best year was 2025" names a year.
+    if (value >= 1900 && value <= 2100 && /\b(?:year|taon)\b/i.test(text.slice(Math.max(0, start - 30), start))) continue;
+    moneyFigures.push({ start, figure: { raw: match[0], value, kind: "money" } });
   }
   figures.push(...moneyFigures.sort((left, right) => left.start - right.start).map(({ figure }) => figure));
   const percentFigures: Array<{ start: number; figure: StatedFigure }> = [];
