@@ -1,5 +1,5 @@
 import {
-  AnomalyFindingSeverity, AnomalyFindingStatus, AnomalyFindingType, ExpenseRecordSource,
+  AnomalyFindingFeedback, AnomalyFindingSeverity, AnomalyFindingStatus, AnomalyFindingType, ExpenseRecordSource,
 } from "@prisma/client";
 import { prisma } from "../../src/config/prisma";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
@@ -96,5 +96,88 @@ describe("velocity findings", () => {
     expect(await detectVelocityForExpense(candidate.id, enabled)).toBeNull();
     expect((await prisma.anomalyFinding.findUniqueOrThrow({ where: { id: existing.id } })).status)
       .toBe(AnomalyFindingStatus.OPEN);
+  });
+
+  async function seedV1Finding(expenseRecordId: number) {
+    return saveFinding({
+      fingerprint: `velocity-v1:${expenseRecordId}`,
+      businessProfileId: ctx.profile.id,
+      expenseRecordId,
+      type: AnomalyFindingType.VELOCITY_ANOMALY,
+      severity: AnomalyFindingSeverity.MEDIUM,
+      score: 0.6,
+      method: "rolling-velocity",
+      title: "Unusual transaction frequency",
+      reasons: ["seeded by v1"],
+      metadata: {},
+      detectorVersion: "velocity-v1",
+    });
+  }
+
+  async function velocityFindings(expenseRecordId: number) {
+    return prisma.anomalyFinding.findMany({
+      where: { expenseRecordId, type: AnomalyFindingType.VELOCITY_ANOMALY },
+      orderBy: { id: "asc" },
+    });
+  }
+
+  it("supersedes an open finding from an older detector version when the current one fires", async () => {
+    await add("First");
+    await add("Second");
+    const candidate = await add("Third");
+    const v1 = await seedV1Finding(candidate.id);
+
+    const v2 = await detectVelocityForExpense(candidate.id, enabled);
+
+    expect(v2?.detectorVersion).toBe(VELOCITY_VERSION);
+    const all = await velocityFindings(candidate.id);
+    expect(all.filter((finding) => finding.status === AnomalyFindingStatus.OPEN).map((finding) => finding.id)).toEqual([v2!.id]);
+    expect(all.find((finding) => finding.id === v1.id)?.status).toBe(AnomalyFindingStatus.SUPERSEDED);
+  });
+
+  it("carries the owner's review of an older version onto the new finding", async () => {
+    await add("First");
+    await add("Second");
+    const candidate = await add("Third");
+    const v1 = await seedV1Finding(candidate.id);
+    const reviewedAt = new Date("2026-11-01T00:00:00Z");
+    await prisma.anomalyFinding.update({
+      where: { id: v1.id },
+      data: { status: AnomalyFindingStatus.DISMISSED, feedback: AnomalyFindingFeedback.EXPECTED_TRANSACTION, reviewedAt },
+    });
+
+    const v2 = await detectVelocityForExpense(candidate.id, enabled);
+
+    const all = await velocityFindings(candidate.id);
+    expect(all.some((finding) => finding.status === AnomalyFindingStatus.OPEN)).toBe(false);
+    expect(all.find((finding) => finding.id === v2!.id)).toMatchObject({
+      detectorVersion: VELOCITY_VERSION,
+      status: AnomalyFindingStatus.DISMISSED,
+      feedback: AnomalyFindingFeedback.EXPECTED_TRANSACTION,
+      reviewedAt,
+    });
+  });
+
+  it("keeps a review made on the current version when it fires again", async () => {
+    await add("First");
+    await add("Second");
+    const candidate = await add("Third");
+    await seedV1Finding(candidate.id);
+    await prisma.anomalyFinding.updateMany({
+      where: { expenseRecordId: candidate.id },
+      data: { status: AnomalyFindingStatus.DISMISSED, feedback: AnomalyFindingFeedback.EXPECTED_TRANSACTION, reviewedAt: new Date() },
+    });
+    const first = await detectVelocityForExpense(candidate.id, enabled);
+    await prisma.anomalyFinding.update({
+      where: { id: first!.id },
+      data: { status: AnomalyFindingStatus.CONFIRMED, feedback: AnomalyFindingFeedback.CONFIRMED_UNUSUAL },
+    });
+
+    await detectVelocityForExpense(candidate.id, enabled);
+
+    expect(await prisma.anomalyFinding.findUniqueOrThrow({ where: { id: first!.id } })).toMatchObject({
+      status: AnomalyFindingStatus.CONFIRMED,
+      feedback: AnomalyFindingFeedback.CONFIRMED_UNUSUAL,
+    });
   });
 });
