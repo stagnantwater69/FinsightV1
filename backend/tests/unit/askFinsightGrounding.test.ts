@@ -107,6 +107,16 @@ describe("amount grounding", () => {
     expect(isKnownFigure({ raw: "13%", value: 13, kind: "percent" }, known)).toBe(true);
   });
 
+  it("does not pass a doubled or summed figure off as rounding", () => {
+    const utilities = knownNumbers("Electricity: PHP 500.00\nWater: PHP 500.00\nRent: PHP 9,500.00\nSupplies: PHP 1,501.00");
+    // 500 + 500, or 500 doubled: within half a thousand of 500, but not a rounding of it.
+    expect(unknownFigures("Your utilities came to PHP 1,000.", utilities)).toEqual(["PHP 1,000"]);
+    expect(unknownFigures("Supplies were about PHP 2,000.", utilities)).toEqual(["PHP 2,000"]);
+    // Ordinary rounding still passes.
+    expect(unknownFigures("Rent was about PHP 10,000.", utilities)).toEqual([]);
+    expect(unknownFigures("Supplies were about PHP 1,500.", utilities)).toEqual([]);
+  });
+
   it("rejects figures the model worked out itself", () => {
     // 11,000 - 347.33 — arithmetic, which RULE 1 forbids.
     expect(unknownFigures("That leaves PHP 10,652.67 for the rest.", known)).toEqual(["PHP 10,652.67"]);
