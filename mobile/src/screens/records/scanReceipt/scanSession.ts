@@ -71,8 +71,8 @@ export function cancelsAnUpload(phase: string): boolean {
 export function stoppedWaitingMessage(accepted: boolean, hasLocalImages: boolean): string {
   if (accepted) {
     return hasLocalImages
-      ? "Your uploaded images are kept. Review the result when you're ready."
-      : "The stored receipt is kept. Review the result when you're ready.";
+      ? "Your uploaded images are kept. Check the result when you're ready."
+      : "The stored receipt is kept. Check the result when you're ready.";
   }
   return hasLocalImages
     ? "Your selected images are kept. Start the upload again when you're ready."

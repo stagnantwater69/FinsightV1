@@ -342,8 +342,8 @@ describe("receipt scan review workflow", () => {
     poll.mockRejectedValueOnce(new Error("Network interrupted"));
     const q = await readyReceipt();
     await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Review result" })).toBeEnabled());
-    await fireEvent.press(q.getByRole("button", { name: "Review result" }));
+    await waitFor(() => expect(q.getByRole("button", { name: "Check result" })).toBeEnabled());
+    await fireEvent.press(q.getByRole("button", { name: "Check result" }));
     await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeTruthy());
     expect(upload.mock.calls.filter(([path]) => path === "/records/receipts")).toHaveLength(1);
     expect(poll).toHaveBeenCalledTimes(2);
@@ -479,7 +479,7 @@ describe("receipt scan review workflow", () => {
     expect(q.getByText("Stored receipt image")).toBeTruthy();
 
     await act(async () => { failPoll(new Error("Network interrupted")); });
-    await waitFor(() => expect(q.getByRole("button", { name: "Review result" })).toBeEnabled());
+    await waitFor(() => expect(q.getByRole("button", { name: "Check result" })).toBeEnabled());
     expect(emptySourceImages(q.container)).toHaveLength(0);
     expect(q.getAllByText("Stored")).toHaveLength(2);
     expect(upload).not.toHaveBeenCalled();
@@ -521,8 +521,8 @@ describe("receipt scan review workflow", () => {
     await waitFor(() => expect(q.getByRole("button", { name: "Stop waiting" })).toBeTruthy());
 
     await fireEvent.press(q.getByRole("button", { name: "Stop waiting" }));
-    expect(q.getByText("The stored receipt is kept. Review the result when you're ready.")).toBeTruthy();
-    expect(q.getByRole("button", { name: "Review result" })).toBeEnabled();
+    expect(q.getByText("The stored receipt is kept. Check the result when you're ready.")).toBeTruthy();
+    expect(q.getByRole("button", { name: "Check result" })).toBeEnabled();
   });
 
   it("retries a discovered failed receipt using its stored bytes", async () => {
@@ -664,8 +664,8 @@ describe("receipt scan review workflow", () => {
 
     await waitFor(() => expect(q.getByRole("button", { name: /^Review result for Second Supplier/ })).toBeEnabled());
     await fireEvent.press(q.getByRole("button", { name: /^Review result for Second Supplier/ }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Review result" })).toBeEnabled());
-    await fireEvent.press(q.getByRole("button", { name: "Review result" }));
+    await waitFor(() => expect(q.getByRole("button", { name: "Check result" })).toBeEnabled());
+    await fireEvent.press(q.getByRole("button", { name: "Check result" }));
     await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeEnabled());
     expect(get.mock.calls.filter(([path]) => path === "/records/receipts/84")).toHaveLength(2);
     expect(q.getByLabelText("Amount (PHP)").props.value).toBe("90.00");

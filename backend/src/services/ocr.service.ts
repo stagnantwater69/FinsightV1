@@ -712,7 +712,9 @@ const TAX_INCLUSIVE_NOTE = /\btotal\b[^\n]*\binclud(?:e[sd]?|ing)\b[^\n]*\b(gst|
 const TENDER_LINE = /\b(cash(?:\s+tendered)?|tendered|amount\s+tendered|change(?:\s+due)?)\b/i;
 
 function parseAmount(text: string): number | null {
-  return readReceiptTotal(text)?.value ?? null;
+  const value = readReceiptTotal(text)?.value ?? null;
+  // A printed 0.00 (zero-rated, change) is never the total, and the provider contract rejects one, failing the scan.
+  return value !== null && value > 0 ? value : null;
 }
 
 /**

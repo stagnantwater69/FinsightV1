@@ -204,3 +204,9 @@ describe("tesseract's own reading of the owner's receipt", () => {
     expect(reconcileItems(pages.join("\n"), reading.items, reading.total).reconciled).toBe(false);
   });
 });
+
+describe("a total read as zero", () => {
+  it("is no total at all, not a 0.00 the provider contract refuses", () => {
+    expect(parseReceiptFields("SARI-SARI STORE\nTOTAL 0.00\nCASH 0.00\nCHANGE 0.00").amount).toBeNull();
+  });
+});

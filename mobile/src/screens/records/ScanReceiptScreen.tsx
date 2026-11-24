@@ -1823,7 +1823,7 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
                               : scanRecoveryAction === "retry"
                               ? "Retry processing"
                               : scanRecoveryAction === "review"
-                                ? "Review result"
+                                ? "Check result"
                                 : capturedReceiptGroups.length > 1
                                   ? `Scan ${capturedReceiptGroups.length} separate receipts`
                                   : pages.length === 1 ? "Scan this receipt" : `Scan long receipt (${pages.length} parts)`
