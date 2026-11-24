@@ -734,11 +734,13 @@ jobs:
       # Critical production advisories are always a release blocker, even
       # while the lower-severity Expo migration below remains scheduled work.
       - run: npm audit --omit=dev --audit-level=critical --prefix mobile
-      # High/moderate findings remain report-only. As of 2026-11-04, `npm
-      # audit --omit=dev --prefix mobile` finds 8 moderate and no high, all in
-      # Expo's own tooling chain (`glob`/`minimatch` under `@expo/*`). npm's
-      # proposed fixes cross major versions or downgrade Expo, which this
-      # pipeline must not do unilaterally.
+      # High/moderate findings remain report-only. As of 2026-11-24, `npm
+      # audit --omit=dev --prefix mobile` finds 3 moderate and no high, all
+      # GHSA-g3hv-75wg-m249 in expo > @expo/fingerprint > minimatch@10.2.6.
+      # Build-time only, not in the app bundle: the expo export above has no
+      # minimatch or @expo/fingerprint module. The fix is minimatch 11.0.1,
+      # outside @expo/fingerprint's ^10.2.6 range, and npm's only offer
+      # downgrades Expo, which this pipeline must not do unilaterally.
       # continue-on-error keeps the debt visible without applying an unsafe
       # automated migration.
       - run: npm audit --omit=dev --audit-level=high --prefix mobile

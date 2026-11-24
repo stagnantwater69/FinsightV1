@@ -16,7 +16,7 @@ function FeatureCard({ title, body, icon: Icon, wide = false, fullOnTablet = fal
     <Rise className={`min-w-0 ${fullOnTablet ? "sm:col-span-6" : "sm:col-span-3"} ${wide ? "lg:col-span-3" : "lg:col-span-2"}`}>
       <article className="flex h-full flex-col overflow-hidden rounded-2xl border border-landing-mint-light/70 bg-landing-surface p-4 sm:p-5">
         <div className="mb-4 flex items-start gap-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-landing-mint-light/70 bg-landing-mint-pale text-landing-green">
+          <span className="flex h-11 w-6 shrink-0 items-center justify-center text-landing-charcoal/60">
             <Icon className="h-5 w-5" aria-hidden />
           </span>
           <div className="min-w-0 pt-1">

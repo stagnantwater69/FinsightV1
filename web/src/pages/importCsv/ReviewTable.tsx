@@ -232,7 +232,7 @@ export function ReviewTable({
   return (
     <section aria-labelledby="csv-rows-title">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="csv-rows-title" className="text-base font-semibold text-ink-900">
+        <h2 id="csv-rows-title" className="text-lg font-semibold text-ink-900">
           Rows
         </h2>
         <div role="group" aria-label="Show rows" className="flex gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1">

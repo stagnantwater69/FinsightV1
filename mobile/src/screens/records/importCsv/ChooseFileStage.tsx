@@ -32,7 +32,7 @@ export function ChooseFileStage({ businessName, bottomInset, busy, error, onChoo
           <T>Import sales, expenses or both from a CSV file.</T>
         </View>
         <Pressable onPress={onChoose} disabled={busy} accessibilityRole="button" accessibilityLabel="Choose a CSV file from your phone or cloud storage" accessibilityState={{ disabled: busy }} style={{ minHeight: TAP_FLOOR, alignItems: "center", gap: space.sm, paddingVertical: space.xxl, paddingHorizontal: space.lg, borderWidth: 1, borderStyle: "dashed", borderColor: t.borderStrong, borderRadius: radius.lg, backgroundColor: t.brandSurface }}>
-          <Ionicons name="document-text-outline" size={42} color={t.brandText} accessible={false} />
+          <Ionicons name="document-text-outline" size={42} color={t.textMuted} accessible={false} />
           <T variant="heading">Choose a CSV file</T>
           <T variant="caption" style={{ textAlign: "center" }}>From your phone or cloud storage</T>
           <T variant="caption">CSV · Up to 5 MB</T>

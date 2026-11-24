@@ -117,8 +117,8 @@ export function MoreScreen({ navigation }: MoreScreenProps<"MoreHome">) {
                 backgroundColor: pressed ? HERO.washStrong : HERO.wash,
               })}
             >
-              <View style={{ width: 34, height: 34, borderRadius: 11, backgroundColor: HERO.washStrong, alignItems: "center", justifyContent: "center" }}>
-                <Ionicons name="storefront-outline" size={18} color={HERO.ink} />
+              <View style={{ width: 34, height: 34, alignItems: "center", justifyContent: "center" }}>
+                <Ionicons name="storefront-outline" size={18} color={t.textMuted} />
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <T style={{ fontSize: typeScale.micro, color: HERO.muted }}>Current business</T>

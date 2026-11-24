@@ -254,7 +254,7 @@ export function Profile() {
           <Card className="flex min-w-0 flex-col p-5 sm:p-6">
             <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-paper-200 pb-5">
               <div className="flex items-start gap-3">
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+                <span className="flex size-10 shrink-0 items-center justify-center text-ink-500">
                   <UserRound size={20} aria-hidden />
                 </span>
                 <div>
@@ -404,7 +404,7 @@ export function Profile() {
 
           <section aria-labelledby="account-security-heading">
             <div className="mb-5 flex items-start gap-3">
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+              <span className="flex size-10 shrink-0 items-center justify-center text-ink-500">
                 <ShieldCheck size={20} aria-hidden />
               </span>
               <div>
@@ -525,11 +525,11 @@ function SessionsPanel({
   return (
     <Card className="flex h-full flex-col p-5 sm:p-6">
       <div className="flex min-w-0 items-start gap-3">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-neutral text-tone-neutral">
+        <span className="flex size-10 shrink-0 items-center justify-center text-ink-500">
           <MonitorSmartphone size={20} aria-hidden />
         </span>
         <div>
-          <h3 className="text-base font-semibold text-ink-900">
+          <h3 className="text-lg font-semibold text-ink-900">
             Sessions and devices
           </h3>
           <p className="max-w-[65ch] text-sm leading-relaxed text-ink-500">
@@ -644,7 +644,7 @@ function DeleteAccountPanel({ ownerId, onDeleted }: { ownerId: number; onDeleted
     <div className="border-t border-edge-danger bg-paper/75 p-5 sm:px-6">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <h2 className="mb-1 text-base font-semibold text-tone-danger">
+          <h2 className="mb-1 text-lg font-semibold text-tone-danger">
             Delete account
           </h2>
           <p className="max-w-[65ch] text-sm leading-relaxed text-ink-500">
@@ -812,11 +812,11 @@ function SecurityPanel() {
     <Card className="flex h-full min-w-0 flex-col p-5 sm:p-6">
       <div className="flex items-start gap-3">
         <div className="flex items-start gap-3">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+          <span className="flex size-10 shrink-0 items-center justify-center text-ink-500">
             <KeyRound size={20} aria-hidden />
           </span>
           <div>
-            <h3 className="text-base font-semibold text-ink-900">Password</h3>
+            <h3 className="text-lg font-semibold text-ink-900">Password</h3>
             <p className="mt-1 text-sm leading-relaxed text-ink-500">
               Change your password securely using your current password.
             </p>

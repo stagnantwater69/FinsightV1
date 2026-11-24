@@ -29,6 +29,7 @@ import {
   Flag,
   GitCompareArrows,
   History,
+  Info,
   Lightbulb,
   ListOrdered,
   Minus,
@@ -473,7 +474,10 @@ function DashboardPage() {
           >
             <div className="stat-tile [container-type:inline-size]">
               <div className="flex items-center justify-between gap-3">
-                <p className={KPI_LABEL}>Available funds</p>
+                <div className="flex items-center gap-0.5">
+                  <p className={KPI_LABEL}>Available funds</p>
+                  <FundsExplainer>{fundsProvenance}</FundsExplainer>
+                </div>
                 <IconTile icon={Wallet} size="md" />
               </div>
               <p className={`${KPI_FIGURE} text-ink-900`}>
@@ -481,7 +485,6 @@ function DashboardPage() {
               </p>
               <div className={KPI_FOOTER}>
               <p>{fundsCalculation ? <>Opening balance + confirmed records since <time dateTime={fundsCalculation.baselineDate.slice(0, 10)}>{formatCalendarDate(fundsCalculation.baselineDate)}</time></> : "From your business profile"}</p>
-              <FundsExplainer>{fundsProvenance}</FundsExplainer>
               </div>
             </div>
             <KpiCell
@@ -559,7 +562,7 @@ function DashboardPage() {
                         onClick={() => addRecord.openEdit(r.type === "sales" ? "sales" : "expense", r.id)}
                         className="cursor-pointer border-b border-paper-200 transition-colors last:border-0 hover:bg-paper-50"
                       >
-                        <td className="figure px-3 py-2.5 text-xs text-ink-500 sm:px-5">
+                        <td className="figure whitespace-nowrap px-3 py-2.5 text-xs text-ink-500 sm:px-5">
                           {new Date(r.date).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })}
                         </td>
                         <td className="px-2 py-2 sm:px-3">
@@ -589,7 +592,7 @@ function DashboardPage() {
                             </div>
                           ) : null}
                         </td>
-                        <td className={`figure px-3 py-2.5 text-right text-xs font-semibold sm:px-5 sm:text-sm ${r.type === "sales" ? "text-tone-brand" : "text-ink-900"}`}>
+                        <td className={`figure whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold sm:px-5 sm:text-sm ${r.type === "sales" ? "text-tone-brand" : "text-ink-900"}`}>
                           <span className="sr-only">{r.type === "sales" ? "Sale of " : "Expense of "}</span>
                           {r.type === "sales" ? "+" : "−"}
                           {formatMoney(r.amount)}
@@ -767,9 +770,11 @@ function FundsExplainer({ children }: { children: ReactNode }) {
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen(true)}
-        className="disclosure mt-1 self-start"
+        aria-label="How it’s calculated"
+        title="How it’s calculated"
+        className="-my-3 inline-flex min-h-tap min-w-tap items-center justify-center rounded-lg text-ink-500 transition-colors hover:text-ink-800"
       >
-        How it’s calculated
+        <Info aria-hidden className="h-4 w-4" strokeWidth={1.75} />
       </button>
       {open ? (
         <div

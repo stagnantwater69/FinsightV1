@@ -89,7 +89,7 @@ export function CsvFileSummary({
 }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-xl border border-paper-200 bg-paper px-4 py-3 shadow-sm">
-      <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+      <span aria-hidden className="flex h-11 w-11 shrink-0 items-center justify-center text-ink-500">
         <IconCsvFile className="h-6 w-6" />
       </span>
       <div className="min-w-0 flex-1">

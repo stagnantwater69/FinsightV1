@@ -553,7 +553,7 @@ export function FileInput({
       >
         {presentation === "hero" ? (
           <>
-            <span aria-hidden className="flex h-12 w-12 items-center justify-center rounded-xl bg-tint-brand text-tone-brand sm:h-14 sm:w-14 sm:rounded-2xl">
+            <span aria-hidden className="flex h-12 w-12 items-center justify-center text-ink-500 sm:h-14 sm:w-14">
               <IconUpload className="h-6 w-6 sm:h-7 sm:w-7" />
             </span>
             <span className="font-display text-base font-semibold text-ink-900 sm:text-lg">

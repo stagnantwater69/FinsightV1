@@ -980,8 +980,8 @@ function SavedPlanCard({
           backgroundColor: t.surface,
         }}
       >
-        <View style={{ width: 36, height: 36, borderRadius: 11, backgroundColor: t.brandSurface, alignItems: "center", justifyContent: "center" }}>
-          <Ionicons name="bookmark-outline" size={18} color={t.brandText} />
+        <View style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}>
+          <Ionicons name="bookmark-outline" size={18} color={t.textMuted} />
         </View>
         <View style={{ flex: 1 }}>
           <T variant="caption" accessibilityRole="header">My saved plan · for reference only</T>
@@ -1054,8 +1054,8 @@ function RecoveryAboutSheet({ visible, onClose, asOf }: { visible: boolean; onCl
             <T variant="title" accessibilityRole="header">About this target</T>
             {ABOUT_POINTS.map((point) => (
               <View key={point.title} style={{ flexDirection: "row", gap: space.md, alignItems: "flex-start" }}>
-                <View style={{ width: 36, height: 36, borderRadius: radius.md, backgroundColor: t.brandSurface, alignItems: "center", justifyContent: "center" }}>
-                  <Ionicons name={point.icon} size={18} color={t.brandText} />
+                <View style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}>
+                  <Ionicons name={point.icon} size={18} color={t.textMuted} />
                 </View>
                 <View style={{ flex: 1, gap: 2 }}>
                   <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodySm, color: t.textPrimary }}>{point.title}</T>

@@ -48,11 +48,11 @@ export function SubpageHeader({ title, onBack, disabled = false, right }: {
   );
 }
 
-export function SubpageIcon({ name, tone = "default" }: { name: IconName; tone?: "default" | "danger" }) {
+export function SubpageIcon({ name }: { name: IconName }) {
   const t = useTheme();
   return (
-    <View style={{ width: 44, height: 44, flexShrink: 0, borderRadius: radius.full, backgroundColor: tone === "danger" ? t.statusSurface.critical : t.brandBorder, alignItems: "center", justifyContent: "center" }}>
-      <Ionicons name={name} size={24} color={tone === "danger" ? t.statusText.critical : t.brandText} accessibilityElementsHidden importantForAccessibility="no" />
+    <View style={{ width: 44, height: 44, flexShrink: 0, alignItems: "center", justifyContent: "center" }}>
+      <Ionicons name={name} size={24} color={t.textMuted} accessibilityElementsHidden importantForAccessibility="no" />
     </View>
   );
 }
@@ -69,7 +69,7 @@ export function SubpageCard({ title, icon, tone = "default", children, style }: 
     <Card style={{ backgroundColor: tone === "mint" ? t.brandSurface : t.surface, borderColor: tone === "mint" ? t.brandBorder : t.border, ...style }}>
       {title ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, marginBottom: space.md }}>
-          {icon ? <SubpageIcon name={icon} tone={tone === "danger" ? "danger" : "default"} /> : null}
+          {icon ? <SubpageIcon name={icon} /> : null}
           <T accessibilityRole="header" variant="title" style={{ flex: 1, minWidth: 0, color: t.textPrimary }}>{title}</T>
         </View>
       ) : null}

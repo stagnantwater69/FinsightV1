@@ -30,7 +30,7 @@ export function Contact() {
           <section className="p-6 sm:border-r sm:border-landing-mint-light lg:p-9">
             <span
               aria-hidden
-              className="flex h-11 w-11 items-center justify-center rounded-xl bg-landing-mint-pale text-landing-green"
+              className="flex h-11 w-11 items-center justify-center text-landing-charcoal/60"
             >
               <Mail className="h-5 w-5" />
             </span>
@@ -58,7 +58,7 @@ export function Contact() {
           <section className="border-t border-landing-mint-light p-6 sm:border-t-0 lg:p-9">
             <span
               aria-hidden
-              className="flex h-11 w-11 items-center justify-center rounded-xl bg-landing-mint-pale text-landing-green"
+              className="flex h-11 w-11 items-center justify-center text-landing-charcoal/60"
             >
               <CircleHelp className="h-5 w-5" />
             </span>

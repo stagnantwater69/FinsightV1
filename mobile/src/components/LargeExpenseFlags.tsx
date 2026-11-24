@@ -41,7 +41,6 @@ export function LargeExpenseFlags({
       {visible.length > 0 || loading || error ? <SectionTitle
         question="Large expense flags"
         icon="flag-outline"
-        tone="critical"
         right={
           total !== null && total > 0 ? (
             <View style={{ borderRadius: radius.full, paddingHorizontal: space.sm, paddingVertical: 3, backgroundColor: t.statusSurface.critical }}>
@@ -78,8 +77,8 @@ export function LargeExpenseFlags({
                 backgroundColor: t.surfaceSunken,
               }}
             >
-              <View style={{ width: 32, height: 32, borderRadius: 10, backgroundColor: t.statusSurface.critical, alignItems: "center", justifyContent: "center" }}>
-                <Ionicons name="flag" size={15} color={t.statusText.critical} />
+              <View style={{ width: 32, height: 32, alignItems: "center", justifyContent: "center" }}>
+                <Ionicons name="flag" size={15} color={t.textMuted} />
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.sm }}>

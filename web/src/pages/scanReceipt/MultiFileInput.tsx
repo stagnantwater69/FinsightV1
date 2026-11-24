@@ -80,7 +80,7 @@ export function MultiFileInput({
       >
         <span
           aria-hidden
-          className={`flex shrink-0 items-center justify-center bg-tint-brand text-tone-brand ring-1 ring-edge-brand ${
+          className={`flex shrink-0 items-center justify-center text-ink-500 ${
             files.length > 0
               ? "h-10 w-10 rounded-xl sm:h-12 sm:w-12"
               : "h-12 w-12 rounded-xl"
@@ -88,10 +88,16 @@ export function MultiFileInput({
         >
           <IconUpload className={files.length > 0 ? "h-5 w-5 sm:h-6 sm:w-6" : "h-6 w-6"} />
         </span>
-        <span className="font-display text-base font-semibold text-ink-900">
-          {files.length > 0 ? "Add more photos" : "Drag and drop your receipt here"}
+        <span className="text-base font-semibold text-ink-900">
+          {files.length > 0 ? "Add more photos" : (
+            <>
+              {/* Touch screens have nothing to drag from, so they get the plain ask. */}
+              <span className="[@media(pointer:coarse)]:hidden">Drag and drop your receipt here</span>
+              <span className="hidden [@media(pointer:coarse)]:inline">Add photos of your receipt</span>
+            </>
+          )}
         </span>
-        <span className={`text-sm text-ink-500 ${files.length > 0 ? "hidden" : ""}`}>or</span>
+        <span className={`text-sm text-ink-500 [@media(pointer:coarse)]:hidden ${files.length > 0 ? "hidden" : ""}`}>or</span>
         <span className={`inline-flex min-h-tap items-center rounded-lg bg-accent-400 px-4 py-2.5 text-sm font-semibold text-accent-950 shadow-sm ${
           files.length > 0 ? "sm:ml-auto" : ""
         }`}>

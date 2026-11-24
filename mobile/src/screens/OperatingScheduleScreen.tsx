@@ -365,7 +365,7 @@ export function OperatingScheduleScreen({ route }: { route?: { params?: { busine
 
         <View style={{ gap: space.lg }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, backgroundColor: t.brandSurface, borderRadius: radius.md, padding: space.lg }}>
-            <Ionicons name="storefront-outline" size={32} color={t.brandText} />
+            <Ionicons name="storefront-outline" size={32} color={t.textMuted} />
             <View style={{ flex: 1, gap: space.xs }}>
               <T variant="heading" accessibilityRole="header">Your usual week</T>
               <T style={{ color: t.textSecondary }}>{loadingSchedule || !scheduleReady ? "Loading…" : `${entries.filter((entry) => entry.isOpen).length} open days · every week`}</T>

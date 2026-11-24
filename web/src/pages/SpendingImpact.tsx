@@ -388,7 +388,7 @@ function PurchaseReviewCard({
             {facts.map(({ icon: Icon, label, body }) => (
               <div key={label} className="grid gap-1.5 py-3.5 first:pt-0 sm:grid-cols-[9.5rem_minmax(0,1fr)] sm:gap-4">
                 <dt className="flex items-center gap-2 text-xs font-semibold text-ink-600">
-                  <Icon aria-hidden size={15} className="shrink-0 text-tone-brand" />
+                  <Icon aria-hidden size={15} className="shrink-0 text-ink-500" />
                   {label}
                 </dt>
                 <dd className="text-sm leading-relaxed text-ink-700">{body}</dd>
@@ -873,7 +873,7 @@ function SpendingImpactPage() {
                   </div>
                   {data ? (
                     <span
-                      className={`impact-stamp inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 font-display text-xs font-bold uppercase tracking-[0.08em] ${STAMP_INK[data.impactBand]}`}
+                      className={`impact-stamp inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-bold uppercase tracking-[0.08em] ${STAMP_INK[data.impactBand]}`}
                     >
                       <span aria-hidden>{BAND_GLYPH[data.impactBand]}</span>
                       {data.impactBand}
@@ -931,7 +931,7 @@ function SpendingImpactPage() {
 
                     <div className={SLIP_RULE} />
                     <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-ink-700">
-                      <WalletCards aria-hidden className="text-tone-brand" size={14} />
+                      <WalletCards aria-hidden className="text-ink-500" size={14} />
                       Expenses · {periodLabel(selection)}
                     </p>
                     <dl className="space-y-1.5 text-sm">

@@ -110,7 +110,7 @@ const SURFACE = "rounded-2xl border border-paper-200 bg-paper p-5 shadow-sm xl:f
 function SourceHeading({ icon: Icon, title, children }: { icon: LucideIcon; title: string; children: ReactNode }) {
   return (
     <div className="flex items-start gap-3">
-      <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+      <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center text-ink-500">
         <Icon className="h-[18px] w-[18px]" />
       </span>
       <div className="min-w-0">

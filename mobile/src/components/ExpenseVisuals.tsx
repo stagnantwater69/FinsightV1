@@ -41,7 +41,7 @@ export function SpendHero({ total, recordCount, categoryCount, changePercent, ch
   const up = changeAmount > 0;
   const changeLabel = changeAmount === 0 ? "No change" : `${Math.abs(changePercent ?? 0).toFixed(0)}% ${up ? "higher" : "lower"}`;
   return (
-    <TealPanel style={{ borderRadius: radius.xl }} watermarkIcon="wallet-outline">
+    <TealPanel style={{ borderRadius: radius.xl }}>
       {header}
       <T accessibilityRole="header" style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, color: HERO.ink }}>Recorded expenses</T>
       <View style={{ gap: space.xs }}>

@@ -76,7 +76,7 @@ export function Modal({
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-paper-200 px-5 py-4 short:py-2">
         <h2
           id={titleId}
-          className="font-display text-base font-semibold text-ink-900"
+          className="font-display text-lg font-semibold text-ink-900"
         >
           {title}
         </h2>

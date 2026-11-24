@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { IconChevronLeft } from "./icons";
+import { IconCheck, IconChevronLeft } from "./icons";
 import { Wordmark } from "./Wordmark";
 
 /**
@@ -195,7 +195,7 @@ export function AuthLayout({
                 a scroll-triggered reveal. */}
             <div className="mt-7 animate-rise [animation-delay:80ms] short:mt-4">
               {eyebrow ? (
-                <span className="block font-display text-xs font-bold uppercase tracking-[0.16em] text-brand-600">
+                <span className="block text-xs font-bold uppercase tracking-[0.16em] text-brand-600">
                   {eyebrow}
                 </span>
               ) : null}
@@ -224,12 +224,7 @@ export function AuthLayout({
                       className="flex animate-rise items-start gap-2.5 text-sm text-ink-700"
                       style={{ animationDelay: `${280 + i * 60}ms` }}
                     >
-                      <span
-                        aria-hidden
-                        className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-brand-700 text-xs font-bold text-white"
-                      >
-                        ✓
-                      </span>
+                      <IconCheck className="mt-0.5 h-4 w-4 shrink-0 text-ink-700" />
                       {p}
                     </li>
                   ))}

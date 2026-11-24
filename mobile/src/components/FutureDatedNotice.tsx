@@ -63,7 +63,7 @@ export function FutureDatedNotice({
 
   return (
     <Card style={style}>
-      <SectionTitle question="Records dated after today" icon="calendar-outline" tone="critical" />
+      <SectionTitle question="Records dated after today" icon="calendar-outline" />
       <T variant="caption" style={{ marginTop: space.sm }}>
         {data.total === 1 ? "1 record is" : `${data.total} records are`} dated after {data.today.slice(0, 10)} and
         left out of your totals. Open each one and change its date to today or earlier, or delete it.
@@ -77,7 +77,6 @@ export function FutureDatedNotice({
               key={`${record.type}-${record.id}`}
               first={index === 0}
               icon={record.type === "expense" ? "arrow-up-outline" : "arrow-down-outline"}
-              tone="neutral"
               title={record.description}
               detail={detail}
               right={<Money value={record.amount} />}

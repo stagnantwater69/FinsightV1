@@ -96,8 +96,8 @@ export function CompactRecords({
               borderTopColor: t.border,
             })}
           >
-            <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", backgroundColor: sale ? t.brandSurface : t.surfaceMuted }}>
-              <Ionicons name={sale ? "arrow-down" : "arrow-up"} size={16} color={sale ? t.brandText : t.textSecondary} />
+            <View style={{ width: 34, height: 34, alignItems: "center", justifyContent: "center" }}>
+              <Ionicons name={sale ? "arrow-down" : "arrow-up"} size={16} color={t.textMuted} />
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
               <T numberOfLines={1} style={{ fontFamily: font.sansMedium, fontSize: typeScale.bodySm, color: t.textPrimary }}>{r.description}</T>

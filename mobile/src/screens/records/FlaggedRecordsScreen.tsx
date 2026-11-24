@@ -575,7 +575,7 @@ export function FlaggedRecordsScreen() {
         ListHeaderComponent={(
           <>
         <View style={{ backgroundColor: t.brandSurface, borderRadius: radius.md, padding: space.lg, marginBottom: space.md, flexDirection: "row", alignItems: "center", gap: space.md }}>
-          <Ionicons name="document-text-outline" size={32} color={t.brandText} />
+          <Ionicons name="document-text-outline" size={32} color={t.textMuted} />
           <View style={{ flex: 1, gap: space.xs }}>
             <T variant="heading" accessibilityRole="header" accessibilityLiveRegion="polite">{visibleFlaggedTotal === null ? visibleLoading ? "Loading review count…" : "Review count unavailable" : `${visibleFlaggedTotal} record${visibleFlaggedTotal === 1 ? " needs" : "s need"} a check`}</T>
             <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>Review duplicates and unusually large expenses.</T>

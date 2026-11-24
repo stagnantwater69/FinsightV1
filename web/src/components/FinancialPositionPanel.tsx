@@ -176,7 +176,7 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
         aria-labelledby={`last-month-${profile.id}`}
         className="mt-7 border-t border-paper-200 pt-6"
       >
-        <h3 id={`last-month-${profile.id}`} className="font-display text-base font-semibold text-ink-900">
+        <h3 id={`last-month-${profile.id}`} className="font-display text-lg font-semibold text-ink-900">
           {lastMarked ? `${lastLabel} is marked complete` : `Is ${lastLabel} complete?`}
         </h3>
 

@@ -62,8 +62,10 @@ export function ScannedItemsTable({
   updateAddedItem: (key: string, patch: Partial<Omit<AddedItem, "key">>) => void;
   removeAddedItem: (key: string) => void;
 }) {
+  // `relative` so the sr-only labels inside position against this scroller
+  // and stay clipped by it, instead of widening the whole page.
   return (
-    <div className="mt-2 overflow-x-auto rounded-xl border border-paper-200">
+    <div className="relative mt-2 overflow-x-auto rounded-xl border border-paper-200">
       <table className="w-full min-w-[38rem] text-left text-sm">
         <caption className="sr-only">
           Each item read from the receipt, with the category it will be filed under
@@ -198,7 +200,7 @@ export function ScannedItemsTable({
                     />
                   </>
                 ) : (
-                  <Money value={item.amount} decimals />
+                  <Money value={item.amount} decimals className="whitespace-nowrap" />
                 )}
                 {/*
                   The engine's own doubt about THIS figure. Shown

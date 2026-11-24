@@ -403,7 +403,7 @@ function DashboardContent({ navigation }: DashboardScreenProps<"DashboardHome">)
 
             {recoveryNeedsSetup ? (
               <Card>
-                <SectionTitle question="Monthly target" icon="flag-outline" tone="accent" />
+                <SectionTitle question="Monthly target" icon="flag-outline" />
                 <T variant="caption" style={{ marginTop: space.sm }}>Add your monthly expenses to get a daily sales target.</T>
                 <Button title={recoveryActionLabel} variant="primary" onPress={openRecoveryAction} style={{ marginTop: space.md }} />
               </Card>
@@ -428,12 +428,11 @@ function DashboardContent({ navigation }: DashboardScreenProps<"DashboardHome">)
             />
 
             <Card>
-              <SectionTitle question="What needs my attention?" icon="notifications-outline" tone="accent" />
+              <SectionTitle question="What needs my attention?" icon="notifications-outline" />
               <View style={{ marginTop: space.sm }}>
                 <IconRow
                   first
                   icon="flag-outline"
-                  tone="critical"
                   title="Records to review"
                   detail={summary.recordsNeedingReview > 0 ? null : "All clear"}
                   right={<T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.bodyLg, color: t.textPrimary }}>{summary.recordsNeedingReview}</T>}
@@ -452,7 +451,6 @@ function DashboardContent({ navigation }: DashboardScreenProps<"DashboardHome">)
                 {largestCategory ? (
                   <IconRow
                     icon="pie-chart-outline"
-                    tone="info"
                     title="Largest expense"
                     detail={largestCategory.categoryName}
                     right={<T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.bodyLg, color: t.textPrimary }}>{`${Math.round(largestCategory.percent)}%`}</T>}

@@ -129,7 +129,7 @@ export function Panel({
         <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5">
           <div className="min-w-0">
             {eyebrow ? <div className="eyebrow mb-0.5">{eyebrow}</div> : null}
-            {title ? <Heading className="text-base font-semibold text-ink-900">{title}</Heading> : null}
+            {title ? <Heading className="text-lg font-semibold text-ink-900">{title}</Heading> : null}
           </div>
           {action ? <div className="shrink-0">{action}</div> : null}
         </div>

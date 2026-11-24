@@ -739,8 +739,8 @@ function SpendingImpactContent({ navigation, route }: InsightsScreenProps<"Spend
 
               {!data ? (
                 <View style={{ alignItems: "center", paddingVertical: space.xxl }}>
-                  <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: t.surfaceMuted, alignItems: "center", justifyContent: "center", marginBottom: space.md }}>
-                    <Ionicons name="cash-outline" size={30} color={t.brandText} accessibilityElementsHidden importantForAccessibility="no" />
+                  <View style={{ width: 64, height: 64, alignItems: "center", justifyContent: "center", marginBottom: space.md }}>
+                    <Ionicons name="cash-outline" size={30} color={t.textMuted} accessibilityElementsHidden importantForAccessibility="no" />
                   </View>
                   <T variant="title" accessibilityRole="header" style={{ textAlign: "center" }}>Enter a planned amount</T>
                   <T variant="caption" style={{ textAlign: "center", marginTop: 6, lineHeight: 18, maxWidth: 260 }}>
@@ -1330,7 +1330,7 @@ function PurchaseReviewCard({
             justifyContent: "center",
           }}
         >
-          <Ionicons name={PURCHASE_KIND_ICON[review.kind]} size={20} color={t.brandText} />
+          <Ionicons name={PURCHASE_KIND_ICON[review.kind]} size={20} color={t.textMuted} />
         </View>
         <View style={{ flex: 1 }}>
           <T variant="heading" accessibilityRole="header">About {item}</T>

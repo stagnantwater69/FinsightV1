@@ -183,7 +183,7 @@ function OpportunityCard({
         ...(primary ? {} : { flex: 1, minWidth: 130 }),
       })}
     >
-      <Ionicons name={icon} size={20} color={t.brandText} />
+      <Ionicons name={icon} size={20} color={t.textMuted} />
       <T style={{ color: t.brandText, fontFamily: font.sansSemibold, fontSize: typeScale.bodySm, flexShrink: 1, textAlign: "center" }}>{label}</T>
     </Pressable>
   );

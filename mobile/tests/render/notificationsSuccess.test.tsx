@@ -627,7 +627,7 @@ describe('Alerts filtering and presentation', () => {
       expect(screen.getByText(rows[index]!.message)).toBeTruthy();
       expect(screen.getByText(label!)).toBeTruthy();
       const icon = screen.getByText(`Ionicons:${glyph}`, { includeHiddenElements: true });
-      expect(icon.props.color).toBe(label === 'Large expense' ? palettes[mode].statusText.serious : palettes[mode].brandText);
+      expect(icon.props.color).toBe(palettes[mode].textMuted);
     }
     expect(screen.queryByText('CUSTOM_NOTICE')).toBeNull();
   });

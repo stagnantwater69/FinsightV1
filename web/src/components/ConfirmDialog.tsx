@@ -102,7 +102,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           className="confirm-dialog w-[min(28rem,calc(100vw-2rem))] rounded-2xl border border-paper-200 bg-paper p-0 text-ink-900 shadow-lg"
         >
           <div className="p-5">
-            <h2 id="confirm-title" className="text-base font-semibold text-ink-900">
+            <h2 id="confirm-title" className="text-lg font-semibold text-ink-900">
               {request.title}
             </h2>
             {request.body ? (

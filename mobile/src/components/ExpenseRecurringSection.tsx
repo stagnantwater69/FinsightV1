@@ -40,7 +40,7 @@ export function ExpenseRecurringSection({ patternActionError, scheduleState, sch
       {schedules === null && !scheduleNotice ? (
         <View style={{ borderWidth: 1, borderColor: t.brandBorder, borderRadius: radius.lg, backgroundColor: t.brandSurface, padding: space.md, gap: space.md }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-            <Ionicons name="repeat-outline" size={24} color={t.brandText} accessible={false} importantForAccessibility="no" />
+            <Ionicons name="repeat-outline" size={24} color={t.textMuted} accessible={false} importantForAccessibility="no" />
             <T variant="heading" accessibilityRole="header" style={{ flex: 1 }}>Repeating payments unavailable</T>
           </View>
           <T style={{ color: t.textSecondary }}>Your payment agenda is unavailable right now. Retry before adding or confirming a repeating payment.</T>
@@ -75,7 +75,7 @@ export function ExpenseRecurringSection({ patternActionError, scheduleState, sch
                   >
                     <View style={{ flexDirection: compact ? "row" : "column", alignItems: compact ? "center" : "stretch", gap: space.sm }}>
                       <View style={{ flex: compact ? 1 : undefined, flexDirection: "row", alignItems: "center", gap: space.sm }}>
-                        <Ionicons name="receipt-outline" size={24} color={t.brandText} accessible={false} importantForAccessibility="no" />
+                        <Ionicons name="receipt-outline" size={24} color={t.textMuted} accessible={false} importantForAccessibility="no" />
                         <T style={{ flex: 1, fontFamily: font.sansSemibold, color: t.textPrimary }}>{schedule.label}</T>
                       </View>
                       <View style={{ flex: compact ? 1 : undefined, alignItems: compact ? "flex-end" : "flex-start", gap: space.xs }}>
@@ -115,7 +115,7 @@ export function ExpenseRecurringSection({ patternActionError, scheduleState, sch
           {visibleCandidates.map((pattern) => (
             <View key={pattern.id} style={{ borderWidth: 1, borderColor: t.brandBorder, borderRadius: radius.lg, backgroundColor: t.brandSurface, padding: space.md, gap: space.md }}>
               <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.md }}>
-                <Ionicons name="repeat-outline" size={24} color={t.brandText} />
+                <Ionicons name="repeat-outline" size={24} color={t.textMuted} />
                 <View style={{ flex: 1, gap: space.xs }}>
                   <T style={{ fontFamily: font.sansSemibold, color: t.textPrimary }}>{pattern.description}</T>
                   <T style={{ fontSize: typeScale.bodyLg, lineHeight: 24, fontFamily: font.sansSemibold, fontVariant: ["tabular-nums"], color: t.textPrimary }}>{formatMoney(pattern.expectedAmount, { decimals: true })}</T>

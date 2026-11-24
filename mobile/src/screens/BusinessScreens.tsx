@@ -345,7 +345,7 @@ function BusinessIdentityImage({ profile, current = false }: { profile: Pick<Bus
   const size = current ? 68 : 48;
   return (
     <View style={{ width: size, height: size, flexShrink: 0, overflow: "hidden", borderRadius: current ? radius.lg : radius.full, backgroundColor: current ? t.onBrandSolid + "15" : t.brandSurface, alignItems: "center", justifyContent: "center" }}>
-      {!uri || failedImage === imageKey || loadedImage !== imageKey ? <Ionicons name="storefront-outline" size={current ? 32 : 25} color={current ? t.onBrandSolidMuted : t.brandText} accessible={false} /> : null}
+      {!uri || failedImage === imageKey || loadedImage !== imageKey ? <Ionicons name="storefront-outline" size={current ? 32 : 25} color={current ? t.onBrandSolidMuted : t.textMuted} accessible={false} /> : null}
       {uri && failedImage !== imageKey ? (
         <Image key={imageKey} accessible accessibilityRole="image" accessibilityLabel={`${profile.name} business photo`} source={{ uri }} resizeMode="cover" onLoad={() => setLoadedImage(imageKey)} onError={() => setFailedImage(imageKey)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }} />
       ) : null}

@@ -1334,8 +1334,8 @@ export function Alert({
       <View style={{ width: 4, backgroundColor: spec.solid }} />
       <View style={styles.alertBody}>
         <View style={{ flexDirection: "row", gap: space.sm }}>
-          <View accessibilityElementsHidden importantForAccessibility="no" style={[styles.glyph, { backgroundColor: spec.solid }]}>
-            <Ionicons name={spec.glyph} size={12} color={t.textOnFill} />
+          <View accessibilityElementsHidden importantForAccessibility="no" style={styles.glyph}>
+            <Ionicons name={spec.glyph} size={14} color={t.textMuted} />
           </View>
           <View style={{ flex: 1 }}>
             <T variant="label" style={{ color: spec.ink, textTransform: "uppercase", letterSpacing: 0.3 }}>
@@ -1774,7 +1774,6 @@ const createStyles = (t: Palette) => ({
   glyph: {
     width: 20,
     height: 20,
-    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 1,

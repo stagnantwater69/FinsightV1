@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { IconCheck } from "./icons";
 
 /**
  * Peak-End Rule — designed confirmation moments.
@@ -31,12 +32,7 @@ export function Celebration({
 }) {
   return (
     <div className="animate-slide-up rounded-2xl bg-gradient-to-br from-brand-50 to-accent-50 p-6 text-center ring-1 ring-edge-brand">
-      <span
-        aria-hidden
-        className="mx-auto mb-3 flex h-14 w-14 animate-pop-in items-center justify-center rounded-full bg-brand-600 text-2xl text-white shadow-sm"
-      >
-        ✓
-      </span>
+      <IconCheck className="mx-auto mb-3 h-8 w-8 animate-pop-in text-ink-700" />
       <h2 className="font-display text-lg font-semibold text-ink-900">{title}</h2>
       {children ? <p className="mx-auto mt-2 max-w-md text-sm text-ink-600">{children}</p> : null}
       {action ? <div className="mt-5 flex flex-wrap justify-center gap-3">{action}</div> : null}
@@ -61,12 +57,7 @@ export function ConfirmationBanner({
       role="status"
       className="flex animate-slide-up items-start gap-3 rounded-xl bg-tint-brand p-3 ring-1 ring-edge-brand"
     >
-      <span
-        aria-hidden
-        className="mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-600 text-xs font-bold text-white"
-      >
-        ✓
-      </span>
+      <IconCheck className="mt-0.5 h-4 w-4 shrink-0 text-ink-700" />
       <p className="flex-1 text-sm text-ink-900">{children}</p>
       {onDismiss ? (
         <button

@@ -91,7 +91,7 @@ function AccountAction({ icon, label, detail, onPress, destructive = false }: {
       accessibilityHint={detail}
       style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: space.md, minHeight: TAP_FLOOR, paddingVertical: space.md, borderRadius: radius.sm, backgroundColor: pressed ? t.surfaceMuted : "transparent" })}
     >
-      <SubpageIcon name={icon} tone={destructive ? "danger" : "default"} />
+      <SubpageIcon name={icon} />
       <View style={{ flex: 1, gap: space.xs }}>
         <T style={{ color, fontFamily: font.sansSemibold }}>{label}</T>
         <T variant="caption">{detail}</T>
@@ -342,7 +342,7 @@ export function ChangePasswordScreen({ navigation }: MoreScreenProps<"ChangePass
   if (!profile || !current()) return <AccountUnavailable />;
   return (
     <AccountForm title="Change password" onBack={() => returnToAccount(navigation)} busy={busy} footer={<Button title="Update password" variant="primary" loading={busy} onPress={() => void submit()} />}>
-      <View style={{ width: 56, height: 56, borderRadius: radius.md, alignItems: "center", justifyContent: "center", backgroundColor: t.brandSurface, marginBottom: space.lg }}><Ionicons name="lock-closed-outline" size={30} color={t.brandText} accessibilityElementsHidden importantForAccessibility="no" /></View>
+      <View style={{ width: 56, height: 56, alignItems: "center", justifyContent: "center", marginBottom: space.lg }}><Ionicons name="lock-closed-outline" size={30} color={t.textMuted} accessibilityElementsHidden importantForAccessibility="no" /></View>
       <T variant="titleLg" accessibilityRole="header" style={{ color: t.textPrimary, marginBottom: space.sm }}>Choose a new password</T>
       <T style={{ marginBottom: space.xxl }}>You will stay signed in on this phone.</T>
       <Field ref={currentRef} label="Current password" value={form.currentPassword} onChangeText={set("currentPassword")} error={errors.currentPassword} editable={!busy} secureTextEntry autoComplete="password" placeholder="Enter current password" returnKeyType="next" submitBehavior="submit" onSubmitEditing={() => nextRef.current?.focus()} />

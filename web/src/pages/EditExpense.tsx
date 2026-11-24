@@ -219,7 +219,7 @@ export function EditExpense() {
                 {/* One line per fact: a receipt's description is a list of items and
                     would otherwise fill the note; the full text is under "Show the other record". */}
                 <span className="mt-2.5 flex items-center gap-3 rounded-xl bg-paper px-3 py-2.5 ring-1 ring-paper-200">
-                  <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tint-brand text-tone-brand">
+                  <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center text-ink-500">
                     <SourceIcon source={twin.source} />
                   </span>
                   <span className="min-w-0 flex-1">
@@ -334,7 +334,7 @@ function TwinCard({
   return (
     <Card className="max-w-xl p-6 sm:p-7">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-base font-semibold text-ink-900">The other record</h2>
+        <h2 className="text-lg font-semibold text-ink-900">The other record</h2>
         <a href={`/records/expenses/${twin.id}/edit`} className="tap-inline text-xs link-action">
           Edit it
         </a>

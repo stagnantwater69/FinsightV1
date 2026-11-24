@@ -342,7 +342,7 @@ export function AllBusinessProfiles() {
                   {isActive ? <Pill tone="ok">Active</Pill> : null}
                 </div>
 
-                <h3 className="truncate text-base font-bold text-ink-900">
+                <h3 className="truncate text-lg font-bold text-ink-900">
                   {p.name}
                 </h3>
                 <p className="text-sm text-ink-500">{p.type}</p>

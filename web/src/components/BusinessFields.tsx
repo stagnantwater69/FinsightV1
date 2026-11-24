@@ -274,7 +274,7 @@ function TargetPreview({ draft }: { draft: BusinessProfileDraft }) {
           return (
             <div key={label} className="contents">
               {i > 0 ? (
-                <span aria-hidden className="mx-auto flex h-6 w-6 items-center justify-center rounded-full bg-paper text-ink-600 ring-1 ring-paper-200">
+                <span aria-hidden className="mx-auto flex h-6 w-6 items-center justify-center text-ink-500">
                   {i === 1 ? <Divide className="h-3.5 w-3.5" /> : <Equal className="h-3.5 w-3.5" />}
                 </span>
               ) : null}
@@ -283,7 +283,7 @@ function TargetPreview({ draft }: { draft: BusinessProfileDraft }) {
                   result && ready ? "bg-brand-700 text-white shadow-sm" : "bg-paper ring-1 ring-paper-200"
                 }`}
               >
-                <Icon aria-hidden className={`mx-auto h-4 w-4 ${result && ready ? "text-brand-100" : "text-tone-brand"}`} />
+                <Icon aria-hidden className={`mx-auto h-4 w-4 ${result && ready ? "text-brand-100" : "text-ink-500"}`} />
                 <p className={`mt-1 truncate text-xs ${result && ready ? "text-brand-100" : "text-ink-600"}`}>{label}</p>
                 <p
                   key={value ?? "empty"}

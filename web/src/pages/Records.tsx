@@ -1311,13 +1311,16 @@ export function Records() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-ink-900">{r.description}</p>
-                    <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-500">
-                      <span>{formatCalendarDate(r.date)}</span>
-                      <span aria-hidden>·</span>
+                    <p className="mt-1 flex items-center gap-2 text-xs text-ink-500">
                       <Tag kind={r.type === "expense" ? "expense" : "sales"} />
-                      {r.type === "expense" ? <span>· {categoryName(r.categoryId)}</span> : null}
-                      {r.vendor ? <span className="min-w-0 [overflow-wrap:anywhere]">· {r.vendor}</span> : null}
+                      <span>{formatCalendarDate(r.date)}</span>
                     </p>
+                    {/* One truncated line, so a wrap can never start a line with a separator. */}
+                    {r.type === "expense" || r.vendor ? (
+                      <p className="mt-0.5 truncate text-xs text-ink-500" title={r.vendor || undefined}>
+                        {[r.type === "expense" ? categoryName(r.categoryId) : null, r.vendor].filter(Boolean).join(" · ")}
+                      </p>
+                    ) : null}
                   </div>
                   {/* Amount and status stacked on the right: they are read
                       together ("how much, and is it settled"), and keeping the

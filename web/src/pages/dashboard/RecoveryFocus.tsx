@@ -52,7 +52,7 @@ export function RecoveryFocus({ summary, needsSetup, action }: {
         <div className="flex items-center gap-3">
           <IconTile icon={Target} />
           <div>
-            <h2 id="dashboard-recovery" className="text-base font-semibold text-ink-900">Today’s recovery target</h2>
+            <h2 id="dashboard-recovery" className="text-lg font-semibold text-ink-900">Today’s recovery target</h2>
             <p className="text-xs text-ink-500">Current month · {currentMonth}</p>
           </div>
         </div>
@@ -124,15 +124,15 @@ export function RecoveryFocus({ summary, needsSetup, action }: {
               card, too narrow for three, so it stacks again there. */}
           <dl className="mt-5 grid grid-cols-1 divide-y divide-paper-200 rounded-xl bg-paper-50 py-1 ring-1 ring-paper-200 min-[440px]:grid-cols-3 min-[440px]:divide-x min-[440px]:divide-y-0 min-[440px]:py-3 lg:grid-cols-1 lg:divide-x-0 lg:divide-y lg:py-1 xl:grid-cols-3 xl:divide-x xl:divide-y-0 xl:py-3">
             <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0 lg:flex lg:py-2 xl:block xl:py-0">
-              <dt className="flex items-center gap-1 text-xs text-ink-600"><CalendarDays aria-hidden className="h-3 w-3" />This month</dt>
+              <dt className="flex items-start gap-1 text-xs text-ink-600"><CalendarDays aria-hidden className="mt-0.5 h-3 w-3 shrink-0" />This month</dt>
               <dd className="figure mt-0.5 shrink-0 truncate text-sm font-semibold text-ink-900">{formatMoney(recovery.salesThisMonth)}</dd>
             </div>
             <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0 lg:flex lg:py-2 xl:block xl:py-0">
-              <dt className="flex items-center gap-1 text-xs text-ink-600"><Gauge aria-hidden className="h-3 w-3" />Needed per day from now</dt>
+              <dt className="flex items-start gap-1 text-xs text-ink-600"><Gauge aria-hidden className="mt-0.5 h-3 w-3 shrink-0" />Needed per day</dt>
               <dd className="figure mt-0.5 shrink-0 truncate text-sm font-semibold text-tone-accent">{covered ? "Covered" : formatMoney(recovery.adjustedDailyTarget)}</dd>
             </div>
             <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0 lg:flex lg:py-2 xl:block xl:py-0">
-              <dt className="flex items-center gap-1 text-xs text-ink-600"><Clock aria-hidden className="h-3 w-3" />Days left</dt>
+              <dt className="flex items-start gap-1 text-xs text-ink-600"><Clock aria-hidden className="mt-0.5 h-3 w-3 shrink-0" />Days left</dt>
               <dd className="figure mt-0.5 shrink-0 truncate text-sm font-semibold text-ink-900">{recovery.remainingOperatingDaysIsApproximated ? "≈ " : ""}{recovery.remainingOperatingDays ?? "—"}</dd>
             </div>
           </dl>

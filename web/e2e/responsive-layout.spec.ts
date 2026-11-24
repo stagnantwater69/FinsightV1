@@ -235,3 +235,22 @@ test("reduced motion leaves no long animation or transition running", async ({ p
   });
   expect(slow).toEqual([]);
 });
+
+test("receipt review at phone width scrolls its items table, not the page", async ({ page }) => {
+  // A wide items table inside a fieldset once stretched the page, and its
+  // sr-only labels escaped the table's own scroller.
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  const scan = { id: 720, scanRevision: 0, processingStatus: "Complete", confirmationStatus: "Pending", processingError: null, processingErrorCode: null,
+    extractedDate: "2026-10-13T00:00:00Z", extractedVendor: "Synthetic shop", extractedDescription: "Synthetic supplies", extractedAmount: 1284.5, ocrConfidence: 91,
+    items: [{ id: 1, lineNumber: 1, name: "Synthetic rice", quantity: 1, unitPrice: 1150, amount: 1150, categoryId: 100 }, { id: 2, lineNumber: 2, name: "Synthetic oil", quantity: 1, unitPrice: 134.5, amount: 134.5, categoryId: 100 }],
+    itemsSubtotal: 1284.5, warnings: [], pageQualities: [], pageProcessing: [], pageEvidence: [] };
+  await page.route(/\/records\/receipts(?:\?.*)?$/, (route) => route.fulfill(route.request().method() === "GET" ? { json: { items: [], nextCursor: null } } : { status: 202, json: scan }));
+  await page.route(/\/records\/receipts\/720\/duplicate-candidates(?:\?.*)?$/, (route) => route.fulfill({ json: { sourceFingerprint: null, candidateSetHash: null, candidateCount: 0, candidatesTruncated: false, candidates: [], nextCursor: null } }));
+  await page.setViewportSize({ width: 360, height: 780 });
+  await loginViaUi(page);
+  await page.goto("/records/receipts/new");
+  await page.getByLabel(/Receipt photo/).setInputFiles({ name: "synthetic.png", mimeType: "image/png", buffer: png });
+  await page.getByRole("button", { name: /^Scan receipt/ }).click();
+  await expect(page.getByRole("heading", { name: "Review receipt" })).toBeVisible();
+  expect(await horizontalScroll(page)).toBe(0);
+});

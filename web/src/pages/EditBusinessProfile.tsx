@@ -158,7 +158,7 @@ function ManagementLink({
       to={to}
       className="group flex min-w-0 items-start gap-3 rounded-lg py-5 transition-colors hover:bg-paper-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 lg:pr-6 lg:last:pl-6 lg:last:pr-0"
     >
-      <Icon size={20} className="mt-0.5 shrink-0 text-tone-brand" aria-hidden />
+      <Icon size={20} className="mt-0.5 shrink-0 text-ink-500" aria-hidden />
       {/* A column with the action pushed to the bottom, so the two tools'
           buttons line up even when one description wraps further. */}
       <div className="flex min-w-0 flex-col self-stretch">

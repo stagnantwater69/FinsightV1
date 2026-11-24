@@ -249,7 +249,7 @@ export function BusinessSwitcher({
             onClick={() => setOpen(false)}
             className="flex min-h-tap items-center gap-2.5 rounded-xl px-2.5 transition hover:bg-paper-100"
           >
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tint-brand text-tone-brand">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center text-ink-500">
               <IconPlus className="h-4 w-4" />
             </span>
             <span className="min-w-0">
@@ -268,7 +268,7 @@ export function BusinessSwitcher({
             onClick={() => setOpen(false)}
             className="flex min-h-tap items-center gap-2.5 rounded-xl px-2.5 transition hover:bg-paper-100"
           >
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tint-neutral text-tone-neutral">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center text-ink-500">
               <IconSettings className="h-4 w-4" />
             </span>
             <span className="min-w-0">

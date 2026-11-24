@@ -66,7 +66,7 @@ export function DetectedColumns({
 
   return (
     <Card className="p-5">
-      <h2 className="text-base font-semibold text-ink-900">Detected columns</h2>
+      <h2 className="text-lg font-semibold text-ink-900">Detected columns</h2>
       <div className={`mt-4 grid gap-4 sm:grid-cols-2 ${fields.length === 5 ? "xl:grid-cols-5" : "lg:grid-cols-3"}`}>
         {fields.map((field) => {
           const id = `csv-column-${field}`;

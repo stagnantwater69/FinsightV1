@@ -67,12 +67,12 @@ export function EmptyState({
       ) : (
         <span
           aria-hidden
-          className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-tint-brand text-xl text-brand-600"
+          className="mx-auto mb-4 flex h-12 w-12 items-center justify-center text-xl text-ink-500"
         >
           {icon}
         </span>
       )}
-      <h2 className="font-display text-base font-semibold text-ink-900">{title}</h2>
+      <h2 className="font-display text-lg font-semibold text-ink-900">{title}</h2>
       {children ? <p className="mx-auto mt-2 max-w-md text-sm text-ink-500">{children}</p> : null}
       {action ? <div className="mt-6 flex flex-wrap justify-center gap-3">{action}</div> : null}
     </div>

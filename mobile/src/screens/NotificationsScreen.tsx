@@ -60,8 +60,8 @@ function AlertsEmpty({ title, body, icon, action }: {
   const t = useTheme();
   return (
     <SubpageCard style={{ alignItems: "center", paddingHorizontal: space.xl, paddingVertical: space.xxl, gap: space.lg }}>
-      <View style={{ width: 80, height: 80, borderRadius: radius.full, alignItems: "center", justifyContent: "center", backgroundColor: t.brandSurface }}>
-        <Ionicons name={action ? "notifications-outline" : icon} size={40} color={t.brandText} accessibilityElementsHidden importantForAccessibility="no" />
+      <View style={{ width: 80, height: 80, alignItems: "center", justifyContent: "center" }}>
+        <Ionicons name={action ? "notifications-outline" : icon} size={40} color={t.textMuted} accessibilityElementsHidden importantForAccessibility="no" />
         {action ? (
           <View style={{ position: "absolute", right: space.lg, bottom: space.lg, borderRadius: radius.full, backgroundColor: t.surfaceMuted }}>
             <Ionicons name="checkmark-circle-outline" size={32} color={t.textPrimary} accessibilityElementsHidden importantForAccessibility="no" />
@@ -87,7 +87,6 @@ function AlertRow({ notification, clock, opening, disabled, onPress }: {
   const [needsDisclosure, setNeedsDisclosure] = useState(false);
   const fullText = useRef<TextInstance>(null);
   const presentation = presentationFor(notification.type);
-  const warning = alertKindFromType(notification.type) === "large-expense";
   const time = relativeTime(notification.dateCreated, clock);
   const hasRecord = notification.expenseRecordId !== null && notification.expenseRecordId !== undefined;
   const action = hasRecord
@@ -104,8 +103,8 @@ function AlertRow({ notification, clock, opening, disabled, onPress }: {
 
   const preview = (
     <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.md }}>
-      <View style={{ width: 40, height: 40, flexShrink: 0, borderRadius: radius.md, backgroundColor: warning ? t.statusSurface.serious : t.surfaceMuted, alignItems: "center", justifyContent: "center" }}>
-        <Ionicons name={presentation.icon} size={24} color={warning ? t.statusText.serious : t.brandText} accessibilityElementsHidden importantForAccessibility="no" />
+      <View style={{ width: 40, height: 40, flexShrink: 0, alignItems: "center", justifyContent: "center" }}>
+        <Ionicons name={presentation.icon} size={24} color={t.textMuted} accessibilityElementsHidden importantForAccessibility="no" />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: space.xs }}>
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start", gap: space.sm }}>

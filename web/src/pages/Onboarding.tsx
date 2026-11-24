@@ -326,7 +326,7 @@ export function Onboarding() {
             <div className="mt-auto space-y-4">
               <DraftSummary draft={draft} />
               <p className="flex items-start gap-2 text-xs leading-relaxed text-ink-600">
-                <ShieldCheck aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-tone-brand" />
+                <ShieldCheck aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-ink-500" />
                 Private to you. No bank connection.
               </p>
             </div>
@@ -343,7 +343,7 @@ export function Onboarding() {
             <div key={step} className={direction === "next" ? "animate-step-next" : "animate-step-back"}>
               {step === 3 ? (
                 <div className="mb-6 flex items-center gap-4">
-                  <span className="relative flex h-14 w-14 shrink-0 animate-pop-in items-center justify-center rounded-full bg-tint-brand text-tone-brand">
+                  <span className="relative flex h-14 w-14 shrink-0 animate-pop-in items-center justify-center text-ink-500">
                     <span aria-hidden className="absolute inset-0 animate-soft-pulse rounded-full ring-4 ring-edge-brand" />
                     <Check aria-hidden className="h-7 w-7" strokeWidth={2.75} />
                   </span>
@@ -419,7 +419,7 @@ export function Onboarding() {
                     />
                     <div className="min-w-0">
                       <p className="flex items-center gap-2 text-sm font-semibold text-ink-900">
-                        <FileSpreadsheet aria-hidden className="h-4 w-4 shrink-0 text-tone-brand" />
+                        <FileSpreadsheet aria-hidden className="h-4 w-4 shrink-0 text-ink-500" />
                         Have past records?
                       </p>
                       <p className="mt-1.5 text-sm text-ink-700">

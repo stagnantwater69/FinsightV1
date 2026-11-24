@@ -12,8 +12,7 @@ import { Button, ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { SkeletonPanel } from "../components/Skeleton";
 import { Callout, Panel } from "../components/ui";
-import { formatMoney } from "../components/Money";
-import { UsualBar } from "./expenseInsight/ExpenseVisuals";
+import { UnusualExpenseRow } from "./expenseInsight/ExpenseVisuals";
 import { ExpenseSubpageHead } from "./expenseInsight/ExpenseSubpageHead";
 
 /**
@@ -137,42 +136,9 @@ function UnusualExpenses() {
             </p>
           ) : null}
           <ul className="grid gap-3 lg:grid-cols-2">
-            {items.map((u) => {
-              const times = u.categoryMean > 0 ? u.amount / u.categoryMean : null;
-              return (
-                <li
-                  key={u.id}
-                  className="rounded-xl border border-paper-200 bg-paper-50 px-3.5 py-3"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-ink-900">{u.description}</p>
-                      <p className="mt-0.5 text-xs text-ink-500">
-                        {u.categoryName} · {u.date.slice(0, 10)}
-                      </p>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <p className="figure text-sm font-bold text-ink-900">
-                        {formatMoney(u.amount)}
-                      </p>
-                      {times && times >= 1.5 ? (
-                        <span className="figure mt-0.5 inline-block rounded-full bg-tint-danger px-1.5 py-0.5 text-xs font-semibold text-tone-danger">
-                          {times.toFixed(1)}× usual
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                  <UsualBar amount={u.amount} usual={u.categoryMean} />
-                  <p className="mt-1.5 text-xs text-ink-500">
-                    Usual{" "}
-                    <span className="figure font-medium text-ink-700">
-                      {formatMoney(u.categoryMean)}
-                    </span>{" "}
-                    (the line)
-                  </p>
-                </li>
-              );
-            })}
+            {items.map((u) => (
+              <UnusualExpenseRow key={u.id} expense={u} />
+            ))}
           </ul>
           {data && data.insufficientHistoryCategories.length > 0 ? (
             <p className="mt-4 text-xs text-ink-500">

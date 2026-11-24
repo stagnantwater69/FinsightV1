@@ -47,7 +47,7 @@ function GuidancePanel() {
           than a 200px viewport (400px at 200% zoom). */}
       <div className="flex flex-wrap items-start justify-between gap-5 bg-brand-900 px-5 py-5 sm:px-6 sm:py-6">
         <div className="min-w-0">
-          <span className="mb-4 flex size-10 items-center justify-center rounded-xl bg-white/10 text-brand-100">
+          <span className="mb-4 flex size-10 items-center justify-center text-brand-100">
             <Sparkles size={20} aria-hidden />
           </span>
           <h2 className="font-display text-lg font-semibold text-white">
@@ -137,7 +137,6 @@ function GuidedTourSettingContent({ tour }: { tour: TourContextValue }) {
     <section className="py-6" aria-labelledby="guided-tour-heading">
       <SettingHeading
         id="guided-tour-heading"
-        tone="info"
         icon={<GraduationCap size={20} aria-hidden />}
         title="Guided Tour"
         description="Revisit the walkthrough or make it appear automatically whenever you sign in."
@@ -175,25 +174,21 @@ function SettingHeading({
   icon,
   title,
   description,
-  tone = "brand",
 }: {
   id: string;
   icon: ReactNode;
   title: string;
   description: string;
-  tone?: "brand" | "info";
 }) {
   // Wraps so the heading drops under its icon at a 160px viewport (a 320px
   // phone at 200% zoom) rather than holding the panel wider than the screen.
   return (
     <div className="mb-4 flex flex-wrap items-start gap-3">
-      <span
-        className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${tone === "info" ? "bg-tint-info text-tone-info" : "bg-tint-brand text-tone-brand"}`}
-      >
+      <span className="flex size-10 shrink-0 items-center justify-center text-ink-500">
         {icon}
       </span>
       <div className="min-w-0">
-        <h2 id={id} className="text-base font-semibold text-ink-900">
+        <h2 id={id} className="text-lg font-semibold text-ink-900">
           {title}
         </h2>
         <p className="mt-1 text-sm leading-relaxed text-ink-500">
@@ -208,11 +203,11 @@ function AppearancePanel() {
   return (
     <Card className="p-5 sm:p-6">
       <div className="mb-5 flex items-start gap-3">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+        <span className="flex size-10 shrink-0 items-center justify-center text-ink-500">
           <Palette size={20} aria-hidden />
         </span>
         <div>
-          <h2 className="text-base font-semibold text-ink-900">Appearance</h2>
+          <h2 className="text-lg font-semibold text-ink-900">Appearance</h2>
           <p className="mt-1 text-sm leading-relaxed text-ink-500">
             Choose the theme that is most comfortable for this screen.
           </p>
@@ -235,11 +230,11 @@ function PreferenceDetailsPanel() {
   return (
     <Card className="p-5 sm:p-6">
       <div className="mb-5 flex items-start gap-3">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-neutral text-tone-neutral">
+        <span className="flex size-10 shrink-0 items-center justify-center text-ink-500">
           <Info size={20} aria-hidden />
         </span>
         <div>
-          <h2 className="text-base font-semibold text-ink-900">
+          <h2 className="text-lg font-semibold text-ink-900">
             Where settings are saved
           </h2>
           <p className="mt-1 text-sm leading-relaxed text-ink-500">

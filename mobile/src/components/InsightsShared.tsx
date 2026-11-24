@@ -88,7 +88,6 @@ function InsightSwitcherSheet({
             </T>
             {INSIGHT_SCREENS.map((screen) => {
               const selected = screen.id === active;
-              const hue = screen.hue === null ? t.brandText : t.categorical[screen.hue] ?? t.brandText;
               return (
                 <Pressable
                   key={screen.id}
@@ -109,8 +108,8 @@ function InsightSwitcherSheet({
                     backgroundColor: selected ? t.brandSurface : pressed ? t.surfaceMuted : "transparent",
                   })}
                 >
-                  <View style={{ width: 44, height: 44, borderRadius: radius.md, alignItems: "center", justifyContent: "center", backgroundColor: screen.hue === null ? t.brandSurface : `${hue}1f` }}>
-                    <Ionicons name={screen.icon} size={22} color={hue} />
+                  <View style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+                    <Ionicons name={screen.icon} size={22} color={t.textMuted} />
                   </View>
                   <View style={{ flex: 1, gap: 2 }}>
                     <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.body, color: t.textPrimary }}>{screen.name}</T>
@@ -181,8 +180,8 @@ export function InsightHeader({
             style={({ pressed }) => ({ minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", gap: space.sm, opacity: pressed ? 0.7 : 1 })}
           >
             <T style={{ fontFamily: font.display, fontSize: typeScale.titleLg, color: t.brandHeading, flexShrink: 1 }}>{title}</T>
-            <View style={{ width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: t.surfaceStrong }}>
-              <Ionicons name="chevron-down" size={15} color={t.brandHeading} />
+            <View style={{ width: 26, height: 26, alignItems: "center", justifyContent: "center" }}>
+              <Ionicons name="chevron-down" size={15} color={t.textMuted} />
             </View>
           </Pressable>
           {titleAccessory}

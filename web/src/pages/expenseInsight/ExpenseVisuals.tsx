@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { IconTile } from "../../components/IconTile";
 import type { LucideIcon } from "lucide-react";
-import type { DailyExpenseTotal } from "../../lib/types";
+import type { DailyExpenseTotal, UnusualExpense } from "../../lib/types";
+import { formatMoney } from "../../components/Money";
 export { PairBars, ShareBar } from "../../components/MiniCharts";
 
 /**
@@ -114,5 +115,42 @@ export function UsualBar({ amount, usual }: { amount: number; usual: number }) {
         style={{ left: `calc(${usualAt}% - 1px)` }}
       />
     </div>
+  );
+}
+
+/** One unusual expense, shared by the Expense Insight preview and the full Unusual expenses page. */
+export function UnusualExpenseRow({ expense: u }: { expense: UnusualExpense }) {
+  const times = u.categoryMean > 0 ? u.amount / u.categoryMean : null;
+  return (
+    <li className="rounded-xl border border-paper-200 bg-paper-50 px-3.5 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-ink-900">{u.description}</p>
+          <p className="mt-0.5 text-xs text-ink-500">
+            {u.categoryName} · {u.date.slice(0, 10)}
+          </p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="figure text-sm font-bold text-ink-900">
+            {formatMoney(u.amount)}
+          </p>
+          {/* Said in multiples of the usual, not in standard deviations.
+              "4.2× usual" lands; "z-score 3.2" does not. */}
+          {times && times >= 1.5 ? (
+            <span className="figure mt-0.5 inline-block rounded-full bg-tint-danger px-1.5 py-0.5 text-xs font-semibold text-tone-danger">
+              {times.toFixed(1)}× usual
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <UsualBar amount={u.amount} usual={u.categoryMean} />
+      <p className="mt-1.5 text-xs text-ink-500">
+        Usual{" "}
+        <span className="figure font-medium text-ink-700">
+          {formatMoney(u.categoryMean)}
+        </span>{" "}
+        (the line)
+      </p>
+    </li>
   );
 }

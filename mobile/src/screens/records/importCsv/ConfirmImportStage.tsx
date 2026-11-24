@@ -32,7 +32,7 @@ export function ConfirmImportStage({ businessName, title, fileName, ready, skipp
           <T>They will be added to {businessName}.</T>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, borderWidth: 1, borderColor: t.border, borderRadius: radius.md, padding: space.md }}>
-          <Ionicons name="document-text-outline" size={28} color={t.brandText} accessible={false} />
+          <Ionicons name="document-text-outline" size={28} color={t.textMuted} accessible={false} />
           <View style={{ flex: 1, minWidth: 0, gap: space.xs }}>
             <T variant="label">{title}</T>
             <T variant="caption">{fileName}</T>

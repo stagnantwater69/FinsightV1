@@ -20,7 +20,6 @@ import {
   ThumbsDown,
   ThumbsUp,
   TrendingUp,
-  WalletCards,
 } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
@@ -62,9 +61,11 @@ import {
   CANDIDATES_PREVIEW_COUNT,
   EXPENSE_RECURRING_PATH,
   SCHEDULES_PREVIEW_COUNT,
+  dismissRecurringPattern,
   openFindingsRequest,
   recurringPatternsRequest,
   recurringSchedulesRequest,
+  watchRecurringPattern,
 } from "./expenseInsight/reviewRequests";
 import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
 import {
@@ -95,7 +96,7 @@ import {
   PairBars,
   ShareBar,
   Sparkline,
-  UsualBar,
+  UnusualExpenseRow,
 } from "./expenseInsight/ExpenseVisuals";
 import { ExpenseSummaryCard } from "./expenseInsight/ExpenseSummaryCard";
 import { ListDisclosureControl, useListDisclosure } from "../components/ListDisclosure";
@@ -198,16 +199,19 @@ function ChangeFigure({
     // an expense screen, so up is bad. Colour is never the only signal: the
     // arrow and the sign say the same thing.
     <span
-      className="figure inline-flex items-center font-semibold"
+      className="figure inline-flex flex-wrap items-center justify-end font-semibold"
       style={{ color: up ? STATUS_INK.serious : STATUS_INK.good }}
     >
-      {up ? (
-        <ArrowUpRight aria-hidden className="mr-1 size-3.5" />
-      ) : (
-        <ArrowDownRight aria-hidden className="mr-1 size-3.5" />
-      )}
-      {up ? "+" : "−"}
-      {formatMoney(Math.abs(change))}
+      {/* Sign and amount never split ("+PHP" over "5,000"); only the percent may wrap. */}
+      <span className="inline-flex items-center whitespace-nowrap">
+        {up ? (
+          <ArrowUpRight aria-hidden className="mr-1 size-3.5" />
+        ) : (
+          <ArrowDownRight aria-hidden className="mr-1 size-3.5" />
+        )}
+        {up ? "+" : "−"}
+        {formatMoney(Math.abs(change))}
+      </span>
       {percent !== null && percent !== 0 ? (
         <span className="ml-1 text-xs font-medium opacity-80">
           {Math.abs(percent).toFixed(0)}%
@@ -548,7 +552,7 @@ function OpportunityCard({
         <div className="flex items-start gap-3">
           <span
             aria-hidden
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-paper-100 text-brand-700 ring-1 ring-paper-200"
+            className="flex size-8 shrink-0 items-center justify-center text-ink-500"
           >
             <TrendingUp className="size-4" />
           </span>
@@ -1223,9 +1227,7 @@ function ExpenseInsightPage() {
     const requestScopeKey = expenseScopeKey;
     setError(null);
     try {
-      await api.post(`/insights/recurring-patterns/${id}/confirm`, undefined, {
-        serverStateScope: { businessProfileId: selected!.id },
-      });
+      await watchRecurringPattern(selected!.id, id);
       if (activeExpenseScopeRef.current !== requestScopeKey) return;
       // Both lists move: the candidate leaves this panel and a schedule appears
       // in the agenda. Refetched rather than patched in state because the new
@@ -1244,11 +1246,7 @@ function ExpenseInsightPage() {
     const requestScopeKey = expenseScopeKey;
     setError(null);
     try {
-      await api.patch(
-        `/insights/recurring-patterns/${id}`,
-        { status: "DISMISSED" },
-        { serverStateScope: { businessProfileId: selected!.id } },
-      );
+      await dismissRecurringPattern(selected!.id, id);
       if (activeExpenseScopeRef.current !== requestScopeKey) return;
       setRecurringPatterns((current) =>
         current.map((pattern) =>
@@ -1528,6 +1526,7 @@ function ExpenseInsightPage() {
 
     return {
       total,
+      expenseCount: data.categoryTrends.reduce((sum, trend) => sum + trend.recordCount, 0),
       categoryCount: spending.length,
       top,
       topShare: top && total > 0 ? (top.current / total) * 100 : 0,
@@ -1718,10 +1717,6 @@ function ExpenseInsightPage() {
           >
             <h2 className="sr-only">Total expenses</h2>
             <div className="relative isolate flex min-w-0 flex-col overflow-hidden rounded-2xl bg-gradient-to-br from-brand-800 via-brand-900 to-brand-950 p-5 text-white shadow-md sm:col-span-2 xl:col-span-1">
-              <WalletCards
-                aria-hidden
-                className="pointer-events-none absolute -right-8 -top-8 -z-10 size-40 -rotate-12 text-white/[0.06]"
-              />
               <p className="text-xs font-semibold uppercase tracking-[0.08em] text-brand-200">
                 Total spent
               </p>
@@ -1729,12 +1724,8 @@ function ExpenseInsightPage() {
                 {formatMoney(summary.total)}
               </p>
               <p className="mt-1 text-xs text-brand-100">
-                {data.categoryTrends.reduce(
-                  (sum, trend) => sum + trend.recordCount,
-                  0,
-                )}{" "}
-                expenses · {summary.categoryCount} categor
-                {summary.categoryCount === 1 ? "y" : "ies"}
+                {summary.expenseCount} {summary.expenseCount === 1 ? "expense" : "expenses"} · {summary.categoryCount}{" "}
+                {summary.categoryCount === 1 ? "category" : "categories"}
               </p>
               <div className="mt-auto pt-4 text-brand-300">
                 <Sparkline
@@ -2394,48 +2385,9 @@ function ExpenseInsightPage() {
               ) : (
                 <>
                   <ul className="space-y-2">
-                    {data.unusualExpenses.slice(0, UNUSUAL_PREVIEW_COUNT).map((u) => {
-                      const times =
-                        u.categoryMean > 0 ? u.amount / u.categoryMean : null;
-                      return (
-                        <li
-                          key={u.id}
-                          className="rounded-xl border border-paper-200 bg-paper-50 px-3.5 py-3"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-ink-900">
-                                {u.description}
-                              </p>
-                              <p className="mt-0.5 text-xs text-ink-500">
-                                {u.categoryName} · {u.date.slice(0, 10)}
-                              </p>
-                            </div>
-                            <div className="shrink-0 text-right">
-                              <p className="figure text-sm font-bold text-ink-900">
-                                {formatMoney(u.amount)}
-                              </p>
-                              {/* Said in multiples of the usual, not in standard
-                                  deviations. "4.2× usual" lands; "z-score 3.2"
-                                  does not. */}
-                              {times && times >= 1.5 ? (
-                                <span className="figure mt-0.5 inline-block rounded-full bg-tint-danger px-1.5 py-0.5 text-xs font-semibold text-tone-danger">
-                                  {times.toFixed(1)}× usual
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
-                          <UsualBar amount={u.amount} usual={u.categoryMean} />
-                          <p className="mt-1.5 text-xs text-ink-500">
-                            Usual{" "}
-                            <span className="figure font-medium text-ink-700">
-                              {formatMoney(u.categoryMean)}
-                            </span>{" "}
-                            (the line)
-                          </p>
-                        </li>
-                      );
-                    })}
+                    {data.unusualExpenses.slice(0, UNUSUAL_PREVIEW_COUNT).map((u) => (
+                      <UnusualExpenseRow key={u.id} expense={u} />
+                    ))}
                   </ul>
                   {/* The full list opens on its own page rather than growing
                       this panel past the flags panel beside it. */}

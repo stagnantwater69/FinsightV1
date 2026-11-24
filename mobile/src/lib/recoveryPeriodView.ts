@@ -1,5 +1,6 @@
 import { formatMoney } from "./money";
 import { monthLabel } from "./reportingPeriod";
+import { addDays } from "./paymentCalendar";
 import type {
   DailyCoverageRow,
   RecoveryCheckpoint,
@@ -85,12 +86,6 @@ export function legacyReportingPeriod(data: RecoveryInsight): RecoveryReportingP
 
 export function reportingPeriodOf(data: RecoveryInsight): RecoveryReportingPeriod {
   return data.reportingPeriod ?? legacyReportingPeriod(data);
-}
-
-function addDays(iso: string, days: number): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
 }
 
 function daysBetween(from: string, to: string): number {

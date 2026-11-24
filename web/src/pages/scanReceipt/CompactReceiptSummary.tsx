@@ -29,7 +29,7 @@ export function CompactReceiptSummary({
     <section aria-labelledby="compact-receipt-title">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-paper-200 pb-5">
         <div className="flex min-w-0 items-start gap-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center text-ink-500">
             <IconRecords className="h-5 w-5" />
           </span>
           <div className="min-w-0">

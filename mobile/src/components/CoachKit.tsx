@@ -9,7 +9,6 @@ import * as haptics from "../lib/haptics";
 import { useTheme } from "../context/ThemeContext";
 import { HERO } from "../theme/hero";
 import { font, radius, space, typeScale } from "../theme/tokens";
-import { KpiWatermark, type KpiWatermarkIcon } from "./KpiWatermark";
 
 /*
  * The shared parts of the redesigned screens: one teal panel at the top with
@@ -19,7 +18,7 @@ import { KpiWatermark, type KpiWatermarkIcon } from "./KpiWatermark";
  */
 
 /** The fixed deep-teal panel. One per screen, at the top. */
-export function TealPanel({ children, style, watermarkIcon }: { children: ReactNode; style?: ViewStyle; watermarkIcon?: KpiWatermarkIcon }) {
+export function TealPanel({ children, style }: { children: ReactNode; style?: ViewStyle }) {
   return (
     <View style={[{ borderRadius: 28, overflow: "hidden", backgroundColor: HERO.mid }, style]}>
       <Svg style={StyleSheet.absoluteFill} width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 100 100">
@@ -32,7 +31,6 @@ export function TealPanel({ children, style, watermarkIcon }: { children: ReactN
         </Defs>
         <Rect x={0} y={0} width={100} height={100} fill="url(#tealWash)" />
       </Svg>
-      {watermarkIcon ? <KpiWatermark name={watermarkIcon} color={HERO.ink} opacity={0.065} borderRadius={style?.borderRadius ?? 28} /> : null}
       <View style={{ padding: space.lg, gap: space.md, zIndex: 1 }}>{children}</View>
     </View>
   );
@@ -125,30 +123,24 @@ export function SectionTitle({
   question,
   icon,
   right,
-  tone = "brand",
 }: {
   eyebrow?: string;
   question: string;
   icon: keyof typeof Ionicons.glyphMap;
   right?: ReactNode;
-  tone?: "brand" | "critical" | "accent";
 }) {
   const t = useTheme();
-  const surface = tone === "critical" ? t.statusSurface.critical : tone === "accent" ? t.ACCENT.surface : t.brandSurface;
-  const ink = tone === "critical" ? t.statusText.critical : tone === "accent" ? t.ACCENT.text : t.brandText;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
       <View
         style={{
           width: 32,
           height: 32,
-          borderRadius: radius.sm,
-          backgroundColor: surface,
           alignItems: "center",
           justifyContent: "center",
         }}
       >
-        <Ionicons name={icon} size={17} color={ink} />
+        <Ionicons name={icon} size={17} color={t.textMuted} />
       </View>
       <View style={{ flex: 1 }}>
         {eyebrow ? <T variant="caption">{eyebrow}</T> : null}
@@ -161,10 +153,9 @@ export function SectionTitle({
   );
 }
 
-/** One row in a list card: tinted icon, title and detail, then a value or chevron. */
+/** One row in a list card: plain icon, title and detail, then a value or chevron. */
 export function IconRow({
   icon,
-  tone = "brand",
   title,
   detail,
   right,
@@ -173,7 +164,6 @@ export function IconRow({
   accessibilityLabel,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
-  tone?: "brand" | "critical" | "accent" | "info" | "neutral";
   title: string;
   detail?: string | null;
   right?: ReactNode;
@@ -182,30 +172,10 @@ export function IconRow({
   accessibilityLabel?: string;
 }) {
   const t = useTheme();
-  const surface =
-    tone === "critical"
-      ? t.statusSurface.critical
-      : tone === "accent"
-        ? t.ACCENT.surface
-        : tone === "info"
-          ? t.statusSurface.warning
-          : tone === "neutral"
-            ? t.surfaceMuted
-            : t.brandSurface;
-  const ink =
-    tone === "critical"
-      ? t.statusText.critical
-      : tone === "accent"
-        ? t.ACCENT.text
-        : tone === "info"
-          ? t.statusText.warning
-          : tone === "neutral"
-            ? t.textSecondary
-            : t.brandText;
   const body = (
     <>
-      <View style={{ width: 38, height: 38, borderRadius: 12, backgroundColor: surface, alignItems: "center", justifyContent: "center" }}>
-        <Ionicons name={icon} size={19} color={ink} />
+      <View style={{ width: 38, height: 38, alignItems: "center", justifyContent: "center" }}>
+        <Ionicons name={icon} size={19} color={t.textMuted} />
       </View>
       <View style={{ flex: 1 }}>
         <T style={{ fontSize: typeScale.bodySm, fontFamily: font.sansSemibold, color: t.textPrimary }}>{title}</T>

@@ -18,25 +18,12 @@ import { formatCalendarDate } from "../lib/dates";
 export const readableMessage = (message: string) =>
   message.replace(/\b\d{4}-\d{2}-\d{2}\b/g, (key) => formatCalendarDate(key));
 
-const PRESENTATION = {
-  duplicate: {
-    Icon: IconDuplicate,
-    color: "bg-[rgb(var(--sev-warning-bg))] text-[rgb(var(--sev-warning-ink))]",
-  },
-  "needs-review": {
-    Icon: IconAlertTriangle,
-    color:
-      "bg-[rgb(var(--sev-critical-bg))] text-[rgb(var(--sev-critical-ink))]",
-  },
-  "large-expense": {
-    Icon: IconAlertTriangle,
-    color: "bg-[rgb(var(--sev-serious-bg))] text-[rgb(var(--sev-serious-ink))]",
-  },
-  recurring: {
-    Icon: IconRecords,
-    color: "bg-[rgb(var(--sev-serious-bg))] text-[rgb(var(--sev-serious-ink))]",
-  },
-  info: { Icon: IconBell, color: "bg-tint-brand text-tone-brand" },
+const ICONS = {
+  duplicate: IconDuplicate,
+  "needs-review": IconAlertTriangle,
+  "large-expense": IconAlertTriangle,
+  recurring: IconRecords,
+  info: IconBell,
 };
 
 export function NotificationItem({
@@ -50,14 +37,14 @@ export function NotificationItem({
   onNavigate?: () => void;
   compact?: boolean;
 }) {
-  const { Icon, color } = PRESENTATION[alertKindFromType(notification.type)];
+  const Icon = ICONS[alertKindFromType(notification.type)];
   const target = notificationTarget(notification);
   return (
     <article
       className={`group flex gap-3 ${compact ? "px-4 py-4" : "px-4 py-5 sm:px-6"} ${notification.readStatus ? "bg-paper" : "bg-tint-brand/30"}`}
     >
       <span
-        className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${color}`}
+        className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center text-ink-500`}
       >
         <Icon className="h-[18px] w-[18px]" />
       </span>
@@ -131,7 +118,7 @@ export function NotificationEmpty({
 }) {
   return (
     <div className="px-6 py-10 text-center">
-      <span className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+      <span className="mx-auto mb-4 flex h-11 w-11 items-center justify-center text-ink-500">
         <IconCheck />
       </span>
       <h2 className="text-sm font-semibold text-ink-900">{title}</h2>

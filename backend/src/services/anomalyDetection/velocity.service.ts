@@ -12,6 +12,7 @@ const BASELINE_WINDOW_COUNT = 4;
 const MINIMUM_CURRENT_COUNT = 3;
 const MINIMUM_COUNT_INCREASE = 2;
 const COUNT_MULTIPLIER = 3;
+const HISTORY_ROW_CAP = 5_000;
 
 interface VelocityRecord {
   id: number;
@@ -105,11 +106,18 @@ export async function detectVelocityForExpense(
     where: {
       businessProfileId: candidate.businessProfileId,
       date: { gte: historyStart, lte: utcEndOfDay(candidate.date) },
+      OR: [
+        { categoryId: candidate.categoryId },
+        // shortcut: vendor scope matches case-insensitively in SQL, not normalizeComparisonText; upgrade if punctuation/accent variants across categories matter
+        ...(normalizeComparisonText(candidate.vendor) ? [{ vendor: { equals: candidate.vendor!, mode: "insensitive" as const } }] : []),
+      ],
     },
     select: { id: true, categoryId: true, vendor: true, amount: true, date: true },
     orderBy: [{ date: "desc" }, { id: "desc" }],
-    take: 5_000,
+    take: HISTORY_ROW_CAP,
   });
+  // A capped read has lost its oldest baseline rows; skip rather than judge (or supersede) on partial history.
+  if (rows.length === HISTORY_ROW_CAP) return null;
   const records = rows.map((record) => ({ ...record, amount: Number(record.amount) }));
   const signals = evaluateVelocity({ ...candidate, amount: Number(candidate.amount) }, records);
   const fingerprint = `${VELOCITY_VERSION}:${candidate.id}`;

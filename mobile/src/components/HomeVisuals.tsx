@@ -89,7 +89,7 @@ export function MoneyFlowPanel({
   ];
   const flowSelection = useChartSelection(flowData, `${periodPhrase}:${against}`);
   return (
-    <TealPanel watermarkIcon="wallet-outline">
+    <TealPanel>
       {periodControl}
       <View style={{ gap: space.sm }}>
         <FlowRow label="Money in" value={sales} max={max} color={HERO.inFill} delta={salesDelta} interaction={flowSelection.bind(0)} />
@@ -112,8 +112,8 @@ export function MoneyFlowPanel({
       {against ? <T style={{ fontSize: typeScale.micro, color: HERO.muted }}>{`Changes vs ${against}`}</T> : null}
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md, borderRadius: radius.lg, backgroundColor: HERO.wash }}>
-        <View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: HERO.amberWash, alignItems: "center", justifyContent: "center" }}>
-          <Ionicons name="wallet-outline" size={19} color={HERO.amber} />
+        <View style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}>
+          <Ionicons name="wallet-outline" size={19} color={HERO.muted} />
         </View>
         <View style={{ flex: 1 }}>
           <T style={{ fontSize: typeScale.caption, color: HERO.muted }}>Available funds</T>

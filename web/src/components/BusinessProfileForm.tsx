@@ -70,7 +70,7 @@ function Section({
     <section className="border-t border-paper-200 pt-5 first:border-t-0 first:pt-0">
       {Icon ? (
         <div className="mb-5 flex items-center gap-3">
-          <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+          <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center text-ink-500">
             <Icon className="h-5 w-5" />
           </span>
           <div className="min-w-0">
@@ -80,7 +80,7 @@ function Section({
         </div>
       ) : (
         <>
-          <h2 className="font-display text-sm font-semibold text-ink-900">
+          <h2 className="text-sm font-semibold text-ink-900">
             {title}
           </h2>
           {description ? (
@@ -420,7 +420,7 @@ function SettingsSectionHeading({
 }) {
   return (
     <div className="flex min-w-0 items-start gap-3 border-b border-paper-200 pb-5">
-      <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
+      <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center text-ink-500">
         <Icon className="h-5 w-5" />
       </span>
       <div className="min-w-0 flex-1">

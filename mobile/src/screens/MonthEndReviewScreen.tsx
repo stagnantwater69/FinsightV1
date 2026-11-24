@@ -16,7 +16,6 @@ import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
 import type { BusinessProfile, RecoveryMonthEndReview } from "../lib/types";
 import { ChartPlotPressArea, ChartValueReadout, useChartSelection, type ChartDatum } from "../components/ChartInteraction";
-import { KpiWatermark } from "../components/KpiWatermark";
 import type { MoreScreenProps } from "../navigation/types";
 import { Reveal } from "../components/Reveal";
 import { DeltaPill } from "../components/InsightsShared";
@@ -126,7 +125,7 @@ function PendingReview({ month }: { month: string }) {
   const t = useTheme();
   return (
     <Card style={{ alignItems: "center", gap: space.md, paddingVertical: space.xxl }}>
-      <View style={{ width: 64, height: 64, borderRadius: radius.full, backgroundColor: t.brandSurface, alignItems: "center", justifyContent: "center" }}><Ionicons name="calendar-outline" size={30} color={t.brandText} accessible={false} /></View>
+      <View style={{ width: 64, height: 64, alignItems: "center", justifyContent: "center" }}><Ionicons name="calendar-outline" size={30} color={t.textMuted} accessible={false} /></View>
       <T accessibilityRole="header" style={{ color: t.brandHeading, fontFamily: font.sansSemibold, fontSize: typeScale.title, textAlign: "center" }}>{formatMonthLabel(month)} isn't ready to review</T>
       <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 22, textAlign: "center" }}>A review is available once this month ends in your business's local time. Choose an earlier month to review its records.</T>
     </Card>
@@ -159,7 +158,6 @@ function ReviewContent({
   return (
     <Reveal style={{ gap: space.xl }}>
       <View style={{ backgroundColor: t.brandSolidPressed, borderRadius: radius.xl, padding: space.lg, gap: space.md }}>
-        <KpiWatermark name="stats-chart-outline" color={t.onBrandSolid} opacity={0.065} borderRadius={radius.xl} />
         <T accessibilityRole="header" style={{ color: t.onBrandSolid, fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>Costs paid by sales</T>
         <View style={{ flexDirection: stacked ? "column" : "row", alignItems: "center", gap: space.lg }}>
           <ChartPlotPressArea selection={coverageSelection} count={1} chartLabel="Costs paid by sales this month" style={{ width: 116, height: 116 }}>

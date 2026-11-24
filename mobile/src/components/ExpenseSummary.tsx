@@ -197,14 +197,12 @@ function SummaryTile({
   point,
   label,
   icon,
-  iconColor,
   onPress,
   children,
 }: {
   point: SummaryPoint;
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
-  iconColor?: string;
   onPress?: () => void;
   children: ReactNode;
 }) {
@@ -223,7 +221,7 @@ function SummaryTile({
   };
   const header = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
-      <Ionicons name={icon} size={15} color={iconColor ?? t.brandText} />
+      <Ionicons name={icon} size={15} color={t.textMuted} />
       <T numberOfLines={1} style={{ flex: 1, fontSize: typeScale.caption, fontFamily: font.sansMedium, color: t.textMuted }}>{label}</T>
       {onPress ? <Ionicons name="chevron-forward" size={16} color={t.textMuted} /> : null}
     </View>
@@ -310,7 +308,7 @@ export function ExpenseSummaryCard({
           {shown.map((point) => {
             if (point.kind === "increase" && summary.biggestIncrease) {
               return (
-                <SummaryTile key={point.kind} point={point} label="Biggest rise" icon="trending-up" iconColor={t.statusText.serious}>
+                <SummaryTile key={point.kind} point={point} label="Biggest rise" icon="trending-up">
                   <Figure color={t.statusText.serious}>{`+${formatMoney(summary.biggestIncrease.change)}`}</Figure>
                   <Caption strong={summary.biggestIncrease.categoryName} rest="went up the most" />
                 </SummaryTile>
@@ -319,7 +317,7 @@ export function ExpenseSummaryCard({
             if (point.kind === "flags") {
               const reviewable = flaggedCount > 0 && Boolean(onReviewFlags);
               return (
-                <SummaryTile key={point.kind} point={point} label={flaggedCount > 0 ? "Needs a check" : "Unusual"} icon="flag-outline" iconColor={t.statusText.critical} onPress={reviewable ? onReviewFlags : undefined}>
+                <SummaryTile key={point.kind} point={point} label={flaggedCount > 0 ? "Needs a check" : "Unusual"} icon="flag-outline" onPress={reviewable ? onReviewFlags : undefined}>
                   <Figure>{String(flaggedCount > 0 ? flaggedCount : unusualCount)}</Figure>
                   <Caption rest={flaggedCount > 0 ? (unusualCount > 0 ? `to review · ${unusualCount} unusual` : "to review") : "unusual for their category"} />
                 </SummaryTile>

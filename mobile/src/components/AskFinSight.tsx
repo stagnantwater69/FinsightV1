@@ -545,8 +545,8 @@ export function AskFinSight({
                               backgroundColor: pressed ? t.surfaceMuted : t.surface,
                             })}
                           >
-                            <View style={{ width: 38, height: 38, borderRadius: radius.md, alignItems: "center", justifyContent: "center", backgroundColor: t.surfaceMuted }}>
-                              <Ionicons name={starter.icon} size={20} color={t.brandText} />
+                            <View style={{ width: 38, height: 38, alignItems: "center", justifyContent: "center" }}>
+                              <Ionicons name={starter.icon} size={20} color={t.textMuted} />
                             </View>
                             <View style={{ flex: 1, gap: space.xs }}>
                               <T style={{ fontFamily: font.sansMedium, color: t.textPrimary }}>{starter.question}</T>

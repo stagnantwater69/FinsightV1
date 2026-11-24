@@ -39,7 +39,7 @@ describe("dashboard today's target", () => {
   it("explains why the catch-up pace is higher than today's target, and only then", () => {
     const note = "Higher than today’s target because earlier days this month fell short.";
     const { unmount } = renderRecovery({ adjustedDailyTarget: 1_600 });
-    expect(screen.getByText("Needed per day from now")).toBeVisible();
+    expect(screen.getByText("Needed per day")).toBeVisible();
     expect(screen.getByText(note)).toBeVisible();
     unmount();
 
