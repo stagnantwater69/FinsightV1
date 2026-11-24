@@ -752,12 +752,20 @@ export function SelectChip({
         styles.chip,
         {
           borderColor: selected ? t.brandFill : t.borderStrong,
-          backgroundColor: selected ? t.brandFill : t.surface,
-          opacity: disabled ? 0.6 : pressed ? 0.85 : 1,
+          backgroundColor: selected ? t.brandSurface : pressed ? t.surfaceMuted : t.surface,
+          opacity: disabled ? 0.6 : 1,
         },
       ]}
     >
-      <T style={{ fontSize: typeScale.caption, color: selected ? t.onBrandFill : t.textSecondary }}>{label}</T>
+      <T
+        style={{
+          fontSize: typeScale.caption,
+          fontFamily: selected ? font.sansSemibold : font.sansMedium,
+          color: selected ? t.brandText : t.textSecondary,
+        }}
+      >
+        {label}
+      </T>
     </Pressable>
   );
 }
@@ -832,7 +840,17 @@ export function SegmentedControl<Value extends string | number>({
   return (
     <View style={[styles.segmentTrack, stacks && { flexDirection: "column" }]}>
       {highlight.ready ? (
-        <Animated.View pointerEvents="none" style={[highlight.style, { borderRadius: radius.sm, backgroundColor: t.brandFill }]} />
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            highlight.style,
+            {
+              borderRadius: radius.sm,
+              backgroundColor: t.surfaceRaised,
+              ...shadowStyle({ color: t.shadow, offsetY: 1, opacity: 0.1 * t.shadowStrength, blurRadius: 4, elevation: 2 }),
+            },
+          ]}
+        />
       ) : null}
       {options.map((option, index) => {
         const selected = option.value === value;
@@ -851,7 +869,7 @@ export function SegmentedControl<Value extends string | number>({
               styles.segment,
               stacks && { flex: 0, paddingVertical: space.sm },
               {
-                backgroundColor: selected && !highlight.ready ? t.brandFill : "transparent",
+                backgroundColor: selected && !highlight.ready ? t.surfaceRaised : "transparent",
                 opacity: pressed ? 0.85 : 1,
                 flexDirection: "row",
                 alignItems: "center",
@@ -868,9 +886,17 @@ export function SegmentedControl<Value extends string | number>({
               switchers that do not want them.
             */}
             {option.icon ? (
-              <Ionicons name={option.icon} size={14} color={selected ? t.onBrandFill : t.textMuted} />
+              <Ionicons name={option.icon} size={14} color={selected ? t.brandText : t.textMuted} />
             ) : null}
-            <T style={{ fontSize: typeScale.label, color: selected ? t.onBrandFill : t.ink[600] }}>{option.label}</T>
+            <T
+              style={{
+                fontSize: typeScale.label,
+                fontFamily: selected ? font.sansSemibold : font.sansMedium,
+                color: selected ? t.brandText : t.ink[600],
+              }}
+            >
+              {option.label}
+            </T>
           </Pressable>
         );
       })}
@@ -1684,20 +1710,27 @@ export function ScreenHeader({
         flexDirection: stacks ? "column" : "row",
         alignItems: stacks ? "stretch" : "flex-start",
         gap: space.md,
-        marginBottom: space.lg,
+        marginBottom: space.xl,
       }}
     >
       <View style={{ flex: 1 }}>
         {eyebrow ? (
-          <T variant="label" style={{ textTransform: "uppercase", letterSpacing: 0.6, color: t.textFaint }}>
+          // textMuted, not textFaint: the eyebrow is read, and textFaint is below 4.5:1.
+          <T variant="label" style={{ textTransform: "uppercase", letterSpacing: 0.8, color: t.textMuted, marginBottom: 2 }}>
             {eyebrow}
           </T>
         ) : null}
-        <T accessibilityRole="header" variant="title" numberOfLines={2}>
+        <T
+          accessibilityRole="header"
+          variant="title"
+          numberOfLines={2}
+          // Same title as SubpageHeader, so top-level and sub screens share one header size.
+          style={{ fontFamily: font.displayBold, fontSize: typeScale.subpageTitle, lineHeight: 29, letterSpacing: -0.4 }}
+        >
           {title}
         </T>
         {subtitle ? (
-          <T variant="caption" style={{ marginTop: 2 }}>
+          <T variant="caption" style={{ marginTop: space.xs }}>
             {subtitle}
           </T>
         ) : null}
@@ -1791,11 +1824,11 @@ const createStyles = (t: Palette) => ({
    */
   card: {
     backgroundColor: t.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: t.border,
     padding: space.lg,
-    ...shadowStyle({ color: t.shadow, offsetY: 1, opacity: 0.04 * t.shadowStrength, blurRadius: 3, elevation: 1 }),
+    ...shadowStyle({ color: t.shadow, offsetY: 4, opacity: 0.06 * t.shadowStrength, blurRadius: 16, elevation: 2 }),
   },
   alert: { flexDirection: "row", borderRadius: radius.md, overflow: "hidden" },
   alertBody: { flex: 1, padding: space.md },
