@@ -279,6 +279,8 @@ export interface ApiMutationOptions {
   signal?: AbortSignal;
   query?: ApiQuery;
   headers?: Record<string, string>;
+  /** Overrides JSON_REQUEST_TIMEOUT_MS for a call that should give up sooner (login). */
+  timeoutMs?: number;
 }
 
 function isAbortSignal(value: unknown): value is AbortSignal {
@@ -293,7 +295,7 @@ function isAbortSignal(value: unknown): value is AbortSignal {
 
 function isMutationOptions(value: unknown): value is ApiMutationOptions {
   if (!value || typeof value !== "object" || isAbortSignal(value)) return false;
-  return ["cacheScope", "signal", "query", "headers"].some((key) => key in value);
+  return ["cacheScope", "signal", "query", "headers", "timeoutMs"].some((key) => key in value);
 }
 
 function normalizeMutationOptions(
@@ -448,11 +450,12 @@ async function request<T>(method: string, path: string, opts: {
   requestGeneration?: number;
   /** Return the body as text instead of parsing JSON (the CSV export). */
   rawText?: boolean;
+  timeoutMs?: number;
 } = {}): Promise<T> {
   const generation = opts.requestGeneration ?? sessionGeneration;
   // The clock covers reading the body too: a connection can stall after the
   // headers arrive, which looks identical to a hang from the screen's side.
-  const deadline = withTimeout(opts.signal, JSON_REQUEST_TIMEOUT_MS);
+  const deadline = withTimeout(opts.signal, opts.timeoutMs ?? JSON_REQUEST_TIMEOUT_MS);
   sessionRequests.add(deadline.abort);
   try {
     assertRequestCurrent(generation, deadline.signal);

@@ -41,8 +41,10 @@ export function amountInputError(raw: string): string | null {
 /** A short figure for tight spots (calendar cells, slider ends): 4.1k, 1.2M. The full amount is always shown nearby. */
 export function compactAmount(value: number): string {
   const abs = Math.abs(value);
-  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (abs >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  const short = (n: number, unit: string) => `${n.toFixed(1).replace(/\.0$/, "")}${unit}`;
+  // Thresholds sit where rounding would print 1000k or 1000, so those step up a unit.
+  if (abs >= 999_950) return short(value / 1_000_000, "M");
+  if (abs >= 999.5) return short(value / 1_000, "k");
   return String(Math.round(value));
 }
 
