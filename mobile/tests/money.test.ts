@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alertKindFromType, formatMoney, formatPercent } from "../src/lib/money";
+import { alertKindFromType, compactAmount, formatMoney, formatPercent } from "../src/lib/money";
 
 /**
  * The only genuinely reusable pure logic in the mobile app.
@@ -75,5 +75,22 @@ describe("alertKindFromType — maps backend Notification.type onto the alert fa
     // The backend column is VARCHAR, not an enum, so an unknown value is
     // possible and must still render.
     expect(alertKindFromType("Something New")).toBe("info");
+  });
+});
+
+describe("compactAmount", () => {
+  it.each([
+    [999_999, "1M"],
+    [999_950, "1M"],
+    [999_949, "999.9k"],
+    [1_250_000, "1.3M"],
+    [999.5, "1k"],
+    [999.4, "999"],
+    [12_345, "12.3k"],
+    [-999_999, "-1M"],
+    [-999.5, "-1k"],
+    [0, "0"],
+  ])("%s -> %s", (value, expected) => {
+    expect(compactAmount(value)).toBe(expected);
   });
 });
