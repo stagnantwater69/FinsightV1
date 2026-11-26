@@ -13,7 +13,7 @@
 // Needs Node 22 and installed node_modules; a project without them is recorded as skipped.
 // It never reads .env files, sets DATABASE_URL, runs migrations or touches the shared finsight-test-db.
 import { execFileSync, spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +67,26 @@ export function spawnArgv([command, ...rest], { execPath = process.execPath, npm
   if (command === "npm") return [execPath, npmCli, ...rest];
   if (command === "npx") return [execPath, path.join(path.dirname(npmCli), "npx-cli.js"), ...rest];
   throw new Error(`No launcher for "${command}"`);
+}
+
+/**
+ * On Windows a running backend (the dev API or worker) holds the query engine DLL open, so
+ * `prisma generate` rewrites the client and then fails to rename its fresh engine copy over the
+ * locked one. If every copy this run left is byte-identical to the engine in place, the client is
+ * current: the copies are removed and the caller counts the step as passed. Anything else stays failed.
+ */
+export function lockedEngineIsCurrent(clientDir, since, logPath) {
+  let log, names;
+  try { log = readFileSync(logPath, "utf8"); names = readdirSync(clientDir); } catch { return false; }
+  if (!/EPERM[\s\S]{0,40}rename[\s\S]{0,400}query_engine/.test(log)) return false;
+  const copies = names.filter((name) => /^query_engine.*\.node\.tmp\d+$/.test(name))
+    .map((name) => path.join(clientDir, name))
+    .filter((file) => statSync(file).birthtimeMs >= since);
+  if (copies.length === 0) return false;
+  const engine = (copy) => copy.replace(/\.tmp\d+$/, "");
+  if (!copies.every((copy) => existsSync(engine(copy)) && readFileSync(copy).equals(readFileSync(engine(copy))))) return false;
+  for (const copy of copies) rmSync(copy, { force: true });
+  return true;
 }
 
 function within(root, location) {
@@ -125,7 +145,7 @@ const stamp = (date) => date.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$
 export async function verify({
   profile, out = null, root = ROOT, nodeVersion = process.version, execPath = process.execPath,
   npmCli, exists = existsSync, capture = defaultCapture, start = defaultStart, kill = defaultKill,
-  signals = process, log = console.log,
+  signals = process, log = console.log, engineCurrent = lockedEngineIsCurrent,
 }) {
   checkNode(nodeVersion);
   const steps = plan(profile);
@@ -191,6 +211,11 @@ export async function verify({
       }
       entry.exitCode = result.code;
       entry.status = result.code === 0 ? "passed" : "failed";
+      if (entry.status === "failed" && s.argv.join(" ") === "npx prisma generate"
+        && engineCurrent(path.join(cwd, "node_modules", ".prisma", "client"), began, entry.log)) {
+        entry.status = "passed";
+        entry.reason = "client regenerated; a running process holds the query engine, which is byte-identical to the new one";
+      }
       if (entry.status === "failed" && s.setup) blocked.set(s.project, `setup step ${s.name} failed`);
       writeRecord(out, record);
       log(`  ${entry.status.padEnd(8)} ${s.name} (${entry.durationMs} ms)`);
