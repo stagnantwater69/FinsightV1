@@ -63,6 +63,22 @@ describe("JSON requests give up instead of hanging", () => {
     expect(errorMessage(watched.state.value)).toMatch(/timed out/);
   });
 
+  it("gives up sooner when a call sets its own timeout (sign-in), without changing the default", async () => {
+    const { stub } = stalledFetch();
+    globalThis.fetch = stub as unknown as typeof fetch;
+
+    const login = watch(api.post("/auth/login", { email: "a@example.test", password: "x" }, { timeoutMs: 30_000 }));
+    const other = watch(api.post("/records/sales", {}));
+    await vi.advanceTimersByTimeAsync(30_001);
+    await login.done;
+    expect(errorMessage(login.state.value)).toMatch(/timed out/);
+    expect(other.state.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(JSON_TIMEOUT_MS);
+    await other.done;
+    expect(other.state.settled).toBe(true);
+  });
+
   it("leaves no timer behind once a request answers", async () => {
     globalThis.fetch = vi.fn(async () => ({
       ok: true, status: 200, json: async () => ({}), text: async () => "{}",

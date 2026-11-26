@@ -17,6 +17,7 @@ const businessB = { ...fixtures.businessProfile, id: 2, name: 'Second business' 
 let currentBusinessProfile: BusinessProfile = businessA;
 
 vi.mock('@react-navigation/native', () => ({
+  usePreventRemove: () => {},
   useFocusEffect: (effect: () => void | (() => void)) => {
     React.useEffect(() => effect(), [effect]);
   },

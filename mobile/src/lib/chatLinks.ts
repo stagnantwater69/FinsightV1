@@ -10,10 +10,10 @@ import type { TabScreenTarget } from "../navigation/types";
  * can never steer the app anywhere this table does not list.
  * tests/chatLinks.test.ts checks every target is a registered screen.
  */
-export const CHAT_PAGE_TARGETS: Record<ChatPageKey, TabScreenTarget> = {
+export const CHAT_PAGE_TARGETS: Record<ChatPageKey, TabScreenTarget & { params?: object }> = {
   dashboard: { tab: "Dashboard", screen: "DashboardHome" },
   records: { tab: "Records", screen: "RecordsList" },
-  "review-queue": { tab: "Records", screen: "FlaggedRecords" },
+  "review-queue": { tab: "Insights", screen: "ExpenseBehavior", params: { section: "alerts" } },
   "expense-insights": { tab: "Insights", screen: "ExpenseBehavior" },
   recovery: { tab: "Insights", screen: "RecoveryTarget" },
   "spending-impact": { tab: "Insights", screen: "SpendingImpact" },

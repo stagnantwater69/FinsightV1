@@ -57,7 +57,7 @@ import {
   AddExpenseScreen,
   AddSalesScreen,
   EditRecordScreen,
-  FlaggedRecordsScreen,
+  FlagDetailScreen,
   ImportCsvScreen,
   RecordsScreen,
   ScanReceiptScreen,
@@ -94,7 +94,9 @@ import { useReducedMotion } from "./src/lib/useReducedMotion";
 import { isFullscreenSubpage } from "./src/lib/subpageNavigation";
 import { returnFromOperatingSchedule } from "./src/lib/operatingScheduleNavigation";
 import { returnFromMonthEndReview } from "./src/lib/monthEndReviewNavigation";
-import { returnFromFlaggedRecords } from "./src/lib/flaggedRecordsNavigation";
+import { FindingDetailScreen } from "./src/screens/FindingDetailScreen";
+import { ImportDuplicatesScreen } from "./src/screens/ImportDuplicatesScreen";
+import { returnFromFlagDetail } from "./src/lib/flaggedRecordsNavigation";
 import { QuickActionMenu, type RadialAction } from "./src/components/QuickActionMenu";
 import { FloatingTabBar } from "./src/components/FloatingTabBar";
 import { MoneyFlowScreen } from "./src/screens/MoneyFlowScreen";
@@ -269,13 +271,13 @@ function RecordsStack() {
         }} />,
       })} />
       <RecordsNav.Screen
-        name="FlaggedRecords"
-        component={FlaggedRecordsScreen}
-        options={({ navigation, route }: any) => ({
-          title: "Review records",
+        name="FlagDetail"
+        component={FlagDetailScreen}
+        options={({ navigation }: any) => ({
+          title: "Check this record",
           headerBackVisible: false,
           headerLeft: ({ tintColor }) => (
-            <HeaderBackButton tintColor={tintColor} onPress={() => returnFromFlaggedRecords(navigation, route.params?.from)} />
+            <HeaderBackButton tintColor={tintColor} onPress={() => returnFromFlagDetail(navigation)} />
           ),
         })}
       />
@@ -317,6 +319,8 @@ function InsightsStack() {
         component={RecurringScheduleScreen}
         options={{ headerShown: true, title: "Repeating payment" }}
       />
+      <InsightsNav.Screen name="FindingDetail" component={FindingDetailScreen} options={{ headerShown: true, title: "Check this flag" }} />
+      <InsightsNav.Screen name="ImportDuplicates" component={ImportDuplicatesScreen} options={{ headerShown: true, title: "Duplicates from one import" }} />
     </InsightsNav.Navigator>
   );
 }

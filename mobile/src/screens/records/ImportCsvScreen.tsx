@@ -1,4 +1,5 @@
 import { CONTENT_WIDTH, ContentScrollView } from "../../components/ContentScrollView";
+import { openReviewTab } from "../../lib/flaggedRecordsNavigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -1067,7 +1068,7 @@ export function ImportCsvScreen({ navigation }: RecordsScreenProps<"ImportCsv">)
                 <Button
                   title="Review the flagged rows"
                   variant="secondary"
-                  onPress={() => navigation.navigate("FlaggedRecords", { from: undefined })}
+                  onPress={() => openReviewTab(navigation)}
                 />
               ) : null}
               <Button title="Done" variant="primary" onPress={goBack} />

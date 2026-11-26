@@ -1,4 +1,5 @@
 import { ContentScrollView } from "../components/ContentScrollView";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ExpensePagination } from "../components/ExpensePagination";
 import { useCursorCollection } from "../lib/useCursorCollection";
@@ -7,7 +8,7 @@ import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
 import { type ScrollViewInstance, Pressable, RefreshControl, useWindowDimensions, View } from "react-native";
 import * as haptics from "../lib/haptics";
 import { useFocusEffect } from "@react-navigation/native";
-import { Button, Callout, ErrorNote, OptionSheet, Screen, T } from "../components/ui";
+import { Button, Callout, Card, ErrorNote, Screen, SegmentedControl, T } from "../components/ui";
 import { CategoryBars, DailySpending, SpendHero, SpendingComparison } from "../components/ExpenseVisuals";
 import { ExpenseGlance, ExpenseSummaryCard } from "../components/ExpenseSummary";
 import { expenseSummaryFigures, expenseSummaryPoints, expenseSummaryQuestions } from "../lib/expenseSummary";
@@ -23,10 +24,11 @@ import { SkeletonBox, SkeletonCard } from "../components/Skeleton";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useAiChat } from "../context/AiChatContext";
 import { api, errorMessage } from "../lib/api";
-import { openFlaggedRecords } from "../lib/flaggedRecordsNavigation";
+import { openFlagDetail } from "../lib/flaggedRecordsNavigation";
+import { ImportDuplicateCards } from "../components/ImportDuplicateCards";
 import { takeFlash } from "../lib/flash";
 import { groupSchedules, recurringAvailability } from "../lib/recurringAgenda";
-import { findingCategory, feedbackActions, type FeedbackAction } from "../lib/findingFeedback";
+import { findingCategory } from "../lib/findingFeedback";
 import { REDUCTION_OPPORTUNITY_QUESTION } from "../lib/reductionOpportunityAsk";
 import { useInsight } from "../lib/useInsight";
 import { font, radius, space, typeScale } from "../theme/tokens";
@@ -48,6 +50,7 @@ import type {
   AnomalyFinding,
   AnomalyFindingPage,
   FlaggedRecordPage,
+  RecordItem,
   ExpenseBehavior,
   ReductionOpportunity,
   RecurringPattern,
@@ -120,7 +123,7 @@ function ExpenseBehaviorGate(props: any) {
   );
 }
 
-function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBehavior">) {
+function ExpenseBehaviorContent({ navigation, route }: InsightsScreenProps<"ExpenseBehavior">) {
   const t = useTheme();
   const { fontScale } = useWindowDimensions();
   const { brand } = t;
@@ -150,7 +153,14 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
    * this one is mostly consulted rather than worked through — the badge is
    * what carries the urgency, and it does so without taking the choice away.
    */
-  const [section, setSection] = useState<"overview" | "alerts" | "recurring">("overview");
+  const [section, setSection] = useState<"overview" | "alerts" | "recurring">(route?.params?.section ?? "overview");
+  // Links from Home, Records, a CSV import or Ask FinSight open straight on Review.
+  const requestedSection = route?.params?.section;
+  useEffect(() => {
+    if (!requestedSection) return;
+    setSection(requestedSection);
+    navigation.setParams({ section: undefined });
+  }, [requestedSection, navigation]);
   const scrollRef = useRef<ScrollViewInstance>(null);
   // Where each overview part sits inside the overview container, for the jump chips.
   const overviewState = useInsight<DetailExpenseOverview>(
@@ -191,10 +201,12 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
     { enabled: Boolean(selected) },
   );
   const reviewScope = `${selected?.id}:${periodKeyValue}`;
-  const flagPages = useCursorCollection(flaggedState, "/records/flagged", { businessProfileId: selected?.id, limit: 20 }, reviewScope, "cursor", (item) => `${item.type}:${item.id}`, (item) => item.type === "expense");
+  const flagPages = useCursorCollection(flaggedState, "/records/flagged", { businessProfileId: selected?.id, limit: 20 }, reviewScope, "cursor", (item) => `${item.type}:${item.id}`);
   const findingPages = useCursorCollection(findingState, "/insights/findings", { businessProfileId: selected?.id, status: "OPEN", take: 20 }, reviewScope, "cursorId", (item) => String(item.id));
   const reviewSize = 5;
   const [reviewPage, setReviewPage] = useState(0);
+  /** Which kind of review item the Review tab lists. Duplicates are the keep-or-discard ones. */
+  const [reviewFilter, setReviewFilter] = useState<"all" | "duplicates" | "large" | "unusual">("all");
   const recurringSize = 5;
   const [recurringPage, setRecurringPage] = useState(0);
   const [reviewPaging, setReviewPaging] = useState(false);
@@ -287,17 +299,6 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
    * sentence about the button just pressed, not about the list.
    */
   const [patternActionError, setPatternActionError] = useState<string | null>(null);
-  /** Why recording an answer to a finding failed. Same reasoning as above. */
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
-  /**
-   * The finding whose full answer list is open.
-   *
-   * A phone card carries the two most likely answers as buttons; the other
-   * three live behind "Something else…" in a sheet. Five buttons on a card is
-   * a wall, and dropping the three least likely would put the app back where
-   * it was — with three of five feedback values unreachable.
-   */
-  const [feedbackFor, setFeedbackFor] = useState<AnomalyFinding | null>(null);
 
   /*
    * The confirmation handed back by the recurring-payment form.
@@ -339,35 +340,6 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
     haptics.tapped();
     if (question) chat.prepareQuestion(question);
     setAskOpen(true);
-  }
-
-  /**
-   * Records what the owner actually said about a finding.
-   *
-   * ONE FUNCTION, FIVE ANSWERS. It used to take two booleans and derive the
-   * feedback from them, which is why only two of the five values were ever
-   * written from a phone: `confirmed ? (duplicate ? "DUPLICATE" :
-   * "CONFIRMED_UNUSUAL") : "EXPECTED_TRANSACTION"`. INCORRECT_MATCH — the most
-   * valuable signal the duplicate detector can get, and a different fact from
-   * "this is normal for me" — had no path at all. The status is not a separate
-   * decision either; it follows from the answer (lib/findingFeedback.ts).
-   */
-  async function reviewFinding(id: number, action: FeedbackAction) {
-    setFeedbackError(null);
-    try {
-      await api.patch(`/insights/findings/${id}/review`, {
-        status: action.status,
-        feedback: action.feedback,
-      }, { cacheScope: { businessProfileId: selected!.id } });
-      haptics.succeeded();
-      // Echoes what they said rather than "Saved" — the list is about to lose
-      // the card, and a confirmation that does not name the answer leaves them
-      // unsure which button they hit.
-      setNotice(action.toast);
-      await findingState.load();
-    } catch (err) {
-      setFeedbackError(errorMessage(err));
-    }
   }
 
   /**
@@ -510,11 +482,12 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
 
   const flagSnapshot = flagPages.read();
   const findingSnapshot = findingPages.read();
-  const flagsFinished = flagSnapshot.ready && (flaggedCountState.data?.expenses === 0 || flagSnapshot.cursor === null);
+  const flagsFinished = flagSnapshot.ready && (flaggedCountState.data?.total === 0 || flagSnapshot.cursor === null);
   const findingsFinished = findingSnapshot.ready && findingSnapshot.cursor === null;
-  const reviewComplete = flagsFinished && findingsFinished && behaviorData !== null;
+  const findingsWanted = reviewFilter !== "large";
+  const reviewComplete = flagsFinished && (findingsFinished || !findingsWanted) && behaviorData !== null;
   const unmatchedUnusual = data.unusualExpenses.filter((expense) => !findingSnapshot.items.some((finding) => finding.expenseRecordId === expense.id));
-  const flaggedExpenseCount = flaggedCountState.data?.expenses;
+  const flaggedExpenseCount = flaggedCountState.data?.total;
   const reliableReviewCount = findingsFinished && behaviorData !== null && flagSnapshot.ready
     && !flagSnapshot.error && !findingSnapshot.error
     && !flaggedCountState.error && !flaggedCountState.refreshing && !flaggedCountState.isStale
@@ -524,11 +497,18 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
     && flaggedExpenseCount !== undefined && Number.isInteger(flaggedExpenseCount)
     && flaggedExpenseCount >= flagSnapshot.items.length
     && (!flagsFinished || flaggedExpenseCount === flagSnapshot.items.length);
-  const reviewTotalCount = reliableReviewCount ? flaggedExpenseCount + findingSnapshot.items.length + unmatchedUnusual.length : undefined;
+  const flagMatches = (item: RecordItem) => reviewFilter === "all"
+    || (reviewFilter === "duplicates" && item.duplicateStatus === "Flagged")
+    || (reviewFilter === "large" && item.largeExpenseFlag === true);
+  const findingMatches = (item: AnomalyFinding) => reviewFilter === "all" || (findingsWanted && findingCategory(item.type) === (reviewFilter === "duplicates" ? "duplicate" : "unusual"));
+  const unusualMatches = reviewFilter === "all" || reviewFilter === "unusual";
+  const reviewTotalCount = reviewFilter === "all"
+    ? (reliableReviewCount ? flaggedExpenseCount + findingSnapshot.items.length + unmatchedUnusual.length : undefined)
+    : undefined;
   const reviewRows = [
-    ...flagSnapshot.items.map((item) => ({ kind: "flag" as const, id: item.id })),
-    ...(flagsFinished ? findingSnapshot.items.map((item) => ({ kind: "finding" as const, id: item.id })) : []),
-    ...(flagsFinished && findingsFinished ? unmatchedUnusual.map((item) => ({ kind: "unusual" as const, id: item.id })) : []),
+    ...flagSnapshot.items.filter(flagMatches).map((item) => ({ kind: "flag" as const, id: item.id })),
+    ...(flagsFinished ? findingSnapshot.items.filter(findingMatches).map((item) => ({ kind: "finding" as const, id: item.id })) : []),
+    ...(flagsFinished && findingsFinished && unusualMatches ? unmatchedUnusual.map((item) => ({ kind: "unusual" as const, id: item.id })) : []),
   ];
   const reviewVisible = reviewRows.slice(reviewPage * reviewSize, (reviewPage + 1) * reviewSize);
   const recurringRows = [
@@ -547,7 +527,8 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
     pageRetry.current = { page: targetPage, size };
     try {
       if (!flagPages.read().ready) return;
-      while (flagPages.read().items.length < end && flagPages.read().cursor !== null && flaggedCountState.data?.expenses !== 0) {
+      // Counts only the rows the current filter shows, so a filtered page still fills.
+      while (flagPages.read().items.filter(flagMatches).length < end && flagPages.read().cursor !== null && flaggedCountState.data?.total !== 0) {
         if (!await flagPages.loadNext()) {
           if (version === reviewRequest.current && flagPages.read().error) setReviewPageError(flagPages.read().error);
           return;
@@ -555,10 +536,10 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
         if (version !== reviewRequest.current) return;
       }
       const flags = flagPages.read();
-      if (flags.cursor === null || flaggedCountState.data?.expenses === 0) {
-        const needed = end - flags.items.length;
+      if (flags.cursor === null || flaggedCountState.data?.total === 0) {
+        const needed = findingsWanted ? end - flags.items.filter(flagMatches).length : 0;
         if (needed > 0 && !findingPages.read().ready) return;
-        while (findingPages.read().items.length < needed && findingPages.read().cursor !== null) {
+        while (findingPages.read().items.filter(findingMatches).length < needed && findingPages.read().cursor !== null) {
           if (!await findingPages.loadNext()) {
             if (version === reviewRequest.current && findingPages.read().error) setReviewPageError(findingPages.read().error);
             return;
@@ -568,9 +549,9 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
       }
       if (version !== reviewRequest.current || flagSession !== flagPages.session || findingSession !== findingPages.session) return;
       const findings = findingPages.read();
-      const previousSourcesDone = (flags.cursor === null || flaggedCountState.data?.expenses === 0) && findings.ready && findings.cursor === null;
-      const unmatched = previousSourcesDone ? data.unusualExpenses.filter((expense) => !findings.items.some((finding) => finding.expenseRecordId === expense.id)).length : 0;
-      const count = flags.items.length + ((flags.cursor === null || flaggedCountState.data?.expenses === 0) ? findings.items.length + unmatched : 0);
+      const previousSourcesDone = (flags.cursor === null || flaggedCountState.data?.total === 0) && findings.ready && findings.cursor === null;
+      const unmatched = previousSourcesDone && unusualMatches ? data.unusualExpenses.filter((expense) => !findings.items.some((finding) => finding.expenseRecordId === expense.id)).length : 0;
+      const count = flags.items.filter(flagMatches).length + ((flags.cursor === null || flaggedCountState.data?.total === 0) ? findings.items.filter(findingMatches).length + unmatched : 0);
       setReviewPage(Math.min(targetPage, Math.max(0, Math.ceil(count / size) - 1)));
       pageRetry.current = null;
     } finally {
@@ -584,14 +565,14 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
     setReviewPageError(null);
     setReviewPaging(false);
     pageRetry.current = null;
-  }, [flagPages.session, findingPages.session]);
+  }, [flagPages.session, findingPages.session, reviewFilter]);
   useEffect(() => {
     const needsFill = reviewRows.length < (reviewPage + 1) * reviewSize && !reviewComplete;
-    const canFill = flagSnapshot.ready && (flagSnapshot.cursor !== null || (flagsFinished && findingSnapshot.ready && findingSnapshot.cursor !== null));
+    const canFill = flagSnapshot.ready && (flagSnapshot.cursor !== null || (findingsWanted && flagsFinished && findingSnapshot.ready && findingSnapshot.cursor !== null));
     if (section === "alerts" && needsFill && canFill && !reviewPaging && !reviewPageError && !flagSnapshot.loading && !findingSnapshot.loading && !flagSnapshot.error && !findingSnapshot.error && !flaggedState.refreshing && !findingState.refreshing) void ensureReviewPage(reviewPage, reviewSize);
     // Each automatic request fills only the current page; failures wait for retry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [section, flagPages.session, findingPages.session, flagSnapshot.loading, findingSnapshot.loading, reviewPaging, reviewPageError, reviewRows.length, reviewPage, reviewSize]);
+  }, [section, reviewFilter, flagPages.session, findingPages.session, flagSnapshot.loading, findingSnapshot.loading, reviewPaging, reviewPageError, reviewRows.length, reviewPage, reviewSize]);
   useEffect(() => {
     setRecurringPage(0);
   }, [selected?.id]);
@@ -785,7 +766,7 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
                   unusualCount={data.unusualExpenses.length}
                   questions={expenseSummaryQuestions(summaryFigures, summaryContext)}
                   onAsk={askSummaryQuestion}
-                  onReviewFlags={flaggedExpenses > 0 ? () => openFlaggedRecords(navigation, "ExpenseBehavior") : undefined}
+                  onReviewFlags={flaggedExpenses > 0 ? () => setSection("alerts") : undefined}
                 />
               </View>
 
@@ -838,6 +819,39 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
               and it should look like one rather than like a blank.
             */}
             {activeSection === "alerts" ? (
+              <SegmentedControl
+                accessibilityLabel="Show"
+                options={[
+                  { label: "All", value: "all" },
+                  { label: "Duplicates", value: "duplicates" },
+                  { label: "Large", value: "large" },
+                  { label: "Unusual", value: "unusual" },
+                ] as const}
+                value={reviewFilter}
+                onChange={setReviewFilter}
+              />
+            ) : null}
+
+            {activeSection === "alerts" && reviewFilter !== "all" && reviewComplete && reviewRows.length === 0 && (flagSnapshot.items.length > 0 || findingSnapshot.items.length > 0 || data.unusualExpenses.length > 0) ? (
+              <Card style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+                <Ionicons name="checkmark-circle-outline" size={22} color={t.statusText.good} />
+                <T style={{ flex: 1, fontSize: typeScale.bodySm, color: t.textSecondary }}>
+                  {reviewFilter === "duplicates" ? "No possible duplicates to review." : reviewFilter === "large" ? "No large expenses to review." : "No unusual spending to review."}
+                </T>
+              </Card>
+            ) : null}
+
+            {activeSection === "alerts" && reviewPage === 0 && selected && (reviewFilter === "all" || reviewFilter === "duplicates") ? (
+              <ImportDuplicateCards
+                records={flagSnapshot.items}
+                hasMore={flagSnapshot.cursor !== null}
+                businessProfileId={selected.id}
+                onChanged={() => Promise.all([refreshFlaggedRecords(), refreshFlaggedCount(), refreshOverview(), refreshPosition()])}
+                onOpen={(group) => navigation.navigate("ImportDuplicates", { records: group, hasMore: flagSnapshot.cursor !== null })}
+              />
+            ) : null}
+
+            {activeSection === "alerts" ? (
               <LargeExpenseFlags
                 items={flagSnapshot.items.filter((item) => reviewVisible.some((row) => row.kind === "flag" && row.id === item.id))}
                 loading={flaggedState.loading}
@@ -845,44 +859,32 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
                 onRetry={() => void flaggedState.load()}
                 profile={selected}
                 categories={categories}
-                flaggedTotal={flaggedCountState.data ? flaggedCountState.data.expenses : null}
-                onReviewAll={() => openFlaggedRecords(navigation, "ExpenseBehavior")}
+                flaggedTotal={flaggedCountState.data ? flaggedCountState.data.total : null}
+                onOpen={(record) => openFlagDetail(navigation, record)}
               />
             ) : null}
 
             {activeSection === "alerts" ? (
               <ExpenseAlertsSection
                 unusualExpenses={data.unusualExpenses}
-                insufficientHistoryCategories={data.insufficientHistoryCategories}
                 openFindings={openFindings}
                 findingState={{ ...findingState, data: findingState.data ? { items: findingSnapshot.items, nextCursor: findingSnapshot.cursor } : null }}
                 visibleFindingIds={reviewVisible.filter((row) => row.kind === "finding").map((row) => row.id)}
                 visibleUnusualIds={reviewVisible.filter((row) => row.kind === "unusual").map((row) => row.id)}
-                hasOtherReviewItems={!flagSnapshot.ready || flagSnapshot.items.length > 0 || flagSnapshot.cursor !== null || (flaggedCountState.data?.expenses ?? 0) > 0}
+                hasOtherReviewItems={!flagSnapshot.ready || flagSnapshot.items.length > 0 || flagSnapshot.cursor !== null || (flaggedCountState.data?.total ?? 0) > 0}
                 findingsComplete={findingsFinished}
                 findingNotice={findingNotice}
                 refreshFindings={findingState.load}
                 findingsRefreshing={findingState.refreshing}
                 findingsUpdatedAt={findingState.lastUpdatedAt}
-                feedbackError={feedbackError}
-                reviewFinding={reviewFinding}
-                onOtherAnswers={setFeedbackFor}
-                onExplain={(finding) => {
-                  // The flag's id travels with the question, so the answer is
-                  // about this card rather than whichever open flag the model
-                  // picked. A focused question starts its own thread.
-                  chat.prepareQuestion(`Why did FinSight flag "${finding.title}"? Explain the comparison behind it.`, undefined, {
-                    kind: "finding",
-                    findingId: finding.id,
-                  });
-                  setAskOpen(true);
-                }}
-                pagination={
-                  <ExpensePagination label="Review" page={reviewPage} size={reviewSize} count={reviewRows.length} totalCount={reviewTotalCount} complete={reviewComplete} available={flagSnapshot.ready} busy={reviewPaging || flaggedState.refreshing || findingState.refreshing} hasNext={(reviewPage + 1) * reviewSize < reviewRows.length || !flagsFinished || !findingsFinished} error={reviewPageError} onPage={(page) => void ensureReviewPage(page, reviewSize)} onNext={() => void ensureReviewPage(reviewPage + 1, reviewSize)} onRetry={() => {
+                onOpen={(target) => navigation.navigate("FindingDetail", target)}
+                pagination={reviewComplete && reviewRows.length === 0 ? null : (
+                  <ExpensePagination label="Review" page={reviewPage} size={reviewSize} count={reviewRows.length} totalCount={reviewTotalCount} complete={reviewComplete} available={flagSnapshot.ready} busy={reviewPaging || flaggedState.refreshing || findingState.refreshing} hasNext={(reviewPage + 1) * reviewSize < reviewRows.length || !flagsFinished || (findingsWanted && !findingsFinished)} error={reviewPageError} onPage={(page) => void ensureReviewPage(page, reviewSize)} onNext={() => void ensureReviewPage(reviewPage + 1, reviewSize)} onRetry={() => {
                     if (flagSnapshot.blocked || findingSnapshot.blocked) { void Promise.all([flaggedState.load(), findingState.load()]); return; }
                     const retry = pageRetry.current ?? { page: reviewPage + 1, size: reviewSize };
                     void ensureReviewPage(retry.page, retry.size);
                   }} />
+                )
                 }
               />
             ) : null}
@@ -933,33 +935,6 @@ function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBeha
         onClose={() => setSimulateFor(null)}
       />
 
-      {/*
-        All five answers, in one sheet, reached from any finding card. The
-        card's two buttons are the likely ones; this is what makes the other
-        three sayable at all on a phone — and one of them, "Wrong match", is
-        the single most useful thing the duplicate detector can be told.
-
-        The existing OptionSheet rather than a new surface: the app already has
-        one bottom sheet and a second, slightly different one is exactly the
-        drift the chip consolidation exists to prevent.
-      */}
-      <OptionSheet
-        visible={feedbackFor !== null}
-        title="What was this, really?"
-        options={
-          feedbackFor
-            ? feedbackActions(findingCategory(feedbackFor.type)).map((a) => ({ id: a.feedback, name: a.label }))
-            : []
-        }
-        value={feedbackFor?.feedback ?? null}
-        onChoose={(id) => {
-          if (!feedbackFor) return;
-          const action = feedbackActions(findingCategory(feedbackFor.type)).find((a) => a.feedback === id);
-          if (action) void reviewFinding(feedbackFor.id, action);
-        }}
-        onClose={() => setFeedbackFor(null)}
-        emptyText="No answers available."
-      />
     </Screen>
   );
 }

@@ -237,7 +237,7 @@ describe('Dashboard unread badge', () => {
 });
 
 describe('Dashboard cached overview refresh', () => {
-  it('opens flagged review with a Dashboard origin and a retained RecordsList base', async () => {
+  it('opens the Expenses Review tab for records needing review', async () => {
     apiGet.mockImplementation((path: string) => {
       if (path === '/dashboard/summary') return Promise.resolve({ ...summary, recordsNeedingReview: 3 });
       if (path === '/insights/expense-overview') return Promise.resolve(overview);
@@ -247,9 +247,7 @@ describe('Dashboard cached overview refresh', () => {
       <ThemeProvider initialMode="light"><DashboardScreen navigation={navigation} /></ThemeProvider>,
     );
     await fireEvent.press(await queries.findByRole('button', { name: '3 to review' }));
-    expect(navigation.navigate).toHaveBeenLastCalledWith('Records', {
-      screen: 'FlaggedRecords', initial: false, params: { from: 'Dashboard' },
-    });
+    expect(navigation.navigate).toHaveBeenLastCalledWith('Insights', { screen: 'ExpenseBehavior', params: { section: 'alerts' } });
   });
 
   it('keeps the opportunity visible and names the failed refresh', async () => {

@@ -17,6 +17,7 @@
  * The conversion happens once, at submit, in toBusinessProfileInput().
  */
 import { FIELD_LIMITS } from "./fieldLimits";
+import { parseAmountInput } from "./money";
 import {
   DEFAULT_THRESHOLD_PERCENT,
   thresholdPercentToPesos,
@@ -148,24 +149,24 @@ export function applyFieldUpdate(
  */
 export function thresholdDisplayValue(draft: BusinessProfileDraft): string {
   if (draft.thresholdTouched) return draft.largeExpenseThresholdPesos;
-  const expenses = Number(draft.expectedMonthlyExpenses);
-  if (!Number.isFinite(expenses) || expenses <= 0) return "";
+  const expenses = parseAmountInput(draft.expectedMonthlyExpenses) ?? 0;
+  if (expenses <= 0) return "";
   return String(thresholdPercentToPesos(expenses, DEFAULT_THRESHOLD_PERCENT));
 }
 
 export function toBusinessProfileInput(draft: BusinessProfileDraft): BusinessProfileInput {
-  const expectedMonthlyExpenses = Number(draft.expectedMonthlyExpenses);
+  const expectedMonthlyExpenses = parseAmountInput(draft.expectedMonthlyExpenses) ?? 0;
   // A box left alone — or cleared out — is not "no threshold". It is the
   // default share, which is what the field has been showing them all along.
   const pesos =
     draft.largeExpenseThresholdPesos === "" || !draft.thresholdTouched
       ? thresholdPercentToPesos(expectedMonthlyExpenses, DEFAULT_THRESHOLD_PERCENT)
-      : Number(draft.largeExpenseThresholdPesos);
+      : parseAmountInput(draft.largeExpenseThresholdPesos) ?? 0;
 
   return {
     name: draft.name.trim(),
     type: draft.type.trim(),
-    availableFunds: Number(draft.availableFunds),
+    availableFunds: parseAmountInput(draft.availableFunds) ?? 0,
     expectedMonthlyExpenses,
     operatingDays: Number(draft.operatingDays),
     largeExpenseThresholdPercent: thresholdPesosToPercent(expectedMonthlyExpenses, pesos),
@@ -189,13 +190,13 @@ export function validateBasics(draft: BusinessProfileDraft): BusinessFieldErrors
 export function validateNumbers(draft: BusinessProfileDraft): BusinessFieldErrors {
   const errors: BusinessFieldErrors = {};
 
-  const funds = Number(draft.availableFunds);
-  if (draft.availableFunds === "" || !Number.isFinite(funds) || funds < 0) {
+  const funds = parseAmountInput(draft.availableFunds);
+  if (funds === null || funds < 0) {
     errors.availableFunds = "Enter the opening balance: money the business has today. Enter 0 if none.";
   }
 
-  const expenses = Number(draft.expectedMonthlyExpenses);
-  if (draft.expectedMonthlyExpenses === "" || !Number.isFinite(expenses) || expenses < 0) {
+  const expenses = parseAmountInput(draft.expectedMonthlyExpenses);
+  if (expenses === null || expenses < 0) {
     errors.expectedMonthlyExpenses = "Enter a starting monthly expense estimate. Enter 0 if none.";
   }
 
@@ -207,8 +208,8 @@ export function validateNumbers(draft: BusinessProfileDraft): BusinessFieldError
   // Only checked when they typed something. Left alone — or cleared — it takes
   // the default, which is the whole point of it being optional.
   if (draft.thresholdTouched && draft.largeExpenseThresholdPesos !== "") {
-    const pesos = Number(draft.largeExpenseThresholdPesos);
-    if (!Number.isFinite(pesos) || pesos <= 0) {
+    const pesos = parseAmountInput(draft.largeExpenseThresholdPesos);
+    if (pesos === null || pesos <= 0) {
       errors.largeExpenseThresholdPesos = "Enter an amount above 0, or leave it blank for the default.";
     }
   }

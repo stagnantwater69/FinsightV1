@@ -127,6 +127,8 @@ interface AccountSessionGuard {
 // start identity check; ordinary requests keep their endpoint-appropriate
 // lifetimes, and uploads retain their separate two-minute timeout.
 const BOOTSTRAP_PROFILE_TIMEOUT_MS = 10_000;
+// The owner is watching a spinner on the sign-in screen; 90 s of silence reads as a frozen app.
+const LOGIN_TIMEOUT_MS = 30_000;
 
 async function fetchProfile(): Promise<Profile | null> {
   const controller = new AbortController();
@@ -346,7 +348,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(input: LoginInput) {
     const data = await api.post<{ profile: Profile; session: { access_token: string; refresh_token: string } }>(
       "/auth/login",
-      input
+      input,
+      { timeoutMs: LOGIN_TIMEOUT_MS }
     );
     await adoptSession(data.session, data.profile);
   }

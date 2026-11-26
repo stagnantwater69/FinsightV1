@@ -6,6 +6,8 @@ import { DateField } from "../components/DateField";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api, errorMessage } from "../lib/api";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import { amountInputError, parseAmountInput } from "../lib/money";
+import { useDiscardGuard } from "../lib/useDiscardGuard";
 import { setFlash } from "../lib/flash";
 import * as haptics from "../lib/haptics";
 import { dueDateISO, intervalDaysError } from "../lib/recurringAgenda";
@@ -36,6 +38,8 @@ import type { InsightsScreenProps } from "../navigation/types";
  * way to calibrate. The server's default covers it, and the finding it drives
  * is advisory either way.
  */
+const NEW_SCHEDULE_SNAPSHOT = JSON.stringify(["", "", null, "30", "", "", true]);
+
 export function RecurringScheduleScreen({ navigation, route }: InsightsScreenProps<"RecurringSchedule">) {
   const t = useTheme();
   const { brand } = t;
@@ -66,6 +70,10 @@ export function RecurringScheduleScreen({ navigation, route }: InsightsScreenPro
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // What the form held when it opened: the clearDraft defaults, or the row once loaded for editing.
+  const [baseline, setBaseline] = useState<string | null>(editing ? null : NEW_SCHEDULE_SNAPSHOT);
+  const snapshot = JSON.stringify([label, vendor, categoryId, intervalDays, expectedAmount, nextDueDate, isActive]);
+  const leaving = useDiscardGuard(navigation, false, !busy && !loading && baseline !== null && snapshot !== baseline);
   useEffect(() => {
     mutation.current = null;
     setBusy(false);
@@ -112,6 +120,7 @@ export function RecurringScheduleScreen({ navigation, route }: InsightsScreenPro
       const requestBusinessProfileId = selectedBusinessProfileId;
       let cancelled = false;
       clearDraft();
+      setBaseline(null);
       (async () => {
         setLoading(true);
         setLoadedBusinessProfileId(null);
@@ -142,6 +151,7 @@ export function RecurringScheduleScreen({ navigation, route }: InsightsScreenPro
           // value that has none. See lib/recurringAgenda.ts.
           setNextDueDate(dueDateISO(row.nextDueDate));
           setIsActive(row.isActive);
+          setBaseline(JSON.stringify([row.label, row.vendor ?? "", row.categoryId, String(row.intervalDays), String(row.expectedAmount), dueDateISO(row.nextDueDate), row.isActive]));
           setLoadedBusinessProfileId(row.businessProfileId);
         } catch (err) {
           if (!cancelled) setError(errorMessage(err));
@@ -169,14 +179,15 @@ export function RecurringScheduleScreen({ navigation, route }: InsightsScreenPro
       setError("This repeating payment is not available for the selected business.");
       return;
     }
-    const amount = Number(expectedAmount);
+    const amount = parseAmountInput(expectedAmount) ?? 0;
     const interval = Number(intervalDays);
 
     if (!label.trim()) return setError("Give this payment a name, so you recognise it on the list.");
     if (!categoryId) return setError("Choose the category this payment belongs to.");
     const intervalProblem = intervalDaysError(interval);
     if (intervalProblem) return setError(intervalProblem);
-    if (!Number.isFinite(amount) || amount <= 0) return setError("Enter an amount greater than zero.");
+    const amountProblem = amountInputError(expectedAmount);
+    if (amountProblem) return setError(amountProblem);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(nextDueDate)) return setError("Choose the date this is next due.");
 
     const request = {};
@@ -216,6 +227,7 @@ export function RecurringScheduleScreen({ navigation, route }: InsightsScreenPro
       }
       if (generation !== scope.current.generation || mutation.current !== request) return;
       haptics.succeeded();
+      leaving.current = true;
       setFlash(editing ? "Repeating payment updated." : "FinSight is now watching this payment.");
       navigation.goBack();
     } catch (err) {
@@ -252,6 +264,7 @@ export function RecurringScheduleScreen({ navigation, route }: InsightsScreenPro
       if (generation !== scope.current.generation || mutation.current !== request) return;
       haptics.succeeded();
       setConfirmDelete(false);
+      leaving.current = true;
       setFlash("Repeating payment removed.");
       navigation.goBack();
     } catch (err) {

@@ -908,10 +908,12 @@ describe("per-attempt scan timings", () => {
         persistMs: expect.any(Number),
         totalMs: expect.any(Number),
       });
-      const stages = ["restoreMs", "ocrMs", "providerMs", "finalizeMs", "persistMs"] as const;
-      const stageSum = stages.reduce((sum, stage) => sum + (lines[0]![stage] as number), 0);
+      const ms = (stage: string) => lines[0]![stage] as number;
+      // In "always" routing the provider runs alongside OCR, so only the longer of the two adds to the total.
+      const sequential = [ms("restoreMs"), Math.max(ms("ocrMs"), ms("providerMs")), ms("finalizeMs"), ms("persistMs")];
+      const stageSum = sequential.reduce((sum, value) => sum + value, 0);
       // Rounded per stage, so allow one millisecond each.
-      expect(lines[0]!.totalMs as number).toBeGreaterThanOrEqual(stageSum - stages.length);
+      expect(ms("totalMs")).toBeGreaterThanOrEqual(stageSum - sequential.length);
     } finally {
       info.mockRestore();
     }

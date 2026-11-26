@@ -17,6 +17,7 @@ import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
 import type { BusinessProfile, FinancialPosition } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import { useDiscardGuard } from "../lib/useDiscardGuard";
 import { availableFundsProvenance, latestCompletableMonth, monthlyExpenseBasisProvenance } from "../lib/financialPosition";
 import { formatMonthLabel, shiftMonthKey } from "../lib/monthEndReview";
 import { useInsight } from "../lib/useInsight";
@@ -374,6 +375,8 @@ export function BusinessProfileFormScreen({ navigation, route }: MoreScreenProps
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
   const [fieldErrors, setFieldErrors] = useState<BusinessFieldErrors>({});
+  const initialForm = useRef(form);
+  const leaving = useDiscardGuard(navigation, false, !busy && JSON.stringify(form) !== JSON.stringify(initialForm.current));
   // The logo is uploaded on its own, immediately, rather than travelling with
   // the form — so it is held apart from the fields Save writes.
   const [logoUrl, setLogoUrl] = useState<string | null>(existing?.logoUrl ?? null);
@@ -418,6 +421,7 @@ export function BusinessProfileFormScreen({ navigation, route }: MoreScreenProps
       } else {
         await createProfile(payload);
       }
+      leaving.current = true;
       navigation.goBack();
     } catch (err) {
       setError(errorMessage(err));

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
-import { checkNode, npmCliPath, parseArgs, plan, upperDrive, verify } from "./verify.mjs";
+import { checkNode, lockedEngineIsCurrent, npmCliPath, parseArgs, plan, upperDrive, verify } from "./verify.mjs";
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), "finsight-verify-selftest-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
@@ -122,6 +122,47 @@ test("type parity is skipped without backend/node_modules, since it loads TypeSc
   assert.equal(parity.status, "skipped");
   assert.equal(parity.log, null);
   assert.match(parity.reason, /backend\/node_modules is missing/);
+});
+
+test("prisma generate blocked only by a locked, identical engine counts as passed", async () => {
+  const f = fixture({ exitCodes: { "prisma generate": 1 } });
+  const seen = [];
+  await verify({ ...f.options("fast"), engineCurrent: (dir, since, log) => { seen.push({ dir, since, log }); return true; } });
+  const generate = f.runJson().steps.find((s) => s.name === "backend-prisma-generate");
+  assert.equal(generate.status, "passed");
+  assert.equal(generate.exitCode, 1);
+  assert.match(generate.reason, /byte-identical/);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].dir, path.join(f.root, "backend", "node_modules", ".prisma", "client"));
+  assert.equal(f.runJson().status, "passed");
+});
+
+const LOCKED_LOG = "Error:\nEPERM: operation not permitted, rename\n'C:\\x\\query_engine-windows.dll.node.tmp26912' -> 'C:\\x\\query_engine-windows.dll.node'\n";
+
+function engineDir({ engine = "engine-v1", copy = "engine-v1", log = LOCKED_LOG } = {}) {
+  const dir = path.join(scratch, `client-${sequence++}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "query_engine-windows.dll.node"), engine);
+  writeFileSync(path.join(dir, "query_engine-windows.dll.node.tmp26912"), copy);
+  writeFileSync(path.join(dir, "generate.log"), log);
+  return { dir, copy: path.join(dir, "query_engine-windows.dll.node.tmp26912"), log: path.join(dir, "generate.log") };
+}
+
+test("a locked engine is current only when the run's copy matches it and the log shows the rename failure", () => {
+  const same = engineDir();
+  assert.equal(lockedEngineIsCurrent(same.dir, 0, same.log), true);
+  assert.equal(existsSync(same.copy), false, "the identical copy is cleaned up");
+
+  const changed = engineDir({ copy: "engine-v2" });
+  assert.equal(lockedEngineIsCurrent(changed.dir, 0, changed.log), false);
+  assert.equal(existsSync(changed.copy), true, "a newer engine is left for the owner to install");
+
+  const otherError = engineDir({ log: "Error: P1012 schema validation failed\n" });
+  assert.equal(lockedEngineIsCurrent(otherError.dir, 0, otherError.log), false);
+
+  const stale = engineDir();
+  assert.equal(lockedEngineIsCurrent(stale.dir, Date.now() + 60_000, stale.log), false, "copies from earlier runs do not count");
+  assert.equal(lockedEngineIsCurrent(path.join(scratch, "missing"), 0, same.log), false);
 });
 
 test("a failed setup step skips the rest of that project only", async () => {

@@ -379,6 +379,8 @@ export function Textarea({ className = "", ...rest }: TextareaHTMLAttributes<HTM
  * The PHP prefix is aria-hidden: it is a visual affordance, and the label
  * already says which currency this is.
  */
+const EXPONENT_KEYS = new Set(["e", "E", "+"]);
+
 export function MoneyInput({ className = "", ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   const { id, describedBy, invalid } = useFieldWiring(rest);
   return (
@@ -406,6 +408,12 @@ export function MoneyInput({ className = "", ...rest }: InputHTMLAttributes<HTML
          */
         onWheel={(e) => e.currentTarget.blur()}
         {...rest}
+        // A number field accepts exponent form: "1e3" stays on screen while
+        // the record saves PHP 1,000. Pesos are never written that way, so the
+        // keys that start an exponent are refused, typed or pasted. After the
+        // spread and chained, so a call site's own handler cannot drop the guard.
+        onKeyDown={(e) => { if (EXPONENT_KEYS.has(e.key)) e.preventDefault(); rest.onKeyDown?.(e); }}
+        onPaste={(e) => { if (/[eE+]/.test(e.clipboardData.getData("text"))) e.preventDefault(); rest.onPaste?.(e); }}
         id={id}
         aria-describedby={describedBy}
         aria-invalid={invalid}

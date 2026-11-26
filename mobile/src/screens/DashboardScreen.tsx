@@ -8,7 +8,7 @@ import { MoneyFlowPanel, SpendingSplitCard, TodayGoalSummary } from "../componen
 import { IconRow, SectionTitle } from "../components/CoachKit";
 import { FutureDatedNotice } from "../components/FutureDatedNotice";
 import { GreetingHero } from "../components/GreetingHero";
-import { openFlaggedRecords } from "../lib/flaggedRecordsNavigation";
+import { openReviewTab } from "../lib/flaggedRecordsNavigation";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
 import { AskFinSight } from "../components/AskFinSight";
 import { SkeletonDashboard } from "../components/Skeleton";
@@ -216,7 +216,7 @@ function DashboardContent({ navigation }: DashboardScreenProps<"DashboardHome">)
         params: { profile: selected },
       });
     } else if (summary.recoveryStatus.status === "data_incomplete" || summary.recordsNeedingReview > 0) {
-      openFlaggedRecords(navigation, "Dashboard");
+      openReviewTab(navigation);
     } else if (summary.recoveryStatus.status === "no_current_month_data") {
       navigation.navigate("Records", { screen: "AddSales" });
     } else {
@@ -436,7 +436,7 @@ function DashboardContent({ navigation }: DashboardScreenProps<"DashboardHome">)
                   title="Records to review"
                   detail={summary.recordsNeedingReview > 0 ? null : "All clear"}
                   right={<T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.bodyLg, color: t.textPrimary }}>{summary.recordsNeedingReview}</T>}
-                  onPress={summary.recordsNeedingReview > 0 ? () => openFlaggedRecords(navigation, "Dashboard") : undefined}
+                  onPress={summary.recordsNeedingReview > 0 ? () => openReviewTab(navigation) : undefined}
                   accessibilityLabel={`${summary.recordsNeedingReview} to review`}
                 />
                 {topOpportunity ? (

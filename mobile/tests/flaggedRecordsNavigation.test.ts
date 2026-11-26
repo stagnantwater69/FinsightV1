@@ -1,10 +1,11 @@
 import { CommonActions, StackActions, StackRouter, TabActions, TabRouter } from '@react-navigation/routers';
 import { describe, expect, it, vi } from 'vitest';
-import { openFlaggedRecords, returnFromFlaggedRecords } from '../src/lib/flaggedRecordsNavigation';
+import { openFlagDetail, openReviewTab, returnFromFlagDetail } from '../src/lib/flaggedRecordsNavigation';
+import type { RecordItem } from '../src/lib/types';
 
 function journey() {
   const recordsRouter = StackRouter({ initialRouteName: 'RecordsList' });
-  const recordsOptions = { routeNames: ['RecordsList', 'FlaggedRecords', 'ImportCsv'], routeParamList: {}, routeGetIdList: {} };
+  const recordsOptions = { routeNames: ['RecordsList', 'FlagDetail', 'ImportCsv'], routeParamList: {}, routeGetIdList: {} };
   let records = recordsRouter.getInitialState(recordsOptions);
   const insightsRouter = StackRouter({ initialRouteName: 'ExpenseBehavior' });
   const insightsOptions = { routeNames: ['ExpenseBehavior', 'RecoveryTarget'], routeParamList: {}, routeGetIdList: {} };
@@ -30,7 +31,6 @@ function journey() {
     canGoBack: vi.fn(() => true),
     goBack: vi.fn(() => dispatchRecords(CommonActions.goBack())),
     reset: vi.fn((state: { index: number; routes: { name: string }[] }) => dispatchRecords(CommonActions.reset(state))),
-    setParams: vi.fn((params: { from: undefined }) => dispatchRecords(CommonActions.setParams(params))),
     navigate: vi.fn((name: string, params?: object) => {
       if (tabsOptions.routeNames.includes(name)) {
         dispatchTabs(CommonActions.navigate(name, params));
@@ -56,64 +56,49 @@ function journey() {
     tapRecords: () => dispatchTabs(TabActions.jumpTo('Records')),
     tapDashboard: () => dispatchTabs(TabActions.jumpTo('Dashboard')),
     pushImport: () => dispatchRecords(StackActions.push('ImportCsv')),
-    rootFlagged: () => dispatchRecords(CommonActions.reset({ index: 0, routes: [{ name: 'FlaggedRecords' }] })),
+    rootDetail: () => dispatchRecords(CommonActions.reset({ index: 0, routes: [{ name: 'FlagDetail' }] })),
   };
 }
 
-describe('Flagged review return navigation', () => {
-  it('returns first and repeat expense reviews to the retained ExpenseBehavior route and restores RecordsList', () => {
+const record = { id: 201, type: 'expense' } as RecordItem;
+
+describe('Review tab navigation', () => {
+  it('opens a flagged record and returns to the retained Review tab, leaving Records on its list', () => {
     const j = journey();
     const expenseKey = j.insights().routes[0]!.key;
     for (let visit = 0; visit < 2; visit += 1) {
-      openFlaggedRecords(j.navigation, 'ExpenseBehavior');
+      openFlagDetail(j.navigation, record);
       expect(j.navigation.navigate).toHaveBeenLastCalledWith('Records', {
-        screen: 'FlaggedRecords', initial: false, params: { from: 'ExpenseBehavior' },
+        screen: 'FlagDetail', initial: false, params: { record },
       });
       expect(j.tab()).toBe('Records');
-      expect(j.records().routes.map((route) => route.name)).toEqual(['RecordsList', 'FlaggedRecords']);
-      returnFromFlaggedRecords(j.navigation, 'ExpenseBehavior');
+      expect(j.records().routes.map((route) => route.name)).toEqual(['RecordsList', 'FlagDetail']);
+      returnFromFlagDetail(j.navigation);
       expect(j.tab()).toBe('Insights');
-      expect(j.insights().routes[j.insights().index]!.name).toBe('ExpenseBehavior');
-      expect(j.insights().routes[j.insights().index]!.key).toBe(expenseKey);
+      const current = j.insights().routes[j.insights().index]!;
+      expect(current.name).toBe('ExpenseBehavior');
+      expect(current.key).toBe(expenseKey);
+      expect(current.params).toMatchObject({ section: 'alerts' });
       j.tapRecords();
       expect(j.records().routes.map((route) => route.name)).toEqual(['RecordsList']);
     }
-    expect(j.navigation.canGoBack).not.toHaveBeenCalled();
   });
 
-  it('returns a dashboard-origin review to Home and leaves RecordsList available', () => {
+  it('opens the Review tab from another tab', () => {
     const j = journey();
     j.tapDashboard();
-    openFlaggedRecords(j.navigation, 'Dashboard');
-    expect(j.records().routes[j.records().index]!.params).toMatchObject({ from: 'Dashboard' });
-    returnFromFlaggedRecords(j.navigation, 'Dashboard');
-    expect(j.tab()).toBe('Dashboard');
-    j.tapRecords();
-    expect(j.records().routes.map((route) => route.name)).toEqual(['RecordsList']);
+    openReviewTab(j.navigation);
+    expect(j.tab()).toBe('Insights');
+    expect(j.navigation.navigate).toHaveBeenLastCalledWith('Insights', { screen: 'ExpenseBehavior', params: { section: 'alerts' } });
   });
 
-  it('keeps a later direct Records entry local after a previous expense-origin visit', () => {
-    const j = journey();
-    openFlaggedRecords(j.navigation, 'ExpenseBehavior');
-    returnFromFlaggedRecords(j.navigation, 'ExpenseBehavior');
-    j.tapRecords();
-    j.pushImport();
-    j.navigation.navigate('FlaggedRecords', { from: undefined });
-    expect(j.records().routes[j.records().index]!.params).toEqual({ from: undefined });
-    returnFromFlaggedRecords(j.navigation);
-    expect(j.tab()).toBe('Records');
-    expect(j.records().routes[j.records().index]!.name).toBe('ImportCsv');
-    expect(j.navigation.navigate).toHaveBeenLastCalledWith('FlaggedRecords', { from: undefined });
-  });
-
-  it.each(['ExpenseBehavior', 'Dashboard', undefined])('restores a legacy root RecordsList with origin %s', (origin) => {
+  it('restores a root RecordsList when a record was the only screen in the stack', () => {
     const j = journey();
     j.tapRecords();
-    j.rootFlagged();
-    returnFromFlaggedRecords(j.navigation, origin);
+    j.rootDetail();
+    returnFromFlagDetail(j.navigation);
     expect(j.records().routes.map((route) => route.name)).toEqual(['RecordsList']);
-    expect(j.tab()).toBe(origin === 'ExpenseBehavior' ? 'Insights' : origin === 'Dashboard' ? 'Dashboard' : 'Records');
+    expect(j.tab()).toBe('Insights');
     expect(j.navigation.goBack).not.toHaveBeenCalled();
-    expect(j.navigation.canGoBack).not.toHaveBeenCalled();
   });
 });

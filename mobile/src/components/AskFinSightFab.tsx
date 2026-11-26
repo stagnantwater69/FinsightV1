@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
-import { Animated, Image, Platform, Pressable } from "react-native";
+import { Animated, Image, Platform, Pressable, useWindowDimensions } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { barAreaHeight } from "./floatingTabBarLayout";
 import { space } from "../theme/tokens";
 import { useTourTarget } from "./tour/targets";
 import { cropArtToBox, FAB_ART_BOUNDS } from "../lib/artCrop";
@@ -46,6 +48,8 @@ export function AskFinSightFab({ onPress }: { onPress: () => void }) {
   const bob = useRef(new Animated.Value(0)).current;
   const press = useRef(new Animated.Value(1)).current;
   const reduceMotion = useReducedMotion();
+  const insets = useSafeAreaInsets();
+  const { fontScale } = useWindowDimensions();
   // Round button, round ring — a rounded square around a circle reads as a
   // near miss rather than as a deliberate highlight.
   const tourTarget = useTourTarget("ask-finsight", { radius: 999 });
@@ -76,13 +80,11 @@ export function AskFinSightFab({ onPress }: { onPress: () => void }) {
 
   return (
     <Animated.View
-      // No safe-area inset needed: the tab bar is laid out below the screen
-      // rather than over it, so this sits clear of both the bar and the
-      // phone's own navigation gestures.
+      // The tab bar floats over the screen, so sit just above it and the "+".
       style={{
         position: "absolute",
         right: space.lg,
-        bottom: space.lg,
+        bottom: barAreaHeight(insets.bottom, fontScale) + space.sm,
         transform: [{ translateY }, { scale: press }],
       }}
     >
@@ -136,4 +138,5 @@ export function AskFinSightFab({ onPress }: { onPress: () => void }) {
  * How much room a screen must leave at the end of its scroll so the FAB
  * never covers the last card.
  */
-export const FAB_CLEARANCE = SIZE + space.lg * 2;
+// shortcut: assumes a 24pt bottom inset and default font scale; make it a hook if last cards hide on tall-inset phones.
+export const FAB_CLEARANCE = SIZE + space.lg * 2 + barAreaHeight(24);

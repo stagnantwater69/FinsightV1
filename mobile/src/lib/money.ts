@@ -18,11 +18,33 @@ export function formatMoney(
   return `${sign}${bare ? "" : "PHP "}${abs}`;
 }
 
+// A plain decimal, optionally with correct thousands commas: "1250.5", "1,250.50", ".5", "-5". Not "1e3", "0x10" or "12,50".
+const AMOUNT_SHAPE = /^-?(?=[\d.]*\d)(?:\d{1,3}(?:,\d{3})+|\d*)(?:\.\d*)?$/;
+
+/**
+ * What the owner typed in an amount box, as a number, or null when it is blank
+ * or not a plain decimal. `Number()` alone read "1e3" as 1000 and "0x10" as 16,
+ * and refused "1,250.50" as if it were zero.
+ */
+export function parseAmountInput(raw: string): number | null {
+  const cleaned = raw.trim();
+  return AMOUNT_SHAPE.test(cleaned) ? Number(cleaned.replace(/,/g, "")) : null;
+}
+
+/** The message a manual amount box shows before saving, or null when the amount is usable (above zero). */
+export function amountInputError(raw: string): string | null {
+  const value = parseAmountInput(raw);
+  if (value === null && raw.trim() !== "") return "Enter the amount in numbers, like 1250.50.";
+  return value === null || value <= 0 ? "Enter an amount greater than zero." : null;
+}
+
 /** A short figure for tight spots (calendar cells, slider ends): 4.1k, 1.2M. The full amount is always shown nearby. */
 export function compactAmount(value: number): string {
   const abs = Math.abs(value);
-  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (abs >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  const short = (n: number, unit: string) => `${n.toFixed(1).replace(/\.0$/, "")}${unit}`;
+  // Thresholds sit where rounding would print 1000k or 1000, so those step up a unit.
+  if (abs >= 999_950) return short(value / 1_000_000, "M");
+  if (abs >= 999.5) return short(value / 1_000, "k");
   return String(Math.round(value));
 }
 

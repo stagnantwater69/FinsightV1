@@ -21,7 +21,7 @@ describe('cold-start session restoration', () => {
    */
   it('passes the bootstrap abort signal to fetch', () => {
     expect(api).toMatch(/async function request<[\s\S]*?signal\?: AbortSignal;/);
-    expect(api).toContain('withTimeout(opts.signal, JSON_REQUEST_TIMEOUT_MS)');
+    expect(api).toContain('withTimeout(opts.signal, opts.timeoutMs ?? JSON_REQUEST_TIMEOUT_MS)');
     expect(api).toContain('signal: deadline.signal');
   });
 });
