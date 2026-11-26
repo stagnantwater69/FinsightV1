@@ -41,6 +41,7 @@ import { radius, space } from "../../theme/tokens";
 import { TAP_FLOOR } from "../../components/touchTarget";
 import { useTheme } from "../../context/ThemeContext";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
+import { amountInputError, parseAmountInput } from "../../lib/money";
 import { CategoryPicker } from "./shared";
 import { businessToday } from "../../lib/businessDate";
 import { ScanBand } from "./scanReceipt/ScanBand";
@@ -1122,15 +1123,15 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
   const isItemised = items.length > 1;
   /** An added line only counts once it is actually usable. */
   const usableAddedItems = addedItems.filter(
-    (a) => a.name.trim() !== "" && Number(a.amount) > 0 && a.categoryId != null,
+    (a) => a.name.trim() !== "" && (parseAmountInput(a.amount) ?? 0) > 0 && a.categoryId != null,
   );
   // Added lines count toward the items' total the moment they are complete, so
   // adding a missed line closes the gap immediately rather than after saving.
   const itemsTotal =
     items.reduce((sum, i) => sum + i.amount, 0) +
-    usableAddedItems.reduce((sum, a) => sum + Number(a.amount), 0);
-  const totalValue = Number(amount);
-  const gap = Number.isFinite(totalValue) ? gapCentavos(totalValue, itemsTotal) : 0;
+    usableAddedItems.reduce((sum, a) => sum + (parseAmountInput(a.amount) ?? 0), 0);
+  const totalValue = parseAmountInput(amount);
+  const gap = totalValue !== null ? gapCentavos(totalValue, itemsTotal) : 0;
   const everyItemHasCategory =
     items.every((i) => itemCategories[i.id] != null) &&
     // A half-typed added row must not enable Confirm.
@@ -1194,8 +1195,9 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
   }
 
   async function confirm(duplicateDecision?: ReceiptDuplicateDecision) {
-    const value = Number(amount);
-    if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
+    const amountProblem = amountInputError(amount);
+    if (amountProblem) return setError(amountProblem);
+    const value = parseAmountInput(amount) ?? 0;
     if (isItemised) {
       if (!everyItemHasCategory) return setError("Every item needs a category before this can be saved.");
       if (!planResolved) return setError("Choose how to account for the difference first.");
@@ -1223,7 +1225,7 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
             itemAssignments: items.map((i) => ({ itemId: i.id, categoryId: itemCategories[i.id]! })),
             additionalItems: usableAddedItems.map((a) => ({
               name: a.name.trim(),
-              amount: Number(a.amount),
+              amount: parseAmountInput(a.amount) ?? 0,
               categoryId: a.categoryId!,
             })),
             plan,
@@ -1408,10 +1410,11 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
   async function saveScannedItem() {
     if (!scan || !editingItem) return;
     const name = editingItem.name.trim();
-    const value = Number(editingItem.amount);
+    const value = parseAmountInput(editingItem.amount) ?? 0;
+    const amountProblem = amountInputError(editingItem.amount);
     const fieldErrors = {
       ...(!name ? { name: "Enter the item name printed on the receipt." } : name.length > 255 ? { name: "Use 255 characters or fewer." } : {}),
-      ...(!Number.isFinite(value) || value <= 0 ? { amount: "Enter an amount greater than zero." } : {}),
+      ...(amountProblem ? { amount: amountProblem } : {}),
     };
     setEditingItemErrors(fieldErrors);
     if (Object.keys(fieldErrors).length > 0) return;
@@ -1572,7 +1575,7 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
       groups.set(key, g);
     };
     for (const item of items) add(itemCategories[item.id] ?? null, item.amount);
-    for (const a of usableAddedItems) add(a.categoryId, Number(a.amount));
+    for (const a of usableAddedItems) add(a.categoryId, parseAmountInput(a.amount) ?? 0);
     return [...groups.entries()];
   })();
 

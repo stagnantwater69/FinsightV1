@@ -26,7 +26,7 @@ let profilesLoading = false;
 let profilesError: string | null = null;
 let refocus: (() => void | (() => void)) | undefined;
 
-vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true, useFocusEffect: (effect: () => void | (() => void)) => {
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true, usePreventRemove: () => {}, useFocusEffect: (effect: () => void | (() => void)) => {
   refocus = effect;
   React.useEffect(effect, [effect]);
 } }));

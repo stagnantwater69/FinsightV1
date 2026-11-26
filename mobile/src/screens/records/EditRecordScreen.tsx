@@ -19,6 +19,8 @@ import {
 import { space } from "../../theme/tokens";
 import { RECORD_SOURCE_LABELS, type RecordItem, type RecordSource } from "../../lib/types";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
+import { amountInputError, parseAmountInput } from "../../lib/money";
+import { useDiscardGuard } from "../../lib/useDiscardGuard";
 import { setFlash } from "../../lib/flash";
 import { badges, CategoryPicker } from "./shared";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
@@ -47,6 +49,8 @@ export function EditRecordScreen({ route, navigation }: RecordsScreenProps<"Edit
   const [busy, setBusy] = useState(false);
   const operation = useImportOperation(selected?.id);
   useFocusEffect(useCallback(() => () => { operation.cancel(); setBusy(false); }, [operation]));
+  const edited = categoryId !== (record.categoryId ?? null) || date !== record.date.slice(0, 10) || description !== record.description || vendor !== (record.vendor ?? "") || amount !== String(record.amount);
+  const leaving = useDiscardGuard(navigation, false, !busy && edited);
   /*
    * Vendor only exists on an expense — a sales record has no such field
    * server-side, so it is not rendered at all. The chain therefore has to be
@@ -152,9 +156,10 @@ export function EditRecordScreen({ route, navigation }: RecordsScreenProps<"Edit
 
   async function save() {
     if (!recordCanBeMutated()) return;
-    const value = Number(amount);
+    const value = parseAmountInput(amount) ?? 0;
     if (!description.trim()) return setError("Give this record a description.");
-    if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
+    const amountProblem = amountInputError(amount);
+    if (amountProblem) return setError(amountProblem);
     if (isExpense && !categoryId) return setError("Choose a category first.");
     if (!baselineChoice.check()) return;
     const task = operation.begin();
@@ -180,6 +185,7 @@ export function EditRecordScreen({ route, navigation }: RecordsScreenProps<"Edit
       );
       if (!operation.current(task)) return;
       haptics.succeeded();
+      leaving.current = true;
       setFlash("Record updated.");
       navigation.goBack();
     } catch (err) {
@@ -219,6 +225,7 @@ export function EditRecordScreen({ route, navigation }: RecordsScreenProps<"Edit
       haptics.succeeded();
       // Word for word what the list says when the swipe does this, so the app
       // does not describe one action two ways.
+      leaving.current = true;
       setFlash("Marked reviewed and not a duplicate.");
       navigation.goBack();
     } catch (err) {
@@ -264,6 +271,7 @@ export function EditRecordScreen({ route, navigation }: RecordsScreenProps<"Edit
               // A deletion leaves the screen the same way a save does, and the
               // record it removed is gone from the list behind it — so without
               // a line here the only evidence is an absence.
+              leaving.current = true;
               setFlash("Record deleted.");
               navigation.goBack();
             } catch (err) {

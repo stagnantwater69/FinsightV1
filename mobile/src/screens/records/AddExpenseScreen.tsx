@@ -14,6 +14,8 @@ import { useImportOperation } from "../../lib/useImportOperation";
 import * as haptics from "../../lib/haptics";
 import { space } from "../../theme/tokens";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
+import { amountInputError, parseAmountInput } from "../../lib/money";
+import { useDiscardGuard } from "../../lib/useDiscardGuard";
 import { CategoryPicker } from "./shared";
 import { businessToday } from "../../lib/businessDate";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
@@ -47,6 +49,7 @@ export function AddExpenseScreen({ navigation, route }: RecordsScreenProps<"AddE
     setCategoryId(draft.categoryId ?? null); setDate(draft.date); setDescription(draft.description); setVendor(draft.vendor ?? ""); setAmount(draft.amount);
   }, { date, description, vendor, amount, categoryId });
   frozen.current = busy || recovery.frozen;
+  const leaving = useDiscardGuard(navigation, false, !busy && Boolean(categoryId || description.trim() || vendor.trim() || amount.trim()));
   useEffect(() => {
     retryPrompt.current = null;
     setCategoryId(null);
@@ -73,6 +76,7 @@ export function AddExpenseScreen({ navigation, route }: RecordsScreenProps<"AddE
     navigation.setParams({ prefill: undefined });
   }, [prefill, formLocked, navigation]);
   function finish() {
+    leaving.current = true;
     if (from === "PaymentCalendar") {
       // The calendar shows its own "Payment recorded" status, so no flash here.
       navigation.setParams({ from: undefined });
@@ -117,11 +121,12 @@ export function AddExpenseScreen({ navigation, route }: RecordsScreenProps<"AddE
       ], { cancelable: true, onDismiss: () => { if (retryPrompt.current === pending.key) retryPrompt.current = null; } });
       return;
     }
-    const value = Number(amount);
+    const value = parseAmountInput(amount) ?? 0;
     if (!retryApproval) {
       if (!categoryId) return setError("Choose a category first.");
       if (!description.trim()) return setError("Give this expense a description.");
-      if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
+      const amountProblem = amountInputError(amount);
+      if (amountProblem) return setError(amountProblem);
       if (!baselineChoice.check()) return;
     }
     const task = operation.begin();

@@ -2,6 +2,7 @@ import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 import { newIdempotencyKey } from "./csvImport";
 import { FIELD_LIMITS } from "./fieldLimits";
+import { parseAmountInput } from "./money";
 import { splitUtf8 } from "./secureSessionStorage";
 
 export type ManualRecordKind = "expense" | "sales";
@@ -118,7 +119,7 @@ function verifiedIntent(value: unknown, scope: ManualRecordScope): ManualRecordI
     || (payload.availableFundsBaselineAt !== undefined && (typeof payload.availableFundsBaselineAt !== "string" || !Number.isFinite(Date.parse(payload.availableFundsBaselineAt))))
     || ((payload.includedInAvailableFundsBaseline !== undefined) !== (payload.availableFundsBaselineAt !== undefined))
     || !draft || draft.date !== payload.date || typeof draft.description !== "string" || draft.description.trim() !== payload.description
-    || typeof draft.amount !== "string" || Number(draft.amount) !== payload.amount
+    || typeof draft.amount !== "string" || parseAmountInput(draft.amount) !== payload.amount
     || (scope.kind === "expense" && (draft.categoryId !== payload.categoryId || typeof draft.vendor !== "string" || (draft.vendor.trim() || undefined) !== payload.vendor))) {
     throw new Error("Saved recovery details do not match this account and business. Check your records before replacing them.");
   }

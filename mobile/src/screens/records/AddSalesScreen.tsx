@@ -12,6 +12,8 @@ import { DateField } from "../../components/DateField";
 import * as haptics from "../../lib/haptics";
 import { space } from "../../theme/tokens";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
+import { amountInputError, parseAmountInput } from "../../lib/money";
+import { useDiscardGuard } from "../../lib/useDiscardGuard";
 import { businessToday } from "../../lib/businessDate";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
 import { useImportOperation } from "../../lib/useImportOperation";
@@ -43,6 +45,7 @@ export function AddSalesScreen({ navigation, route }: RecordsScreenProps<"AddSal
     setDate(draft.date); setDescription(draft.description); setAmount(draft.amount);
   }, { date, description, amount });
   frozen.current = busy || recovery.frozen;
+  const leaving = useDiscardGuard(navigation, false, !busy && Boolean(amount.trim() || description.trim() !== "Daily sales"));
   useEffect(() => {
     retryPrompt.current = null;
     setDate(businessToday(businessTimezone.current));
@@ -78,7 +81,7 @@ export function AddSalesScreen({ navigation, route }: RecordsScreenProps<"AddSal
       if (!task) return;
       setBusy(true);
       try {
-        if (await recovery.confirm(pending, recovery.confirmedRecordId) && operation.current(task)) { setFlash("Sales record saved."); navigation.goBack(); }
+        if (await recovery.confirm(pending, recovery.confirmedRecordId) && operation.current(task)) { leaving.current = true; setFlash("Sales record saved."); navigation.goBack(); }
       } finally { if (operation.current(task)) setBusy(false); operation.finish(task); }
       return;
     }
@@ -92,10 +95,11 @@ export function AddSalesScreen({ navigation, route }: RecordsScreenProps<"AddSal
       ], { cancelable: true, onDismiss: () => { if (retryPrompt.current === pending.key) retryPrompt.current = null; } });
       return;
     }
-    const value = Number(amount);
+    const value = parseAmountInput(amount) ?? 0;
     if (!retryApproval) {
       if (!description.trim()) return setError("Give this sales record a description.");
-      if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
+      const amountProblem = amountInputError(amount);
+      if (amountProblem) return setError(amountProblem);
       if (!baselineChoice.check()) return;
     }
     const task = operation.begin();
@@ -121,6 +125,7 @@ export function AddSalesScreen({ navigation, route }: RecordsScreenProps<"AddSal
       if (!operation.current(task) || !recovery.current(intent)) return;
       if (!await recovery.confirm(intent, recordId) || !operation.current(task)) return;
       haptics.succeeded();
+      leaving.current = true;
       setFlash("Sales record saved.");
       navigation.goBack();
     } catch (err) {
