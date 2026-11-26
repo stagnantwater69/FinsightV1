@@ -23,7 +23,7 @@ export type { RecordOrigin } from "../lib/types";
 
 export function RecordOriginPanel({ origin, recordAmount }: { origin: RecordOrigin; recordAmount: number }) {
   const t = useTheme();
-  const { brand, ink, paper, statusText } = t;
+  const { brand, ink, paper } = t;
   if (origin.kind === "csv_import") {
     return (
       <View style={{ padding: space.md, backgroundColor: paper[100], borderRadius: radius.md }}>
@@ -66,6 +66,7 @@ export function RecordOriginPanel({ origin, recordAmount }: { origin: RecordOrig
    * point would otherwise invent a mismatch.
    */
   const groupTotal = origin.items.reduce((sum, i) => sum + Math.round(i.amount * 100), 0);
+  const aiItems = origin.items.filter((i) => i.extractedByVision && !i.addedByOwner).length;
   const drifted = origin.items.length > 0 && groupTotal !== Math.round(recordAmount * 100);
 
   return (
@@ -74,6 +75,7 @@ export function RecordOriginPanel({ origin, recordAmount }: { origin: RecordOrig
       <T variant="caption" style={{ marginTop: 2, marginBottom: space.sm }}>
         {origin.extractedVendor ? `${origin.extractedVendor} · ` : ""}
         scanned {origin.scannedAt.slice(0, 10)}
+        {aiItems === 0 ? "" : aiItems === origin.items.length ? " · items read by AI from the photo" : " · some items read by AI from the photo"}
       </T>
 
       {origin.items.length === 0 ? (
@@ -98,13 +100,11 @@ export function RecordOriginPanel({ origin, recordAmount }: { origin: RecordOrig
               </T>
               {/*
                 The heading says these were READ from a receipt. A line the
-                owner typed, or one a model inferred from a photograph, was
-                not — and must say so rather than shelter under that claim.
+                owner typed was not, and says so. Lines a model inferred from
+                the photo are named once, in the caption above, not per line.
               */}
               {item.addedByOwner ? (
                 <T variant="caption" style={{ color: ink[500] }}>you added this</T>
-              ) : item.extractedByVision ? (
-                <T variant="caption" style={{ color: statusText.warning }}>✦ AI read this from the photo</T>
               ) : null}
             </View>
             <Money value={item.amount} size={13} />

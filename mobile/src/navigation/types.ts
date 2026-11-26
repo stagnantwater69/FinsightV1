@@ -1,7 +1,7 @@
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
 import type { CompositeScreenProps, NavigationProp, NavigatorScreenParams, ParamListBase } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import type { BusinessProfile, RecordItem } from "../lib/types";
+import type { AnomalyFinding, BusinessProfile, RecordItem, UnusualExpense } from "../lib/types";
 
 /**
  * Every route the signed-in app registers in App.tsx, with the params it is
@@ -48,16 +48,22 @@ export type RecordsStackParamList = {
   ScanReceipt: undefined;
   ImportCsv: undefined;
   /** `from` says where to return; cleared once used. */
-  FlaggedRecords: { from?: "ExpenseBehavior" | "Dashboard" } | undefined;
+  /** One flagged record, opened from a row on Expenses → Review. */
+  FlagDetail: { record: RecordItem };
   Categories: undefined;
 };
 
 export type InsightsStackParamList = {
-  ExpenseBehavior: undefined;
+  /** `section` opens a tab other than Overview; "alerts" is Review. Cleared once used. */
+  ExpenseBehavior: { section?: "alerts" } | undefined;
   /** Prefilled from an Ask FinSight answer; validated by the screen, so typed loosely. */
   SpendingImpact: { plannedAmount?: unknown } | undefined;
   RecoveryTarget: undefined;
   RecurringSchedule: { scheduleId?: number } | undefined;
+  /** One finding, or an unusual expense with no finding of its own, from the Review tab. */
+  FindingDetail: { finding?: AnomalyFinding; expense?: UnusualExpense };
+  /** The flagged duplicates of one CSV import, from the Review tab. */
+  ImportDuplicates: { records: RecordItem[]; hasMore: boolean };
 };
 
 export type MoreStackParamList = {

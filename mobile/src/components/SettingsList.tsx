@@ -70,7 +70,6 @@ export function Row({
   toggle,
   expandedDetail = false,
   disabled = false,
-  tone = "brand",
   focusRingColor,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
@@ -83,42 +82,13 @@ export function Row({
   /** Give settings explanations their own full-width, wrapping line. */
   expandedDetail?: boolean;
   disabled?: boolean;
-  /** The icon's colour family, so a list of places is told apart at a glance. */
-  tone?: "brand" | "accent" | "info" | "neutral";
   focusRingColor?: string;
 }) {
   const [focused, setFocused] = useState(false);
   const focusStyle: ViewStyle = Platform.OS === "web" && focusRingColor && focused
     ? { outlineColor: focusRingColor, outlineWidth: 2, outlineStyle: "solid", outlineOffset: -2 }
     : {};
-  const { brand, ink, paper, statusText, statusSurface, brandSurface, ACCENT, surfaceMuted, textSecondary } = useTheme();
-  const tint = destructive
-    ? statusText.critical
-    : tone === "accent"
-      ? ACCENT.text
-      : tone === "info"
-        ? statusText.warning
-        : tone === "neutral"
-          ? textSecondary
-          : brand[700];
-  /*
-   * THE DESTRUCTIVE MEDALLION'S WASH, from the palette rather than a literal.
-   *
-   * `#fdecec` was a third independent red surface beside the two that
-   * ui.tsx already consolidated into `statusSurface.critical` — a percent
-   * apart in Light, and in Dark a near-white plate under near-white ink,
-   * because a hard-coded hex cannot invert. It is the same wash the app uses
-   * behind every other critical thing, and now it says so.
-   */
-  const surface = destructive
-    ? statusSurface.critical
-    : tone === "accent"
-      ? ACCENT.surface
-      : tone === "info"
-        ? statusSurface.warning
-        : tone === "neutral"
-          ? surfaceMuted
-          : brandSurface;
+  const { brand, ink, paper, statusText, textSecondary } = useTheme();
 
   return (
     <Pressable
@@ -144,23 +114,8 @@ export function Row({
         ...focusStyle,
       })}
     >
-      {/*
-        Circular rather than the rounded square it was. A squircle reads as an
-        app icon — a thing you launch — and every one of these opens a screen
-        inside FinSight.
-      */}
-      <View
-        style={{
-          width: 38,
-          height: 38,
-          borderRadius: 19,
-          backgroundColor: surface,
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Ionicons name={icon} size={20} color={tint} />
-      </View>
+      {/* Plain glyph in one colour: no tinted backing, no per-row hue. */}
+      <Ionicons name={icon} size={22} color={destructive ? statusText.critical : textSecondary} />
       <View style={{ flex: 1, minWidth: 0 }}>
         <T
           style={{

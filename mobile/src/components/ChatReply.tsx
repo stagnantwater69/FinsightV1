@@ -136,7 +136,7 @@ export function ChatReplyExtras({
     haptics.tapped();
     const target = CHAT_PAGE_TARGETS[key];
     onLeave();
-    navigateToTabScreen(navigation, target, params);
+    navigateToTabScreen(navigation, target, params ?? target.params);
   }
 
   const count = metadata.references.length;

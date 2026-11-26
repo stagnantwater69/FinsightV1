@@ -153,7 +153,6 @@ export function MoreScreen({ navigation }: MoreScreenProps<"MoreHome">) {
           />
           <Row
             icon="notifications-outline"
-            tone="accent"
             label="Alerts"
             detail="Duplicates, large expenses, anything worth a look"
             onPress={() => navigation.navigate("Notifications")}
@@ -173,7 +172,6 @@ export function MoreScreen({ navigation }: MoreScreenProps<"MoreHome">) {
           */}
           <Row
             icon="settings-outline"
-            tone="neutral"
             label="Settings"
             detail="The guided tour, Fin's daily message, and light or dark"
             onPress={() => navigation.navigate("Settings")}
@@ -189,21 +187,18 @@ export function MoreScreen({ navigation }: MoreScreenProps<"MoreHome">) {
           <Row
             first
             icon="help-circle-outline"
-            tone="neutral"
             label="Questions & answers"
             detail="What FinSight does, and what it does not"
             onPress={() => navigation.navigate("Faqs")}
           />
           <Row
             icon="school-outline"
-            tone="neutral"
             label="Tutorials"
             detail="Step by step, from setup to reading your dashboard"
             onPress={() => navigation.navigate("Tutorials")}
           />
           <Row
             icon="mail-outline"
-            tone="neutral"
             label="Contact us"
             detail="Something wrong? We would rather hear about it"
             onPress={() => navigation.navigate("Contact")}
@@ -214,14 +209,12 @@ export function MoreScreen({ navigation }: MoreScreenProps<"MoreHome">) {
           <Row
             first
             icon="lock-closed-outline"
-            tone="neutral"
             label="Privacy"
             detail="What is stored, and who can reach it"
             onPress={() => navigation.navigate("Privacy")}
           />
           <Row
             icon="document-text-outline"
-            tone="neutral"
             label="Terms of use"
             detail="What FinSight is for, and what it is not"
             onPress={() => navigation.navigate("Terms")}
@@ -234,7 +227,7 @@ export function MoreScreen({ navigation }: MoreScreenProps<"MoreHome">) {
           land on it.
         */}
         <Card>
-          <Row first tone="neutral" icon="log-out-outline" label="Sign out" detail="End your session on this phone" focusRingColor={t.brandText} onPress={() => setSignOutOpen(true)} />
+          <Row first icon="log-out-outline" label="Sign out" detail="End your session on this phone" focusRingColor={t.brandText} onPress={() => setSignOutOpen(true)} />
         </Card>
 
         <T variant="caption" style={{ textAlign: "center" }}>

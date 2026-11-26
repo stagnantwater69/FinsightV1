@@ -172,17 +172,6 @@ export function ScannedItemRow({
       ) : null}
 
       {/*
-        A line a model inferred from a photograph must not look
-        like one read off text. Marked per row, because the row
-        is where the owner actually decides.
-      */}
-      {item.extractedByVision ? (
-        <T variant="caption" style={{ marginTop: 2, color: statusText.warning }}>
-          ✦ AI read this from the photo
-        </T>
-      ) : null}
-
-      {/*
         A line that may be the overlap between two photos read
         twice. FinSight only removes a repeat on its own when
         the receipt's total proves it; anything short of that

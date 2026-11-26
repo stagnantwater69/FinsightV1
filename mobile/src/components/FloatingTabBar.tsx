@@ -17,10 +17,9 @@ import { BAR_GAP, BAR_LIFT, BAR_MAX_WIDTH, BAR_SIDE, barHeightForScale } from ".
  * right thumb, and its speed dial (QuickActionMenu) can rise straight up from
  * it with every option labelled.
  *
- * IN THE LAYOUT, NOT OVER IT. The bar takes its own strip at the bottom and
- * the screens end above it, so no screen needed new bottom padding and no
- * last card can hide behind the pill. It still reads as floating: the strip
- * is the page's own colour and the pill has margins and a shadow.
+ * OVER THE CONTENT. The bar has no strip of its own: the pill floats over
+ * the bottom of the screen, which scrolls under it. Scroll views end with
+ * FAB_CLEARANCE padding so their last card can scroll clear of the pill.
  *
  * Tab presses go through `navigation.emit("tabPress")` exactly as the stock
  * bar does, so the Records tab's own listener (recordsTabPressAction) still
@@ -54,10 +53,17 @@ export function FloatingTabBar({
 
   return (
     <View
+      // Floats over the screen with no strip behind it; taps beside the pill reach the content.
       style={{
+        pointerEvents: "box-none",
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: 0,
         paddingTop: space.sm,
         paddingBottom: Math.max(insets.bottom, space.sm) + BAR_LIFT,
-        backgroundColor: t.surfaceSunken,
+        // The page colour at ~80%: the strip is back, but content scrolling under it shows through.
+        backgroundColor: /^#[0-9a-f]{6}$/i.test(t.surfaceSunken) ? `${t.surfaceSunken}CC` : t.surfaceSunken,
       }}
     >
       <View style={{ width: "100%", maxWidth: BAR_MAX_WIDTH, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: BAR_GAP, paddingHorizontal: BAR_SIDE }}>

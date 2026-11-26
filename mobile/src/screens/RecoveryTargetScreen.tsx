@@ -177,23 +177,6 @@ function RecoveryTargetContent({ navigation }: InsightsScreenProps<"RecoveryTarg
               <Ionicons name="information-circle-outline" size={20} color={t.brandText} />
             </Pressable>
           }
-          right={
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Manage recovery target notification settings"
-              onPress={() => navigation.navigate("More", { screen: "RecoveryNotificationPreferences", initial: false })}
-              style={({ pressed }) => ({
-                width: TAP_FLOOR,
-                height: TAP_FLOOR,
-                borderRadius: TAP_FLOOR / 2,
-                alignItems: "center",
-                justifyContent: "center",
-                backgroundColor: pressed ? t.surfaceMuted : t.surface,
-              })}
-            >
-              <Ionicons name="notifications-outline" size={20} color={t.brandText} />
-            </Pressable>
-          }
         />
 
         {/* Recovery has no all-time view, so its "now" reminder only ever names a past week or month. */}

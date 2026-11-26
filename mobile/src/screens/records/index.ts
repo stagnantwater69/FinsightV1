@@ -20,4 +20,4 @@ export { AddSalesScreen } from "./AddSalesScreen";
 export { ScanReceiptScreen } from "./ScanReceiptScreen";
 export { ImportCsvScreen } from "./ImportCsvScreen";
 export { EditRecordScreen } from "./EditRecordScreen";
-export { FlaggedRecordsScreen } from "./FlaggedRecordsScreen";
+export { FlagDetailScreen } from "./FlagDetailScreen";
