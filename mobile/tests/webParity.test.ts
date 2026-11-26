@@ -111,7 +111,8 @@ const COVERED: Record<string, string> = {
   "/records/sales/:id/edit": "EditRecord",
   "/records/receipts/new": "ScanReceipt",
   "/records/csv-imports/new": "ImportCsv",
-  "/records/flagged": "FlaggedRecords",
+  // Mobile reviews flagged records on Expenses → Review (one record per screen, imports in bulk).
+  "/records/flagged": "ExpenseBehavior",
   "/insights/expense-behavior": "ExpenseBehavior",
   // Dots per day on the grid, and the chosen day's payments listed under it.
   "/calendar": "PaymentCalendar",

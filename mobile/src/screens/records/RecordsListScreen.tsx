@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { openReviewTab } from "../../lib/flaggedRecordsNavigation";
 import { CONTENT_WIDTH } from "../../components/ContentScrollView";
 import {
   AppState,
@@ -737,7 +738,7 @@ export function RecordsScreen({ navigation, route }: RecordsScreenProps<"Records
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`${flagged.data.total} ${flagged.data.total === 1 ? "record needs" : "records need"} a quick check. Review`}
-            onPress={() => navigation.navigate("FlaggedRecords", { from: undefined })}
+            onPress={() => openReviewTab(navigation)}
             style={({ pressed }) => ({
               flexDirection: "row",
               alignItems: "center",

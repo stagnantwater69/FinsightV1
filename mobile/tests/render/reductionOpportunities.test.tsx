@@ -326,24 +326,52 @@ describe('Expense insight Review tab — large expense flags', () => {
     });
     const queries = await renderScreen();
 
+    // The Overview count switches to the Review tab in place.
     await fireEvent.press(await queries.findByRole('button', { name: '7 expenses to review.' }));
-    expect(navigation.navigate).toHaveBeenLastCalledWith('Records', {
-      screen: 'FlaggedRecords', initial: false, params: { from: 'ExpenseBehavior' },
-    });
-    await fireEvent.press(await queries.findByRole('tab', { name: /^Review/ }));
-    expect(await queries.findByText('Large expense flags')).toBeTruthy();
-    expect(await queries.findByText('7 flagged')).toBeTruthy();
+    expect(await queries.findByText('Flagged records')).toBeTruthy();
+    expect(await queries.findByText('7 to review')).toBeTruthy();
     expect(await queries.findByText('Flagged purchase 1')).toBeTruthy();
-    expect(queries.getAllByText(/possible duplicate of #9/).length).toBe(5);
+    expect(queries.getAllByText(/Possible duplicate of #9/).length).toBe(5);
     expect(queries.queryByText('Flagged purchase 6')).toBeNull();
 
     await fireEvent.press(queries.getByRole('button', { name: 'Next page' }));
     expect(queries.getByText('Flagged purchase 6')).toBeTruthy();
+    expect(queries.queryByRole('button', { name: /^Review all/ })).toBeNull();
+  });
 
-    await fireEvent.press(queries.getByRole('button', { name: 'Review all 7 flagged' }));
-    expect(navigation.navigate).toHaveBeenLastCalledWith('Records', {
-      screen: 'FlaggedRecords', initial: false, params: { from: 'ExpenseBehavior' },
+  it('filters the review list to duplicates, large expenses or unusual spending', async () => {
+    const duplicate = { ...pagedFlag(301), description: 'Duplicate rice' };
+    const large = { ...pagedFlag(302), description: 'Large oven', duplicateStatus: 'Not a Duplicate', duplicateOfRecordId: null, largeExpenseFlag: true } as RecordItem;
+    const unusual = { ...pagedFinding(401), title: 'Unusual gas spend' };
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') return Promise.resolve(detailOverview(reductionResponse()));
+      if (path === '/insights/findings') return Promise.resolve({ items: [unusual], nextCursor: null });
+      if (path === '/insights/recurring-patterns') return Promise.resolve([]);
+      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
+      if (path === '/records/flagged/count') return Promise.resolve({ expenses: 2, sales: 0, total: 2 });
+      if (path === '/records/flagged') return Promise.resolve({ items: [duplicate, large], nextCursor: null });
+      return Promise.reject(new Error(`unexpected path ${path}`));
     });
+    const queries = await renderScreen();
+    await fireEvent.press(await queries.findByRole('tab', { name: /^Review/ }));
+    expect(await queries.findByText('Unusual gas spend')).toBeTruthy();
+    expect(queries.getByText('Duplicate rice')).toBeTruthy();
+    expect(queries.getByText('Large oven')).toBeTruthy();
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Show, Duplicates' }));
+    expect(queries.getByText('Duplicate rice')).toBeTruthy();
+    expect(queries.queryByText('Large oven')).toBeNull();
+    expect(queries.queryByText('Unusual gas spend')).toBeNull();
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Show, Large' }));
+    expect(queries.getByText('Large oven')).toBeTruthy();
+    expect(queries.queryByText('Duplicate rice')).toBeNull();
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Show, Unusual' }));
+    expect(await queries.findByText('Unusual gas spend')).toBeTruthy();
+    expect(queries.queryByText('Duplicate rice')).toBeNull();
+    expect(queries.queryByText('Large oven')).toBeNull();
   });
 });
 
@@ -747,105 +775,28 @@ describe('Expense insight mutation cache scope', () => {
     expect(apiPost).not.toHaveBeenCalled();
   });
 
-  it('reveals every finding reason and displays the actual unusual amount beside its category mean', async () => {
+  it('lists a finding as one row that opens its detail page with the matching expense', async () => {
     const finding: AnomalyFinding = {
-      id: 77, expenseRecordId: 101, type: 'POSSIBLE_DUPLICATE', severity: 'MEDIUM',
-      score: 0.8, title: 'Possible duplicate purchase',
-      reasons: ['Same amount and date', 'Same vendor', 'Descriptions match', 'Recorded two minutes apart'],
-      status: 'OPEN', detectedAt: '2026-08-20T02:00:00.000Z', feedback: null,
-    };
-    mockApi({ reduction: reductionResponse(), behavior: {
-      ...expenseBehavior,
-      unusualExpenses: [{ id: 88, description: 'Bulk stock purchase', amount: 3500,
-        date: '2026-08-20', categoryId: 10, categoryName: 'Stock', zScore: 3,
-        categoryMean: 1000, categoryStdDev: 500 }],
-    } });
-    const route = apiGet.getMockImplementation()!;
-    apiGet.mockImplementation((path: string, ...args: unknown[]) => path === '/insights/findings'
-      ? Promise.resolve({ items: [finding], nextCursor: null }) : route(path, ...args));
-    const queries = await renderScreen();
-    await fireEvent.press(await queries.findByRole('tab', { name: /^Review/ }));
-    expect(await queries.findByText('Possible duplicate purchase')).toBeTruthy();
-    expect(queries.queryByText('Same amount and date')).toBeNull();
-    expect(queries.queryByText('Recorded two minutes apart')).toBeNull();
-    const disclosure = queries.getByRole('button', { name: 'Evidence for Possible duplicate purchase' });
-    expect(disclosure.props.accessibilityState.expanded).toBe(false);
-    await fireEvent.press(disclosure);
-    for (const reason of finding.reasons) expect(queries.getByText(reason)).toBeTruthy();
-    expect(queries.getByText(/Detected .*Finding #77 · Record #101/)).toBeTruthy();
-    expect(queries.getByRole('button', { name: 'Evidence for Possible duplicate purchase' }).props.accessibilityState.expanded).toBe(true);
-    expect(queries.getByText('This expense')).toBeTruthy();
-    expect(queries.getByText('PHP 3,500.00')).toBeTruthy();
-    expect(queries.getByText('Category average')).toBeTruthy();
-    expect(queries.getByText('PHP 1,000.00')).toBeTruthy();
-    expect(queries.getByText(/3\.5× the category average/)).toBeTruthy();
-    await fireEvent.press(queries.getByRole('button', { name: 'Evidence for Possible duplicate purchase' }));
-    expect(queries.queryByText('Same amount and date')).toBeNull();
-    expect(queries.queryByText('Recorded two minutes apart')).toBeNull();
-    expect(queries.queryByText(/Finding #77 · Record #101/)).toBeNull();
-  });
-
-  it.each([
-    ['Yes — this was unusual', 'CONFIRMED_UNUSUAL', 'CONFIRMED'],
-    ['This is normal for my business', 'EXPECTED_TRANSACTION', 'DISMISSED'],
-    ['It is a duplicate', 'DUPLICATE', 'CONFIRMED'],
-    ['Wrong match — these are different', 'INCORRECT_MATCH', 'DISMISSED'],
-    ['No longer relevant', 'NO_LONGER_RELEVANT', 'RESOLVED'],
-  ])('keeps the full finding answer "%s" reachable and submits its intended result', async (label, feedback, status) => {
-    const finding: AnomalyFinding = {
-      id: 77, expenseRecordId: 101, type: 'POSSIBLE_DUPLICATE', severity: 'MEDIUM',
+      id: 77, expenseRecordId: 88, type: 'POSSIBLE_DUPLICATE', severity: 'MEDIUM',
       score: 0.8, title: 'Possible duplicate purchase', reasons: ['Same amount and date'],
       status: 'OPEN', detectedAt: '2026-08-20T02:00:00.000Z', feedback: null,
     };
-    mockApi({ reduction: reductionResponse() });
+    const expense = { id: 88, description: 'Bulk stock purchase', amount: 3500,
+      date: '2026-08-20', categoryId: 10, categoryName: 'Stock', zScore: 3,
+      categoryMean: 1000, categoryStdDev: 500 };
+    mockApi({ reduction: reductionResponse(), behavior: { ...expenseBehavior, unusualExpenses: [expense] } });
     const route = apiGet.getMockImplementation()!;
     apiGet.mockImplementation((path: string, ...args: unknown[]) => path === '/insights/findings'
       ? Promise.resolve({ items: [finding], nextCursor: null }) : route(path, ...args));
     const queries = await renderScreen();
     await fireEvent.press(await queries.findByRole('tab', { name: /^Review/ }));
-    await fireEvent.press(await queries.findByRole('button', { name: 'Other answers for Possible duplicate purchase' }));
-    await queries.findByRole('header', { name: 'What was this, really?' });
-    const options = queries.getAllByRole('button', { name: label });
-    await fireEvent.press(options[options.length - 1]!);
-    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith(
-      '/insights/findings/77/review', { status, feedback },
-      { cacheScope: { businessProfileId: currentBusinessProfile.id } },
-    ));
-  });
-
-  it('keeps finding review scope local to the selected business and off the request body', async () => {
-    const finding: AnomalyFinding = {
-      id: 77,
-      expenseRecordId: 101,
-      type: 'POSSIBLE_DUPLICATE',
-      severity: 'MEDIUM',
-      score: 0.8,
-      title: 'Possible duplicate purchase',
-      reasons: ['Same amount and date'],
-      status: 'OPEN',
-      detectedAt: '2026-08-20T02:00:00.000Z',
-      feedback: null,
-    };
-    apiGet.mockImplementation((path: string) => {
-      if (path === '/records/flagged') return Promise.resolve(emptyPage);
-      if (path === '/records/flagged/count') return Promise.resolve({ expenses: 0, sales: 0, total: 0 });
-      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
-      if (path === '/insights/expense-overview') return Promise.resolve(detailOverview(reductionResponse()));
-      if (path === '/insights/findings') return Promise.resolve({ items: [finding], nextCursor: null });
-      if (path === '/insights/recurring-patterns') return Promise.resolve([]);
-      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
-      return Promise.reject(new Error(`unexpected path ${path}`));
-    });
-    const queries = await renderScreen();
-
-    await fireEvent.press(await queries.findByRole('tab', { name: /^Review/ }));
-    await fireEvent.press(await queries.findByRole('button', { name: 'It is a duplicate' }));
-
-    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith(
-      '/insights/findings/77/review',
-      { status: 'CONFIRMED', feedback: 'DUPLICATE' },
-      { cacheScope: { businessProfileId: currentBusinessProfile.id } },
-    ));
+    expect(await queries.findByText('Bulk stock purchase')).toBeTruthy();
+    expect(queries.getByText('Possible duplicate · Fairly sure')).toBeTruthy();
+    // The answers live on the detail page, not in the list.
+    expect(queries.queryByRole('button', { name: 'It is a duplicate' })).toBeNull();
+    expect(queries.queryByText('Same amount and date')).toBeNull();
+    await fireEvent.press(queries.getByRole('button', { name: /^Bulk stock purchase, .*Check this\.$/ }));
+    expect(navigation.navigate).toHaveBeenCalledWith('FindingDetail', { finding, expense });
   });
 });
 
@@ -1715,9 +1666,9 @@ const unusualRow = (id: number): ExpenseBehavior['unusualExpenses'][number] => (
 
 describe('Unusual expense comparison values', () => {
   it('selects and previews exact expense/average figures without reviewing a finding', async () => {
-    const { ExpenseAlertsSection } = await import('../../src/components/ExpenseAlertsSection');
+    const { UnusualComparison } = await import('../../src/components/ExpenseAlertsSection');
     const review = vi.fn();
-    const q = await render(<ThemeProvider initialMode="light"><ExpenseAlertsSection unusualExpenses={[{ ...unusualRow(88), amount: 3500.25, categoryMean: 1000.75 }]} insufficientHistoryCategories={[]} openFindings={0} findingState={{ data: { items: [], nextCursor: null }, loading: false, error: null }} findingNotice={null} refreshFindings={vi.fn()} findingsRefreshing={false} findingsUpdatedAt={null} feedbackError={null} reviewFinding={review} onOtherAnswers={vi.fn()} /></ThemeProvider>);
+    const q = await render(<ThemeProvider initialMode="light"><UnusualComparison expense={{ ...unusualRow(88), amount: 3500.25, categoryMean: 1000.75 }} /></ThemeProvider>);
     await tapChart(q, 'Unmatched expense 88 comparison');
     const name = chartReadout(q, 'Unmatched expense 88 comparison').props.accessibilityLabel;
     expect(name).toContain('This expense: PHP 3,500.25. Category average: PHP 1,000.75');
@@ -1750,7 +1701,16 @@ describe('Expense insight combined pagination', () => {
     expect(q.getByRole('button', { name: 'First page' }).props.accessibilityState.disabled).toBe(true);
   });
 
-  it.each(['Review', 'Recurring'])('does not invent a page count for empty %s results', async (tab) => {
+  it('shows no pager for an empty Review tab', async () => {
+    paginationApi({});
+    const q = await renderScreen();
+    await fireEvent.press(await q.findByRole('tab', { name: 'Review' }));
+    await q.findByText('Nothing needs review');
+    expect(q.queryByText('No items to show')).toBeNull();
+    expect(q.queryByRole('button', { name: 'Next page' })).toBeNull();
+  });
+
+  it.each(['Recurring'])('does not invent a page count for empty %s results', async (tab) => {
     paginationApi({});
     const q = await renderScreen();
     await fireEvent.press(await q.findByRole('tab', { name: tab }));
@@ -1900,29 +1860,28 @@ describe('Expense insight Review cursor pagination', () => {
     expect(apiGet.mock.calls.filter((call) => call[0] === '/records/flagged')).toHaveLength(4);
   });
 
-  it('uses a fresh expense count for four Review pages while mixed-record flag cursors remain unfinished', async () => {
+  it('counts flagged sales with expenses across Review pages while the flag cursor is unfinished', async () => {
     paginationApi({});
     const fallback = apiGet.getMockImplementation()!;
     apiGet.mockImplementation((path: string, query?: Record<string, unknown>) => {
       if (path === '/records/flagged/count') return Promise.resolve({ expenses: 20, sales: 20, total: 40 });
       if (path === '/records/flagged') return Promise.resolve(query?.cursor
-        ? { items: [...Array.from({ length: 10 }, (_, index) => pagedFlag(11 + index)), ...Array.from({ length: 10 }, (_, index) => pagedFlag(11 + index, 'sales'))], nextCursor: null }
-        : { items: [...Array.from({ length: 10 }, (_, index) => pagedFlag(1 + index)), ...Array.from({ length: 10 }, (_, index) => pagedFlag(1 + index, 'sales'))], nextCursor: 'mixed-next' });
+        ? { items: [...Array.from({ length: 10 }, (_, index) => pagedFlag(11 + index)), ...Array.from({ length: 10 }, (_, index) => pagedFlag(111 + index, 'sales'))], nextCursor: null }
+        : { items: [...Array.from({ length: 10 }, (_, index) => pagedFlag(1 + index)), ...Array.from({ length: 10 }, (_, index) => pagedFlag(101 + index, 'sales'))], nextCursor: 'mixed-next' });
       return fallback(path, query);
     });
     const q = await renderScreen();
     await fireEvent.press(await q.findByRole('tab', { name: /^Review/ }));
     await q.findByText('Review flag 1');
-    expect(q.getByText('Page 1 of 4')).toBeTruthy();
-    expect(q.getByText(/^Showing 1–5 of 20/)).toBeTruthy();
+    expect(q.getByText('Page 1 of 8')).toBeTruthy();
+    expect(q.getByText(/^Showing 1–5 of 40/)).toBeTruthy();
     expect(apiGet.mock.calls.filter((call) => call[0] === '/records/flagged')).toHaveLength(1);
-    for (let page = 0; page < 3; page += 1) {
-      expect(q.getByText(`Page ${page + 1} of 4`)).toBeTruthy();
+    for (let page = 0; page < 7; page += 1) {
       expect(visibleReviewNames(q)).toHaveLength(5);
       await fireEvent.press(q.getByRole('button', { name: 'Next page' }));
     }
-    expect(visibleReviewNames(q)).toEqual(Array.from({ length: 5 }, (_, index) => `Review flag ${16 + index}`));
-    expect(q.getByText('Page 4 of 4')).toBeTruthy();
+    expect(visibleReviewNames(q)).toEqual(Array.from({ length: 5 }, (_, index) => `Review flag ${116 + index}`));
+    expect(q.getByText('Page 8 of 8')).toBeTruthy();
     expect(q.getByRole('button', { name: 'Next page' }).props.accessibilityState.disabled).toBe(true);
     expect(apiGet).toHaveBeenCalledWith('/records/flagged', expect.objectContaining({ businessProfileId: 1, limit: 20, cursor: 'mixed-next' }));
   });
@@ -1944,7 +1903,7 @@ describe('Expense insight Review cursor pagination', () => {
     expect(apiGet.mock.calls.filter((call) => call[0] === '/records/flagged')).toHaveLength(1);
   });
 
-  it('places the combined pager before history guidance and avoids reporting a partial cursor feed as its total', async () => {
+  it('shows the combined pager without history guidance and avoids reporting a partial cursor feed as its total', async () => {
     paginationApi({ history: [{ categoryId: 10, categoryName: 'Stock', historyCount: 2 }] });
     const fallback = apiGet.getMockImplementation()!;
     apiGet.mockImplementation((path: string, query?: Record<string, unknown>) => {
@@ -1957,7 +1916,8 @@ describe('Expense insight Review cursor pagination', () => {
     const q = await renderScreen();
     await fireEvent.press(await q.findByRole('tab', { name: /^Review/ }));
     await q.findByText('Review flag 1');
-    expect(q.getAllByText(/^Showing .+|^More history needed$/).map((element) => element.props.children)).toEqual(['Showing 1–5 · More available', 'More history needed']);
+    expect(q.getByText('Showing 1–5 · More available')).toBeTruthy();
+    expect(q.queryByText('More history needed')).toBeNull();
     expect(q.queryByText(/of 20 loaded/)).toBeNull();
     expect(q.getByText('Page 1')).toBeTruthy();
     expect(q.getByRole('button', { name: 'Last page' }).props.accessibilityState.disabled).toBe(true);
@@ -1982,7 +1942,7 @@ describe('Expense insight Review cursor pagination', () => {
     apiGet.mockImplementation((path: string, query?: Record<string, unknown>) => {
       if (path === '/records/flagged/count') return Promise.resolve({ expenses: 6, sales: 20, total: 26 });
       if (path === '/records/flagged') return Promise.resolve(query?.cursor
-        ? { items: Array.from({ length: 6 }, (_, index) => pagedFlag(index + 1)), nextCursor: null }
+        ? { items: Array.from({ length: 6 }, (_, index) => pagedFlag(101 + index)), nextCursor: null }
         : { items: Array.from({ length: 20 }, (_, index) => pagedFlag(index + 1, 'sales')), nextCursor: 'expense-page' });
       if (path === '/insights/findings') return Promise.resolve(query?.cursorId
         ? { items: [pagedFinding(20), pagedFinding(21)], nextCursor: null }
@@ -1995,16 +1955,16 @@ describe('Expense insight Review cursor pagination', () => {
     expect(visibleReviewNames(q)).toEqual(['Review flag 1', 'Review flag 2', 'Review flag 3', 'Review flag 4', 'Review flag 5']);
     expect(q.getByText('Page 1')).toBeTruthy();
     expect(q.queryByText(/^Page \d+ of \d+$/)).toBeNull();
-    expect(apiGet).toHaveBeenCalledWith('/records/flagged', expect.objectContaining({ businessProfileId: 1, limit: 20, cursor: 'expense-page' }));
-    for (let page = 0; page < 5; page += 1) {
+    for (let page = 0; page < 9; page += 1) {
       expect(visibleReviewNames(q)).toHaveLength(5);
       await fireEvent.press(q.getByRole('button', { name: 'Next page' }));
     }
+    expect(apiGet).toHaveBeenCalledWith('/records/flagged', expect.objectContaining({ businessProfileId: 1, limit: 20, cursor: 'expense-page' }));
     expect(await q.findByText('Review finding 21')).toBeTruthy();
     expect(visibleReviewNames(q)).toEqual(['Review finding 20', 'Review finding 21']);
     expect(apiGet).toHaveBeenCalledWith('/insights/findings', expect.objectContaining({ businessProfileId: 1, status: 'OPEN', take: 20, cursorId: 20 }));
     expect(q.getAllByText('Review finding 20')).toHaveLength(1);
-    expect(q.getByText('Page 6 of 6')).toBeTruthy();
+    expect(q.getByText('Page 10 of 10')).toBeTruthy();
   });
 
   it('keeps the current page on a failed cursor fetch and advances only after a successful retry', async () => {
@@ -2032,20 +1992,22 @@ describe('Expense insight Review cursor pagination', () => {
     expect(q.queryByRole('button', { name: 'Retry next page' })).toBeNull();
   });
 
-  it('clamps the page after reviewing its last finding and sends the displayed finding identifier', async () => {
+  it('clamps the page after its last finding is answered and opens the displayed finding', async () => {
     let findings = Array.from({ length: 6 }, (_, index) => pagedFinding(index + 1));
     paginationApi({});
     const fallback = apiGet.getMockImplementation()!;
     apiGet.mockImplementation((path: string, ...args: unknown[]) => path === '/insights/findings'
       ? Promise.resolve({ items: findings, nextCursor: null }) : fallback(path, ...args));
-    apiPatch.mockImplementation(async () => { findings = findings.filter((finding) => finding.id !== 6); });
     const q = await renderScreen();
     await fireEvent.press(await q.findByRole('tab', { name: /^Review/ }));
     await q.findByText('Review finding 1');
     await fireEvent.press(q.getByRole('button', { name: 'Next page' }));
     await q.findByText('Review finding 6');
-    await fireEvent.press(q.getByRole('button', { name: 'This is normal for my business' }));
-    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/insights/findings/6/review', { status: 'DISMISSED', feedback: 'EXPECTED_TRANSACTION' }, { cacheScope: { businessProfileId: 1 } }));
+    await fireEvent.press(q.getByRole('button', { name: /^Review finding 6, / }));
+    expect(navigation.navigate).toHaveBeenCalledWith('FindingDetail', expect.objectContaining({ finding: expect.objectContaining({ id: 6 }) }));
+    // Answered on the detail page: the finding is gone when the list refreshes.
+    findings = findings.filter((finding) => finding.id !== 6);
+    invalidateServerState({ pathPrefixes: ['/insights/findings'] });
     expect(await q.findByText('Review finding 1')).toBeTruthy();
     expect(visibleReviewNames(q)).toHaveLength(5);
     expect(q.getByRole('button', { name: 'Go to page 1' }).props.accessibilityState.selected).toBe(true);
@@ -2102,4 +2064,31 @@ it('ignores an old next-page response after the same business refreshes its revi
   await act(async () => { finish({ items: [{ ...pagedFinding(6), title: 'Stale cursor finding' }], nextCursor: null }); await pending; });
   expect(q.queryByText('Stale cursor finding')).toBeNull();
   expect(q.getByText('Refreshed finding')).toBeTruthy();
+});
+
+describe('Expense insight Review tab — opening one flag', () => {
+  it('opens the tapped flagged record on its own screen', async () => {
+    const item = {
+      id: 201, type: 'expense', description: 'Paper takeaway bags x200; purchase E00201', amount: 240,
+      date: '2026-08-10T00:00:00.000Z', categoryId: 10, duplicateStatus: 'Flagged', duplicateOfRecordId: 9, reviewStatus: 'Reviewed',
+    };
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') return Promise.resolve(detailOverview(reductionResponse()));
+      if (path === '/insights/findings') return Promise.resolve(emptyPage);
+      if (path === '/insights/recurring-patterns') return Promise.resolve([]);
+      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
+      if (path === '/records/flagged/count') return Promise.resolve({ expenses: 1, sales: 0, total: 1 });
+      if (path === '/records/flagged') return Promise.resolve({ items: [item], nextCursor: null });
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    const queries = await renderScreen();
+    await fireEvent.press(await queries.findByRole('tab', { name: /^Review/ }));
+    expect(await queries.findByText('Paper takeaway bags x200')).toBeTruthy();
+    expect(queries.queryByRole('button', { name: /^Keep/ })).toBeNull();
+    await fireEvent.press(queries.getByRole('button', { name: /^Paper takeaway bags x200; purchase E00201,.*Check this record\.$/ }));
+    expect(navigation.navigate).toHaveBeenLastCalledWith('Records', {
+      screen: 'FlagDetail', initial: false, params: { record: expect.objectContaining({ id: 201 }) },
+    });
+  });
 });

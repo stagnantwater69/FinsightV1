@@ -52,7 +52,7 @@ export function ExpenseRecurringSection({ patternActionError, scheduleState, sch
         <View style={{ gap: space.md }}>
           {groups.length > 0 ? <View style={{ gap: space.xs }}>
             <T accessibilityRole="header" style={{ fontSize: typeScale.title, lineHeight: 26, fontFamily: font.sansSemibold, color: t.textPrimary }}>Repeating payments</T>
-            <T style={{ color: overdue > 0 ? t.statusText.serious : t.textSecondary }}>{overdue > 0 ? `${overdue} ${overdue === 1 ? "payment is" : "payments are"} overdue` : "Stay on top of your regular expenses."}</T>
+            <T style={{ fontSize: typeScale.bodySm, color: overdue > 0 ? t.statusText.serious : t.textSecondary }}>{overdue > 0 ? `${overdue} ${overdue === 1 ? "payment is" : "payments are"} overdue` : "Stay on top of your regular expenses."}</T>
           </View> : null}
           {groups.map((group) => {
             const warning = group.key === "OVERDUE";
@@ -62,8 +62,8 @@ export function ExpenseRecurringSection({ patternActionError, scheduleState, sch
             return (
               <View key={group.key} style={{ borderWidth: 1, borderColor: warning ? t.statusBorder.serious : paused ? t.border : t.brandBorder, borderRadius: radius.lg, overflow: "hidden", backgroundColor: t.surface }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, backgroundColor: surface, paddingHorizontal: space.md, paddingVertical: space.sm }}>
-                  <Ionicons name={warning ? "alert-circle-outline" : paused ? "pause-circle-outline" : "time-outline"} size={22} color={color} />
-                  <T accessibilityRole="header" style={{ fontFamily: font.sansSemibold, color, flex: 1 }}>{group.title} · {group.total}</T>
+                  <Ionicons name={warning ? "alert-circle-outline" : paused ? "pause-circle-outline" : "time-outline"} size={18} color={color} />
+                  <T accessibilityRole="header" style={{ fontSize: typeScale.bodySm, fontFamily: font.sansSemibold, color, flex: 1 }}>{group.title} · {group.total}</T>
                 </View>
                 {group.items.map((schedule, index) => (
                   <Pressable
@@ -71,20 +71,20 @@ export function ExpenseRecurringSection({ patternActionError, scheduleState, sch
                     accessibilityRole="button"
                     accessibilityLabel={`${schedule.label}, ${formatMoney(schedule.expectedAmount, { decimals: true })}, due ${formatDueDate(schedule.nextDueDate)}, ${schedule.isActive ? group.title : "paused"}. Edit this payment.`}
                     onPress={() => openSchedule(schedule.id)}
-                    style={({ pressed }) => ({ padding: space.md, minHeight: TAP_FLOOR, borderTopWidth: index > 0 ? 1 : 0, borderTopColor: t.border, gap: space.sm, backgroundColor: pressed ? t.surfaceMuted : t.surface })}
+                    style={({ pressed }) => ({ paddingHorizontal: space.md, paddingVertical: space.sm, minHeight: TAP_FLOOR, borderTopWidth: index > 0 ? 1 : 0, borderTopColor: t.border, gap: 2, backgroundColor: pressed ? t.surfaceMuted : t.surface })}
                   >
                     <View style={{ flexDirection: compact ? "row" : "column", alignItems: compact ? "center" : "stretch", gap: space.sm }}>
                       <View style={{ flex: compact ? 1 : undefined, flexDirection: "row", alignItems: "center", gap: space.sm }}>
-                        <Ionicons name="receipt-outline" size={24} color={t.textMuted} accessible={false} importantForAccessibility="no" />
-                        <T style={{ flex: 1, fontFamily: font.sansSemibold, color: t.textPrimary }}>{schedule.label}</T>
+                        <Ionicons name="receipt-outline" size={18} color={t.textMuted} accessible={false} importantForAccessibility="no" />
+                        <T numberOfLines={1} style={{ flex: 1, fontSize: typeScale.bodySm, fontFamily: font.sansSemibold, color: t.textPrimary }}>{schedule.label}</T>
                       </View>
-                      <View style={{ flex: compact ? 1 : undefined, alignItems: compact ? "flex-end" : "flex-start", gap: space.xs }}>
-                        <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, lineHeight: 24, fontVariant: ["tabular-nums"], color: t.textPrimary }}>{formatMoney(schedule.expectedAmount, { decimals: true })}</T>
-                        <T style={{ fontSize: typeScale.bodySm, color }}>{paused ? "Paused" : `Due ${formatDueDate(schedule.nextDueDate)}`}</T>
+                      <View style={{ flex: compact ? 1 : undefined, alignItems: compact ? "flex-end" : "flex-start" }}>
+                        <T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.bodySm, fontVariant: ["tabular-nums"], color: t.textPrimary }}>{formatMoney(schedule.expectedAmount, { decimals: true })}</T>
+                        <T style={{ fontSize: typeScale.caption, color }}>{paused ? "Paused" : `Due ${formatDueDate(schedule.nextDueDate)}`}</T>
                       </View>
                       <Ionicons name="chevron-forward" size={18} color={t.textMuted} style={compact ? undefined : { position: "absolute", right: 0, top: 0 }} />
                     </View>
-                    <T variant="caption">{[schedule.categoryName, schedule.vendor, `Every ${schedule.intervalDays} days`, paused ? `Next date ${formatDueDate(schedule.nextDueDate)}` : null].filter(Boolean).join(" · ")}</T>
+                    <T variant="caption" numberOfLines={1}>{[schedule.categoryName, schedule.vendor, `Every ${schedule.intervalDays} days`, paused ? `Next date ${formatDueDate(schedule.nextDueDate)}` : null].filter(Boolean).join(" · ")}</T>
                   </Pressable>
                 ))}
               </View>
@@ -115,11 +115,11 @@ export function ExpenseRecurringSection({ patternActionError, scheduleState, sch
           {visibleCandidates.map((pattern) => (
             <View key={pattern.id} style={{ borderWidth: 1, borderColor: t.brandBorder, borderRadius: radius.lg, backgroundColor: t.brandSurface, padding: space.md, gap: space.md }}>
               <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.md }}>
-                <Ionicons name="repeat-outline" size={24} color={t.textMuted} />
-                <View style={{ flex: 1, gap: space.xs }}>
-                  <T style={{ fontFamily: font.sansSemibold, color: t.textPrimary }}>{pattern.description}</T>
-                  <T style={{ fontSize: typeScale.bodyLg, lineHeight: 24, fontFamily: font.sansSemibold, fontVariant: ["tabular-nums"], color: t.textPrimary }}>{formatMoney(pattern.expectedAmount, { decimals: true })}</T>
-                  <T style={{ fontSize: typeScale.bodySm, color: t.textSecondary }}>Expected {formatDueDate(pattern.nextExpectedDate)} · About every {pattern.intervalDays} days</T>
+                <Ionicons name="repeat-outline" size={18} color={t.textMuted} />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <T numberOfLines={2} style={{ fontSize: typeScale.bodySm, fontFamily: font.sansSemibold, color: t.textPrimary }}>{pattern.description}</T>
+                  <T style={{ fontSize: typeScale.bodySm, fontFamily: font.monoSemibold, fontVariant: ["tabular-nums"], color: t.textPrimary }}>{formatMoney(pattern.expectedAmount, { decimals: true })}</T>
+                  <T style={{ fontSize: typeScale.caption, color: t.textSecondary }}>Expected {formatDueDate(pattern.nextExpectedDate)} · About every {pattern.intervalDays} days</T>
                   <T variant="caption">{[pattern.category.name, pattern.vendor].filter(Boolean).join(" · ")}</T>
                 </View>
               </View>

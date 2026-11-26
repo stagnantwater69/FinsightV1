@@ -16,50 +16,35 @@ import type { LoadNotice } from "../lib/connectionState";
 import { ChartPlotPressArea, ChartValueReadout, useChartSelection, type ChartDatum } from "./ChartInteraction";
 import { GrowFill } from "./GrowFill";
 
-function FindingReview({ finding, expense, reviewFinding, onOtherAnswers, onExplain }: {
+export function FindingReview({ finding, expense, reviewFinding, onOtherAnswers, onExplain, initiallyExpanded = false, showEvidence = true }: {
   finding: AnomalyFinding;
   expense?: ExpenseBehavior["unusualExpenses"][number];
   reviewFinding: (id: number, action: FeedbackAction) => void | Promise<void>;
   onOtherAnswers: (finding: AnomalyFinding) => void;
   onExplain?: (finding: AnomalyFinding) => void;
+  initiallyExpanded?: boolean;
+  /** False where the page explains the flag itself (FindingDetailScreen). */
+  showEvidence?: boolean;
 }) {
   const t = useTheme();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const category = findingCategory(finding.type);
   const signal = SIGNAL_COPY[findingSignalStrength(finding.severity, finding.score)];
   const actions = quickActions(category);
   const { width, fontScale } = useWindowDimensions();
   const sideBySide = width >= 360 && fontScale <= 1.1;
+  const link = { fontSize: typeScale.bodySm, fontFamily: font.sansMedium, color: t.brandText };
   return (
-    <View style={{ padding: space.md, gap: space.sm, borderRadius: radius.lg, borderWidth: 1, borderColor: t.statusBorder.warning, backgroundColor: t.statusSurface.warning }}>
-      <View style={{ flexDirection: sideBySide ? "row" : "column", alignItems: sideBySide ? "center" : "stretch", gap: space.sm }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, flex: sideBySide ? 1 : undefined }}>
-          <Ionicons name={category === "duplicate" ? "copy-outline" : "alert-circle-outline"} size={22} color={t.statusText.warning} />
-          <T style={{ fontFamily: font.sansSemibold, color: t.statusText.warning, flex: 1 }}>{category === "duplicate" ? "Possible duplicate" : "Unusual spending"}</T>
-        </View>
-        <View style={{ alignSelf: "flex-start", borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, backgroundColor: signal.tone === "info" ? t.brandSurface : t.statusSurface[signal.tone] }}>
-          <T style={{ fontSize: typeScale.caption, lineHeight: 18, fontFamily: font.sansSemibold, color: signal.tone === "info" ? t.brandText : t.statusText[signal.tone] }}>{signal.label}</T>
+    // White card, amber only on the type label: a page of all-amber cards reads as one alarm, not a list.
+    <View style={{ padding: space.md, gap: space.md, borderRadius: radius.lg, borderWidth: 1, borderColor: t.border, backgroundColor: t.surface }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm }}>
+        <Ionicons name={category === "duplicate" ? "copy-outline" : "alert-circle-outline"} size={16} color={t.statusText.warning} />
+        <T style={{ flex: 1, fontSize: typeScale.caption, fontFamily: font.sansSemibold, color: t.statusText.warning }}>{category === "duplicate" ? "Possible duplicate" : "Unusual spending"}</T>
+        <View style={{ borderRadius: radius.full, paddingHorizontal: space.sm, paddingVertical: 2, backgroundColor: signal.tone === "info" ? t.brandSurface : t.statusSurface[signal.tone] }}>
+          <T style={{ fontSize: typeScale.micro, fontFamily: font.sansSemibold, color: signal.tone === "info" ? t.brandText : t.statusText[signal.tone] }}>{signal.label}</T>
         </View>
       </View>
-      {expense ? <UnusualComparison expense={expense} integrated /> : <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, color: t.textPrimary }}>{finding.title}</T>}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Evidence for ${finding.title}`}
-        accessibilityState={{ expanded }}
-        onPress={() => setExpanded(!expanded)}
-        style={{ minHeight: TAP_FLOOR, paddingHorizontal: space.md, borderRadius: radius.sm, backgroundColor: t.surface, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm }}
-      >
-        <T style={{ color: t.brand[700], flex: 1 }}>{expanded ? "Hide evidence" : "View evidence"}</T>
-        <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={18} color={t.brand[700]} />
-      </Pressable>
-      {expanded ? (
-        <View style={{ gap: space.sm, paddingBottom: space.sm }}>
-          {expense ? <T style={{ fontFamily: font.sansSemibold, color: t.textPrimary }}>{finding.title}</T> : null}
-          {finding.reasons.map((reason, index) => <T key={index} style={{ color: t.textSecondary }}>{reason}</T>)}
-          <T variant="caption">{signal.detail}</T>
-          <T variant="caption">Detected {formatDueDate(finding.detectedAt)} · Finding #{finding.id}{finding.expenseRecordId !== null ? ` · Record #${finding.expenseRecordId}` : ""}</T>
-        </View>
-      ) : null}
+      {expense ? <UnusualComparison expense={expense} integrated /> : <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.body, color: t.textPrimary }}>{finding.title}</T>}
       <View style={{ gap: space.sm, flexDirection: sideBySide ? "row" : "column" }}>
         {actions.map((action, index) => (
           <View key={action.feedback} style={sideBySide ? { flex: 1 } : undefined}>
@@ -67,28 +52,49 @@ function FindingReview({ finding, expense, reviewFinding, onOtherAnswers, onExpl
           </View>
         ))}
       </View>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: space.lg }}>
+      {/* The secondary ways in, on one line under the decision instead of a stack of bars. */}
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.lg, marginTop: -space.sm, borderTopWidth: 1, borderTopColor: t.border }}>
+        {showEvidence ? <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Evidence for ${finding.title}`}
+          accessibilityState={{ expanded }}
+          onPress={() => setExpanded(!expanded)}
+          style={{ minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", gap: 4 }}
+        >
+          <T style={link}>{expanded ? "Hide evidence" : "View evidence"}</T>
+          <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={14} color={t.brandText} />
+        </Pressable> : null}
         <Pressable onPress={() => onOtherAnswers(finding)} accessibilityRole="button" accessibilityLabel={`Other answers for ${finding.title}`} style={{ minHeight: TAP_FLOOR, justifyContent: "center" }}>
-          <T style={{ color: t.brand[700] }}>Other answers</T>
+          <T style={link}>Other answers</T>
         </Pressable>
         {onExplain ? <Pressable onPress={() => onExplain(finding)} accessibilityRole="button" accessibilityLabel={`Explain why FinSight flagged ${finding.title}`} style={{ minHeight: TAP_FLOOR, justifyContent: "center" }}>
-          <T style={{ color: t.brand[700] }}>Explain this flag</T>
+          <T style={link}>Explain this flag</T>
         </Pressable> : null}
       </View>
+      {expanded && showEvidence ? (
+        <View style={{ gap: space.sm, padding: space.md, borderRadius: radius.md, backgroundColor: t.surfaceSunken }}>
+          {expense ? <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodySm, color: t.textPrimary }}>{finding.title}</T> : null}
+          {finding.reasons.map((reason, index) => <T key={index} style={{ fontSize: typeScale.bodySm, color: t.textSecondary }}>{reason}</T>)}
+          <T variant="caption">{signal.detail}</T>
+          <T variant="caption">Detected {formatDueDate(finding.detectedAt)} · Finding #{finding.id}{finding.expenseRecordId !== null ? ` · Record #${finding.expenseRecordId}` : ""}</T>
+        </View>
+      ) : null}
     </View>
   );
 }
 
-function UnusualComparison({ expense, integrated = false }: { expense: ExpenseBehavior["unusualExpenses"][number]; integrated?: boolean }) {
+export function UnusualComparison({ expense, integrated = false }: { expense: ExpenseBehavior["unusualExpenses"][number]; integrated?: boolean }) {
   const t = useTheme();
   const maximum = Math.max(expense.amount, expense.categoryMean);
   const multiple = expense.categoryMean > 0 ? expense.amount / expense.categoryMean : null;
   const comparisonData: ChartDatum[] = [{ key: String(expense.id), label: expense.description, values: [{ label: "This expense", value: expense.amount, color: t.statusSolid.critical }, { label: "Category average", value: expense.categoryMean, color: t.brandFill }], note: `${expense.categoryName}. ${formatDueDate(expense.date)}.${multiple === null ? " No positive category average to compare." : ` ${multiple.toFixed(1)} times the category average.`}` }];
   const comparisonSelection = useChartSelection(comparisonData);
   return (
-    <View style={{ gap: space.sm, ...(integrated ? {} : { padding: space.lg, borderRadius: radius.lg, borderWidth: 1, borderColor: t.statusBorder.warning, backgroundColor: t.statusSurface.warning }) }}>
-      <T style={{ fontFamily: font.sansSemibold, color: t.textPrimary }}>{expense.description}</T>
-      <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.titleLg, lineHeight: 32, fontVariant: ["tabular-nums"], color: t.textPrimary }}>{formatMoney(expense.amount, { decimals: true })}</T>
+    <View style={{ gap: space.sm, ...(integrated ? {} : { padding: space.md, borderRadius: radius.lg, borderWidth: 1, borderColor: t.border, backgroundColor: t.surface }) }}>
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.sm }}>
+        <T numberOfLines={2} style={{ flex: 1, fontFamily: font.sansSemibold, fontSize: typeScale.body, color: t.textPrimary }}>{expense.description}</T>
+        <T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.body, fontVariant: ["tabular-nums"], color: t.textPrimary }}>{formatMoney(expense.amount, { decimals: true })}</T>
+      </View>
       <T variant="caption">{expense.categoryName} · {formatDueDate(expense.date)}{multiple !== null && multiple >= 1.5 ? ` · ${multiple.toFixed(1)}× the category average` : ""}</T>
       {[
         { label: "This expense", amount: expense.amount, color: t.statusSolid.critical },
@@ -97,7 +103,7 @@ function UnusualComparison({ expense, integrated = false }: { expense: ExpenseBe
         <View key={row.label} style={{ gap: space.xs }}>
           <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: space.xs }}>
             <T style={{ fontSize: typeScale.bodySm, color: t.textSecondary }}>{row.label}</T>
-            {row.label === "Category average" ? <T style={{ fontFamily: font.sansSemibold, fontVariant: ["tabular-nums"] }}>{formatMoney(row.amount, { decimals: true })}</T> : null}
+            {row.label === "Category average" ? <T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.bodySm, fontVariant: ["tabular-nums"] }}>{formatMoney(row.amount, { decimals: true })}</T> : null}
           </View>
           <ChartPlotPressArea selection={comparisonSelection} count={1} chartLabel={`${expense.description} comparison`}>
           <View accessible={false} style={{ height: 8, borderRadius: radius.sm, overflow: "hidden", backgroundColor: t.surfaceMuted }}>
@@ -111,24 +117,23 @@ function UnusualComparison({ expense, integrated = false }: { expense: ExpenseBe
   );
 }
 
-export function ExpenseAlertsSection({ unusualExpenses, insufficientHistoryCategories, openFindings, findingState, findingNotice, refreshFindings, findingsRefreshing, findingsUpdatedAt, feedbackError, reviewFinding, onOtherAnswers, onExplain, visibleFindingIds, visibleUnusualIds, hasOtherReviewItems = false, findingsComplete = true, pagination }: {
+type UnusualExpenseRow = ExpenseBehavior["unusualExpenses"][number];
+
+/** The finding and unmatched unusual-expense rows of the Review tab. Each row opens FindingDetailScreen. */
+export function ExpenseAlertsSection({ unusualExpenses, openFindings, findingState, findingNotice, refreshFindings, findingsRefreshing, findingsUpdatedAt, onOpen, visibleFindingIds, visibleUnusualIds, hasOtherReviewItems = false, findingsComplete = true, pagination }: {
   pagination?: ReactNode;
   visibleFindingIds?: number[];
   visibleUnusualIds?: number[];
   hasOtherReviewItems?: boolean;
   findingsComplete?: boolean;
   unusualExpenses: ExpenseBehavior["unusualExpenses"];
-  insufficientHistoryCategories: ExpenseBehavior["insufficientHistoryCategories"];
   openFindings: number;
   findingState: { data: AnomalyFindingPage | null; loading: boolean; error: string | null };
   findingNotice: LoadNotice | null;
   refreshFindings: () => void | Promise<void>;
   findingsRefreshing: boolean;
   findingsUpdatedAt: number | null;
-  feedbackError: string | null;
-  reviewFinding: (id: number, action: FeedbackAction) => void | Promise<void>;
-  onOtherAnswers: (finding: AnomalyFinding) => void;
-  onExplain?: (finding: AnomalyFinding) => void;
+  onOpen: (target: { finding?: AnomalyFinding; expense?: UnusualExpenseRow }) => void;
 }) {
   const t = useTheme();
   const items = findingState.data?.items ?? [];
@@ -137,11 +142,40 @@ export function ExpenseAlertsSection({ unusualExpenses, insufficientHistoryCateg
   const visibleFindings = visibleFindingIds ? items.filter((finding) => visibleFindingIds.includes(finding.id)) : items;
   const visibleExpenses = visibleUnusualIds ? unmatchedExpenses.filter((expense) => visibleUnusualIds.includes(expense.id)) : unmatchedExpenses;
   const clean = !hasOtherReviewItems && findingsComplete && openFindings === 0 && items.length === 0 && unusualExpenses.length === 0 && !findingState.loading && !findingState.error;
+  const toReview = openFindings + unmatchedExpenses.length;
+  const allUnusual = visibleFindings.every((finding) => findingCategory(finding.type) !== "duplicate");
+  const rows = [
+    ...visibleFindings.map((finding) => {
+      const expense = unusualExpenses.find((e) => e.id === finding.expenseRecordId);
+      const duplicate = findingCategory(finding.type) === "duplicate";
+      const signal = SIGNAL_COPY[findingSignalStrength(finding.severity, finding.score)];
+      return {
+        key: `f${finding.id}`,
+        icon: duplicate ? "copy-outline" as const : "alert-circle-outline" as const,
+        title: expense?.description ?? finding.title,
+        amount: expense?.amount ?? null,
+        meta: expense ? `${expense.categoryName} · ${formatDueDate(expense.date)}` : `Detected ${formatDueDate(finding.detectedAt)}`,
+        note: `${duplicate ? "Possible duplicate" : "Unusual spending"} · ${signal.label}`,
+        open: () => onOpen({ finding, expense }),
+      };
+    }),
+    ...visibleExpenses.map((expense) => {
+      const multiple = expense.categoryMean > 0 ? expense.amount / expense.categoryMean : null;
+      return {
+        key: `u${expense.id}`,
+        icon: "alert-circle-outline" as const,
+        title: expense.description,
+        amount: expense.amount as number | null,
+        meta: `${expense.categoryName} · ${formatDueDate(expense.date)}`,
+        note: multiple !== null && multiple >= 1.5 ? `${multiple.toFixed(1)}× the category average` : "Above the category average",
+        open: () => onOpen({ expense }),
+      };
+    }),
+  ];
   return (
     <>
       <ConnectionNotice notice={findingNotice} onRetry={() => void refreshFindings()} busy={findingsRefreshing} />
       {findingState.data ? <FreshnessStatus at={findingsUpdatedAt} now={Date.now()} refreshing={findingsRefreshing} /> : null}
-      {feedbackError ? <ErrorNote>{feedbackError}</ErrorNote> : null}
       {findingState.error && !findingNotice ? <ErrorNote>{findingState.error}</ErrorNote> : null}
       {findingState.loading ? <ActivityIndicator accessibilityLabel="Loading findings" color={t.brand[600]} /> : null}
       {clean ? (
@@ -153,28 +187,42 @@ export function ExpenseAlertsSection({ unusualExpenses, insufficientHistoryCateg
           <T style={{ color: t.textSecondary }}>No open findings or unusual expenses in these results.</T>
         </Card>
       ) : null}
-      {visibleFindings.length > 0 ? (
+      {rows.length > 0 ? (
         <View style={{ gap: space.md }}>
-          <View style={{ gap: space.xs }}>
-            <T accessibilityRole="header" style={{ fontSize: typeScale.title, lineHeight: 26, fontFamily: font.sansSemibold, color: t.textPrimary }}>{openFindings}{findingsComplete ? "" : " loaded"} {openFindings === 1 ? "item needs" : "items need"} your review</T>
-            <T style={{ color: t.textSecondary }}>Review the evidence before deciding.</T>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+            <T accessibilityRole="header" style={{ flex: 1, fontSize: typeScale.subpageTitle, fontFamily: font.sansSemibold, color: t.textPrimary }}>{allUnusual ? "Unusual spending" : "Spending flags"}</T>
+            {toReview > 0 ? (
+              <View style={{ borderRadius: radius.full, paddingHorizontal: space.md, paddingVertical: space.xs, backgroundColor: t.statusSurface.warning }}>
+                <T style={{ fontSize: typeScale.caption, fontFamily: font.sansSemibold, color: t.statusText.warning }}>{`${toReview}${findingsComplete ? "" : "+"} to review`}</T>
+              </View>
+            ) : null}
           </View>
-          {visibleFindings.map((finding) => <FindingReview key={finding.id} finding={finding} expense={unusualExpenses.find((expense) => expense.id === finding.expenseRecordId)} reviewFinding={reviewFinding} onOtherAnswers={onOtherAnswers} onExplain={onExplain} />)}
-        </View>
-      ) : null}
-      {visibleExpenses.length > 0 ? (
-        <View style={{ gap: space.md }}>
-          <T variant="heading" accessibilityRole="header">Unusual expenses</T>
-          {visibleExpenses.map((expense) => <UnusualComparison key={expense.id} expense={expense} />)}
+          <Card style={{ paddingVertical: space.xs }}>
+            {rows.map((row, index) => (
+              <Pressable
+                key={row.key}
+                accessibilityRole="button"
+                accessibilityLabel={`${row.title}${row.amount !== null ? `, ${formatMoney(row.amount)}` : ""}, ${row.meta}, ${row.note}. Check this.`}
+                onPress={row.open}
+                style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.md, borderTopWidth: index === 0 ? 0 : 1, borderTopColor: t.border, opacity: pressed ? 0.7 : 1 })}
+              >
+                {/* Coloured because it says why the row is here. */}
+                <Ionicons name={row.icon} size={22} color={t.statusText.warning} />
+                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                  <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.sm }}>
+                    <T numberOfLines={1} style={{ flex: 1, fontSize: typeScale.body, fontFamily: font.sansSemibold, color: t.textPrimary }}>{row.title}</T>
+                    {row.amount !== null ? <T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.body, fontVariant: ["tabular-nums"], color: t.textPrimary }}>{formatMoney(row.amount)}</T> : null}
+                  </View>
+                  <T numberOfLines={1} style={{ fontSize: typeScale.bodySm, color: t.textSecondary }}>{row.meta}</T>
+                  <T numberOfLines={1} style={{ fontSize: typeScale.bodySm, color: t.statusText.warning }}>{row.note}</T>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={t.textMuted} />
+              </Pressable>
+            ))}
+          </Card>
         </View>
       ) : null}
       {pagination}
-      {insufficientHistoryCategories.length > 0 ? (
-        <View style={{ gap: space.sm }}>
-          <T accessibilityRole="header" style={{ fontFamily: font.sansSemibold }}>More history needed</T>
-          <T style={{ color: t.textSecondary }}>Unusual spending checks need more records in: {insufficientHistoryCategories.map((category) => category.categoryName).join(", ")}.</T>
-        </View>
-      ) : null}
     </>
   );
 }

@@ -36,15 +36,15 @@ function FlowRow({ label, value, max, color, delta, interaction }: { label: stri
       {...interaction}
       accessibilityRole="button"
       accessibilityLabel={`${label} values, ${formatMoney(value, { decimals: true })}${delta ? `, ${deltaPillText(delta).replace("▲", "up").replace("▼", "down")}` : ""}`}
-      style={({ pressed }) => ({ gap: 4, minHeight: TAP_FLOOR, justifyContent: "center", padding: space.xs, borderWidth: 1, borderColor: interaction.accessibilityState.selected ? HERO.ink : "transparent", borderRadius: radius.sm, opacity: pressed ? 0.8 : 1 })}
+      style={({ pressed }) => ({ gap: 6, minHeight: TAP_FLOOR, justifyContent: "center", padding: space.xs, borderWidth: 1, borderColor: interaction.accessibilityState.selected ? HERO.ink : "transparent", borderRadius: radius.sm, opacity: pressed ? 0.8 : 1 })}
     >
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm }}>
-        <T style={{ fontSize: typeScale.caption, color: HERO.soft, flex: 1 }}>{label}</T>
+        <T style={{ flex: 1, fontSize: typeScale.bodySm, fontFamily: font.sansSemibold, color: HERO.ink }}>{label}</T>
         <PanelDelta delta={delta} />
-        <T style={{ maxWidth: "100%", fontFamily: font.monoSemibold, fontSize: typeScale.bodySm, color: HERO.ink }}>{formatMoney(value)}</T>
+        <T style={{ maxWidth: "100%", fontFamily: font.monoSemibold, fontSize: typeScale.bodySm, color: HERO.ink, fontVariant: ["tabular-nums"] }}>{formatMoney(value)}</T>
       </View>
-      <View style={{ height: 14, borderRadius: 6, backgroundColor: HERO.wash, overflow: "hidden" }}>
-        <GrowFill percent={width} style={{ borderRadius: 6, backgroundColor: color }} />
+      <View style={{ height: 8, borderRadius: radius.full, backgroundColor: HERO.wash, overflow: "hidden" }}>
+        <GrowFill percent={width} style={{ borderRadius: radius.full, backgroundColor: color }} />
       </View>
     </Pressable>
   );
@@ -88,37 +88,21 @@ export function MoneyFlowPanel({
     { key: "out", label: "Money out", values: [{ label: "Recorded expenses", value: expenses, color: HERO.outFill }], note: expensesDelta ? `${formatMoney(expensesDelta.amount, { decimals: true, signed: true })} vs ${expensesDelta.against}` : periodPhrase },
   ];
   const flowSelection = useChartSelection(flowData, `${periodPhrase}:${against}`);
+  const divider = { height: 1, backgroundColor: HERO.hairline };
   return (
     <TealPanel>
       {periodControl}
-      <View style={{ gap: space.sm }}>
-        <FlowRow label="Money in" value={sales} max={max} color={HERO.inFill} delta={salesDelta} interaction={flowSelection.bind(0)} />
-        <FlowRow label="Money out" value={expenses} max={max} color={HERO.outFill} delta={expensesDelta} interaction={flowSelection.bind(1)} />
-      </View>
-      <ChartValueReadout data={flowData} selection={flowSelection} chartLabel="Money flow" explore={false} />
-      <View
-        accessible
-        accessibilityLabel={`Net ${periodPhrase} ${net < 0 ? "minus " : ""}${formatMoney(Math.abs(net))}`}
-        style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, alignItems: "center", justifyContent: "space-between", paddingTop: space.md, borderTopWidth: 1, borderTopColor: HERO.hairline }}
-      >
-        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-          <T style={{ fontSize: typeScale.caption, color: HERO.muted }}>{periodControl ? "Net" : `Net ${periodPhrase}`}</T>
-          <PanelDelta delta={netDelta} />
-        </View>
-        <T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.title, color: net < 0 ? HERO.badInk : HERO.goodInk }}>
-          {`${net < 0 ? "−" : "+"}${formatMoney(Math.abs(net))}`}
-        </T>
-      </View>
-      {against ? <T style={{ fontSize: typeScale.micro, color: HERO.muted }}>{`Changes vs ${against}`}</T> : null}
 
-      <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md, borderRadius: radius.lg, backgroundColor: HERO.wash }}>
-        <View style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}>
-          <Ionicons name="wallet-outline" size={19} color={HERO.muted} />
-        </View>
-        <View style={{ flex: 1 }}>
+      {/* Available funds leads: it is the one figure an owner opens Home for. */}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+        <Ionicons name="wallet-outline" size={24} color={HERO.muted} />
+        <View style={{ alignSelf: "stretch", width: 1, backgroundColor: HERO.hairline }} />
+        <View style={{ flex: 1, minWidth: 0 }}>
           <T style={{ fontSize: typeScale.caption, color: HERO.muted }}>Available funds</T>
           <T
             accessibilityRole="header"
+            adjustsFontSizeToFit
+            numberOfLines={1}
             style={{ fontFamily: font.monoSemibold, fontSize: typeScale.titleLg, color: HERO.ink, fontVariant: ["tabular-nums"] }}
           >
             {formatMoney(funds)}
@@ -131,15 +115,40 @@ export function MoneyFlowPanel({
             accessibilityState={{ expanded: showHow }}
             onPress={() => setShowHow((v) => !v)}
             hitSlop={8}
-            style={({ pressed }) => ({ minHeight: TAP_FLOOR, minWidth: TAP_FLOOR, alignItems: "flex-end", justifyContent: "center", opacity: pressed ? 0.7 : 1 })}
+            style={({ pressed }) => ({ minHeight: TAP_FLOOR, minWidth: TAP_FLOOR, alignItems: "center", justifyContent: "center", opacity: pressed ? 0.7 : 1 })}
           >
-            <T style={{ fontSize: typeScale.label, fontFamily: font.sansSemibold, color: HERO.amber }}>{showHow ? "Hide" : "How?"}</T>
+            <Ionicons name={showHow ? "close-circle-outline" : "information-circle-outline"} size={20} color={HERO.soft} />
           </Pressable>
         ) : null}
       </View>
       {showHow && provenance ? (
         <T style={{ fontSize: typeScale.caption, lineHeight: 18, color: HERO.soft }}>{provenance}</T>
       ) : null}
+
+      <View style={divider} />
+      <View style={{ gap: space.xs }}>
+        <FlowRow label="Money in" value={sales} max={max} color={HERO.inFill} delta={salesDelta} interaction={flowSelection.bind(0)} />
+        <FlowRow label="Money out" value={expenses} max={max} color={HERO.outFill} delta={expensesDelta} interaction={flowSelection.bind(1)} />
+      </View>
+      <ChartValueReadout data={flowData} selection={flowSelection} chartLabel="Money flow" explore={false} />
+
+      <View style={divider} />
+      <View
+        accessible
+        accessibilityLabel={`Net cash flow ${periodPhrase} ${net < 0 ? "minus " : ""}${formatMoney(Math.abs(net))}`}
+        style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, alignItems: "center", justifyContent: "space-between" }}
+      >
+        <View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+            <T style={{ fontSize: typeScale.bodySm, fontFamily: font.sansSemibold, color: HERO.ink }}>Net cash flow</T>
+            <PanelDelta delta={netDelta} />
+          </View>
+          <T style={{ fontSize: typeScale.micro, color: HERO.muted }}>{against ? `Changes vs ${against}` : periodPhrase}</T>
+        </View>
+        <T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.title, color: net < 0 ? HERO.badInk : HERO.goodInk, fontVariant: ["tabular-nums"] }}>
+          {`${net < 0 ? "−" : "+"}${formatMoney(Math.abs(net))}`}
+        </T>
+      </View>
     </TealPanel>
   );
 }
