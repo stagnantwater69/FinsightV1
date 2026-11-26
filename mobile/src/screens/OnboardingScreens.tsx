@@ -38,7 +38,7 @@ import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { errorMessage } from "../lib/api";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
-import { formatMoney } from "../lib/money";
+import { formatMoney, parseAmountInput } from "../lib/money";
 import { radius, space } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import {
@@ -173,8 +173,8 @@ function ReadyLine({ label, value }: { label: string; value: string }) {
 
 /** A number the owner typed, as pesos — or a dash where they left it blank. */
 function pesos(raw: string): string {
-  const value = Number(raw);
-  return raw.trim() === "" || Number.isNaN(value) ? "not set" : formatMoney(value);
+  const value = parseAmountInput(raw);
+  return value === null ? "not set" : formatMoney(value);
 }
 
 /**

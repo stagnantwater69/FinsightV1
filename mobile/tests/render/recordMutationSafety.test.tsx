@@ -17,6 +17,7 @@ let selected: BusinessProfile;
 const refresh = vi.fn();
 
 vi.mock('@react-navigation/native', () => ({
+  usePreventRemove: () => {},
   useFocusEffect: (effect: () => void | (() => void)) => React.useEffect(effect, [effect]),
 }));
 vi.mock('../../src/context/BusinessProfileContext', () => ({

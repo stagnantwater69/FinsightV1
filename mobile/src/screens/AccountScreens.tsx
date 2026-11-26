@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { type TextInputInstance, ActivityIndicator, Alert, Image, KeyboardAvoidingView, Platform, Pressable, useWindowDimensions, View } from "react-native";
-import { useFocusEffect, usePreventRemove } from "@react-navigation/native";
+import { useFocusEffect } from "@react-navigation/native";
+import { useDiscardGuard } from "../lib/useDiscardGuard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Button, Callout, ErrorNote, Field, Screen, T } from "../components/ui";
@@ -178,19 +179,6 @@ function AccountForm({ title, onBack, busy, cancel, children, footer }: {
   );
 }
 
-function useAccountGuard(navigation: Pick<AccountNavigation, "dispatch">, busy: boolean, dirty: boolean) {
-  const saved = useRef(false);
-  usePreventRemove(busy || dirty, ({ data }) => {
-    if (saved.current) { navigation.dispatch(data.action); return; }
-    if (busy) return;
-    Alert.alert("Discard changes?", "Your unsaved changes will be lost.", [
-      { text: "Keep editing", style: "cancel" },
-      { text: "Discard changes", style: "destructive", onPress: () => navigation.dispatch(data.action) },
-    ]);
-  });
-  return saved;
-}
-
 function useCurrentAccount() {
   const { profile } = useAuth();
   const ownerId = useRef(profile?.id);
@@ -217,7 +205,7 @@ export function EditProfileScreen({ navigation }: MoreScreenProps<"EditProfile">
   const firstRef = useRef<TextInputInstance>(null);
   const lastRef = useRef<TextInputInstance>(null);
   const phoneRef = useRef<TextInputInstance>(null);
-  const saved = useAccountGuard(navigation, busy || photoBusy, JSON.stringify(form) !== JSON.stringify(initial.current));
+  const saved = useDiscardGuard(navigation, busy || photoBusy, JSON.stringify(form) !== JSON.stringify(initial.current));
 
   const set = (key: ProfileField) => (value: string) => {
     setForm((previous) => ({ ...previous, [key]: value }));
@@ -300,7 +288,7 @@ export function ChangePasswordScreen({ navigation }: MoreScreenProps<"ChangePass
   const currentRef = useRef<TextInputInstance>(null);
   const nextRef = useRef<TextInputInstance>(null);
   const confirmRef = useRef<TextInputInstance>(null);
-  const saved = useAccountGuard(navigation, busy, Object.values(form).some(Boolean));
+  const saved = useDiscardGuard(navigation, busy, Object.values(form).some(Boolean));
   const set = (key: ChangePasswordField) => (value: string) => {
     setForm((previous) => ({ ...previous, [key]: value }));
     setErrors((previous) => ({ ...previous, [key]: undefined }));
@@ -366,7 +354,7 @@ export function DeleteAccountScreen({ navigation }: MoreScreenProps<"DeleteAccou
   const confirmation = useRef(false);
   const current = useCurrentAccount();
   const passwordRef = useRef<TextInputInstance>(null);
-  useAccountGuard(navigation, busy, false);
+  useDiscardGuard(navigation, busy, false);
 
   function confirmDeletion() {
     if (request.current || confirmation.current || !current()) return;

@@ -11,6 +11,7 @@ const post = vi.fn(); const navigate = vi.fn(); const push = vi.fn(); const goBa
 let selected: BusinessProfile; let ownerId = 17;
 const focusSetters = new Set<React.Dispatch<React.SetStateAction<boolean>>>();
 vi.mock("@react-navigation/native", () => ({
+  usePreventRemove: () => {},
   useFocusEffect: (effect: () => void | (() => void)) => {
     const [focused, setFocused] = React.useState(true);
     React.useEffect(() => { focusSetters.add(setFocused); return () => { focusSetters.delete(setFocused); }; }, []);

@@ -76,7 +76,7 @@ vi.mock("../../src/components/receipt-camera", async () => {
     },
   };
 });
-vi.mock("@react-navigation/native", () => ({ useFocusEffect: (effect: () => (() => void)) => React.useEffect(effect, [effect]) }));
+vi.mock("@react-navigation/native", () => ({ usePreventRemove: () => {}, useFocusEffect: (effect: () => (() => void)) => React.useEffect(effect, [effect]) }));
 vi.mock("../../src/context/BusinessProfileContext", () => ({
   useBusinessProfiles: () => ({ selected: selectedBusiness, categories: fixtures.categories, createCategory: vi.fn(), refreshCategories: vi.fn() }),
 }));
