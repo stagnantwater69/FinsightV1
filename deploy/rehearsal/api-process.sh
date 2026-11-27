@@ -57,9 +57,12 @@ api_stop() {
     if [ -n "$winpid" ]; then
       if kill -0 "$pid" 2> /dev/null; then taskkill //T //F //PID "$winpid" > /dev/null 2>&1 || true; fi
     elif [ -n "$group" ]; then
-      kill -TERM -- "-$pid" 2> /dev/null || true
-      for _ in $(seq 1 20); do kill -0 -- "-$pid" 2> /dev/null || break; sleep 0.25; done
-      kill -KILL -- "-$pid" 2> /dev/null || true
+      # Stopped right after launch, the child may not have reached setsid yet: its
+      # group does not exist, so signal the process too, or `wait` below hangs on
+      # the setsid'd command it then becomes.
+      kill -TERM -- "-$pid" 2> /dev/null || true; kill -TERM "$pid" 2> /dev/null || true
+      for _ in $(seq 1 20); do kill -0 -- "-$pid" 2> /dev/null || kill -0 "$pid" 2> /dev/null || break; sleep 0.25; done
+      kill -KILL -- "-$pid" 2> /dev/null || true; kill -KILL "$pid" 2> /dev/null || true
     elif kill -0 "$pid" 2> /dev/null; then
       kill -TERM "$pid" 2> /dev/null || true
       for _ in $(seq 1 20); do kill -0 "$pid" 2> /dev/null || break; sleep 0.25; done
