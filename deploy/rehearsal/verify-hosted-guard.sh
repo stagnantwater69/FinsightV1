@@ -45,7 +45,8 @@ echo 'not a certificate' > "$work/junk.crt"
 base=(RR_TARGET=hosted RR_HOSTED_CA_CERT="$work/ca.crt" RR_CHECK_ONLY=1 RR_HOSTED_REF=$REF RR_HOSTED_CONFIRM_DISPOSABLE=$REF RR_HOSTED_DB_URL=$POOLER
       RR_HOSTED_ANON_KEY=$ANON RR_HOSTED_SERVICE_ROLE_KEY=$SERVICE RR_HOSTED_S3_ACCESS_KEY_ID=s3id
       RR_HOSTED_S3_SECRET_ACCESS_KEY=s3secret RR_HOSTED_S3_REGION=ap-southeast-1)
-# No network at all where the platform allows it (Linux CI); the stubs catch the rest.
+# No network at all where the platform allows unprivileged namespaces; GitHub's
+# Ubuntu 24.04 runners do not, so there the stubs alone catch any network call.
 isolate=(); if command -v unshare > /dev/null && unshare -rn true 2> /dev/null; then isolate=(unshare -rn); fi
 
 cases=0
@@ -127,4 +128,5 @@ request = DELETE"
 
 [ -s "$work/node-argv" ] || fail "the node shim never ran, so the argv check proves nothing"
 if grep -qF -e "$SERVICE" -e "$ANON" "$work/node-argv"; then fail "a key was on node's command line"; fi
-echo "verify-hosted-guard: $cases cases: valid inputs stop after the guard, the rest refused; no network tool called, no key in argv${isolate:+, no network namespace}"
+mode="network tools stubbed, no namespace available"; [ ${#isolate[@]} = 0 ] || mode="run inside a network-less namespace"
+echo "verify-hosted-guard: $cases cases: valid inputs stop after the guard, the rest refused; no network tool called, no key in argv; $mode"

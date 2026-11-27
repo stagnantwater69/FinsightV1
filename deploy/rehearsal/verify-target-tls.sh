@@ -91,7 +91,7 @@ OK_PATTERN='already has tables'; ok restore restore
 OK_PATTERN='^connected$'; ok 'Prisma (backend/src/config/prisma.ts)' prisma_app; ok 'Prisma (plain client)' prisma_plain
 echo "verify-target-tls: valid certificate: preflight, restore and both Prisma clients connect"
 
-for case in 'untrusted certificate verify failed|not trusted' 'wrong-name does not match|CN name does not match|name mismatch'; do
+for case in 'untrusted certificate verify failed|not trusted' 'wrong-name does not match|CN name does not match|name mismatch|IP address mismatch'; do
   name=${case%% *} why=${case#* }
   serve "$name"
   refused "preflight ($name)" "$why" preflight

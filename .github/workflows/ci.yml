@@ -388,7 +388,8 @@ jobs:
           cache-dependency-path: |
             backend/package-lock.json
       # The hosted-rehearsal guard: valid inputs stop before any network
-      # access, everything else is refused, in a network-less namespace.
+      # access, everything else is refused; network tools are stubbed and any
+      # call fails the step (the runner allows no network-less namespace).
       - run: bash deploy/rehearsal/verify-hosted-guard.sh
       # The runtime image ships no `prisma` CLI on purpose (see the Dockerfile
       # comment on the deps stage) — only the generated client. Migrations
