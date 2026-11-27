@@ -38,8 +38,10 @@ export function databaseTlsProblem(databaseUrl: string, readFile: (path: string)
   const only = (key: string) => url.searchParams.getAll(key);
   // Prisma connects to a ?host= parameter instead of the URL's host (measured), so
   // every one must stay on this machine too: loopback, or a Unix socket directory.
+  // hostaddr and other spellings of either name are held to the same rule.
   const stays = (host: string) => isLoopbackHost(host) || host.startsWith("/");
-  if (isLoopbackHost(url.hostname) && only("host").every(stays)) return null;
+  const redirects = [...url.searchParams].filter(([key]) => /^host(addr)?$/i.test(key)).map(([, value]) => value);
+  if (isLoopbackHost(url.hostname) && redirects.every(stays)) return null;
   if (only("sslmode").join("&") !== "require") return "needs sslmode=require: any other mode can connect without TLS";
   if (only("sslaccept").join("&") !== "strict") return "needs sslaccept=strict: without it any certificate is accepted";
   const paths = only("sslcert");

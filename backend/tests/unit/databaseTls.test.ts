@@ -84,6 +84,10 @@ describe("databaseTlsProblem", () => {
   it("does not exempt a loopback URL whose ?host= points elsewhere (Prisma connects there instead)", () => {
     expect(databaseTlsProblem("postgresql://u:p@localhost:5432/postgres?host=db.example.invalid")).toContain("needs sslmode=require");
     expect(databaseTlsProblem("postgresql://u:p@127.0.0.1:5432/postgres?host=127.0.0.1&host=10.0.0.5")).toContain("needs sslmode=require");
+    expect(databaseTlsProblem("postgresql://u:p@localhost:5432/postgres?hostaddr=10.0.0.5")).toContain("needs sslmode=require");
+    expect(databaseTlsProblem("postgresql://u:p@localhost:5432/postgres?HOST=db.example.invalid")).toContain("needs sslmode=require");
+    expect(databaseTlsProblem("postgresql://u:p@localhost:5432/postgres?h%6Fstaddr=10.0.0.5")).toContain("needs sslmode=require");
+    expect(databaseTlsProblem("postgresql://u:p@localhost:5432/postgres?hostaddr=127.0.0.1")).toBeNull();
     expect(databaseTlsProblem("postgresql://u:p@localhost:5432/postgres?host=127.0.0.1")).toBeNull();
     expect(databaseTlsProblem("postgresql://u@localhost/postgres?host=/var/run/postgresql")).toBeNull();
   });
