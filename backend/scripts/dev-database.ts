@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   ) {
     relay = await startDatabaseTlsRelay(childEnv.DATABASE_URL);
     childEnv.DATABASE_URL = relay.databaseUrl;
-    console.info("[dev] Supabase connection uses a local TLS handshake relay; database traffic stays encrypted.");
+    console.info("[dev] Supabase connection uses a local TLS handshake relay; database traffic stays encrypted, but the server certificate is not verified (development only).");
   }
 
   const child = spawn(process.execPath, [require.resolve("tsx/cli"), ...args], {

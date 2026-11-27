@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { databaseTlsProblem } from "../src/config/databaseTls";
 
 const CHECK_NAME = "record-integrity" as const;
 const REPORT_VERSION = 1 as const;
@@ -221,6 +222,7 @@ export function validateAuditDatabaseUrl(
       throw new RecordIntegrityAuditError("REMOTE_DATABASE_FINGERPRINT_MISMATCH");
     }
   }
+  if (databaseTlsProblem(raw)) throw new RecordIntegrityAuditError("DATABASE_TLS_UNVERIFIED");
   return raw;
 }
 

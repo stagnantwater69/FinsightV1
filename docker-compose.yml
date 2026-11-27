@@ -34,6 +34,10 @@ services:
     # tmpfs, not a bind or named host volume, and disappears on restart.
     tmpfs:
       - /run/finsight/receipt-uploads:rw,noexec,nosuid,nodev,size=201326592,mode=0700,uid=1000,gid=1000
+    # The database's CA certificate, named by sslcert= in DATABASE_URL and
+    # DIRECT_URL (see backend/.env.example, database TLS).
+    volumes:
+      - ./backend/certs:/app/certs:ro
     restart: unless-stopped
     # Node allows 10 seconds to drain HTTP; leave the wrapper time to reap it.
     stop_grace_period: 15s
@@ -76,6 +80,10 @@ services:
       RECEIPT_WORKER_HEALTH_DIR: /run/finsight/receipt-worker-health
     tmpfs:
       - /run/finsight/receipt-worker-health:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000
+    # The database's CA certificate, named by sslcert= in DATABASE_URL and
+    # DIRECT_URL (see backend/.env.example, database TLS).
+    volumes:
+      - ./backend/certs:/app/certs:ro
     restart: unless-stopped
     stop_grace_period: 35s
 
@@ -95,6 +103,10 @@ services:
       ML_WORKER_URL: http://ml:8321
     tmpfs:
       - /run/finsight/jobs-worker-health:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000
+    # The database's CA certificate, named by sslcert= in DATABASE_URL and
+    # DIRECT_URL (see backend/.env.example, database TLS).
+    volumes:
+      - ./backend/certs:/app/certs:ro
     restart: unless-stopped
     stop_grace_period: 35s
 

@@ -35,6 +35,11 @@ describe("migration-authoring wrapper stays local-only", () => {
     );
   });
 
+  it("rejects a local URL whose ?host= or ?hostaddr= sends Prisma elsewhere", () => {
+    expect(() => assertLocalTarget("local", "postgresql://u:p@localhost:5432/db?host=db.ref.supabase.co")).toThrow(/local allowlist/);
+    expect(() => assertLocalTarget("local", "postgresql://u:p@127.0.0.1:5432/db?hostaddr=10.0.0.5")).toThrow(/local allowlist/);
+  });
+
   it("no flag combination on the CLI arg parser can request a hosted mode — there is no such flag", () => {
     const args = parseAuthorArgs([
       "--environment",

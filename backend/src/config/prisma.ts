@@ -1,4 +1,5 @@
 import { Prisma, PrismaClient } from "@prisma/client";
+import { databaseTlsProblem } from "./databaseTls";
 import { logger } from "./logger";
 import { recordDbOperation } from "../lib/requestTiming";
 
@@ -147,6 +148,17 @@ const datasourceUrl = withIdleConnectionLifetime(
   ),
   process.env.DATABASE_IDLE_CONNECTION_LIFETIME_SECONDS,
 );
+
+// Refuse to start rather than reach a remote database without verifying it
+// (see databaseTls.ts for what Prisma accepts otherwise). Checked as written,
+// which is what deploy.sh and backup-db.sh read (the rewriting above would
+// normalize an escaped sslcert), and as Prisma receives it.
+const tlsProblem = datasourceUrl
+  ? databaseTlsProblem(process.env.DATABASE_URL ?? "") ?? databaseTlsProblem(datasourceUrl)
+  : null;
+if (tlsProblem) {
+  throw new Error(`DATABASE_URL ${tlsProblem}. See backend/.env.example (database TLS).`);
+}
 
 const baseClient = new PrismaClient({
   // Only override when the size was applied; otherwise Prisma reads the env as before.

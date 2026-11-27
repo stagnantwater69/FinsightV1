@@ -7,6 +7,10 @@ vi.mock("node:child_process", () => ({ execFileSync: execFileSyncMock }));
 
 import { main } from "../../scripts/migrate-workflow/deploy-hosted";
 
+const CA = path.resolve(__dirname, "../fixtures/database-tls/test-ca.crt").replace(/\\/g, "/");
+const HOSTED = "postgresql://postgres.fake-project-ref:fakepassword@fake-project.pooler.supabase.com:5432/postgres";
+const VERIFIED = `${HOSTED}?sslmode=require&sslcert=${CA}&sslaccept=strict`;
+
 const args = [
   "--environment", "staging",
   "--project-ref", "fake-project-ref",
@@ -16,7 +20,7 @@ const args = [
 describe("hosted migration CLI launcher", () => {
   beforeEach(() => {
     execFileSyncMock.mockReset();
-    vi.stubEnv("DIRECT_URL", "postgresql://postgres.fake-project-ref:fakepassword@fake-project.pooler.supabase.com:5432/postgres");
+    vi.stubEnv("DIRECT_URL", VERIFIED);
     vi.stubEnv("FINSIGHT_CI_DEPLOY_APPROVED", "1");
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -39,6 +43,17 @@ describe("hosted migration CLI launcher", () => {
   it("does not launch Prisma when the project confirmation differs", () => {
     expect(main([...args.slice(0, -1), "different-project-ref"])).toBe(1);
     expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no TLS settings", HOSTED],
+    ["sslmode=require alone", `${HOSTED}?sslmode=require`],
+    ["no sslaccept=strict", `${HOSTED}?sslmode=require&sslcert=${CA}`],
+  ])("does not launch Prisma when DIRECT_URL would not verify the server (%s)", (_label, url) => {
+    vi.stubEnv("DIRECT_URL", url);
+    expect(main(args)).toBe(1);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/REFUSED: DIRECT_URL needs/));
   });
 
   it("propagates a failed migration instead of reporting success", () => {

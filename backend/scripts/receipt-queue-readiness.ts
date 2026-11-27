@@ -1,5 +1,6 @@
 import { readdirSync, existsSync } from "node:fs";
 import path from "node:path";
+import { databaseTlsProblem } from "../src/config/databaseTls";
 
 const CHECK_TIMEOUT_MS = 30_000;
 const DEFAULT_STALE_AFTER_SECONDS = 300;
@@ -207,7 +208,10 @@ function safeDatabaseUrl(value: string | undefined): string {
   if (!parsed.searchParams.has("connect_timeout")) parsed.searchParams.set("connect_timeout", "10");
   if (!parsed.searchParams.has("pool_timeout")) parsed.searchParams.set("pool_timeout", "10");
   if (!parsed.searchParams.has("connection_limit")) parsed.searchParams.set("connection_limit", "1");
-  return parsed.toString();
+  const finalUrl = parsed.toString();
+  // As written and as Prisma receives it (re-serializing normalizes an escaped sslcert).
+  if (databaseTlsProblem(value) || databaseTlsProblem(finalUrl)) throw new Error("DATABASE_TLS_UNVERIFIED");
+  return finalUrl;
 }
 
 function staleAfterSeconds(value: string | undefined): number {
@@ -388,7 +392,7 @@ async function main(): Promise<void> {
 if (require.main === module) {
   void main().catch((error: unknown) => {
     const code = errorCode(error);
-    const database = ["INVALID_ARGUMENT", "DATABASE_URL_INVALID", "QUEUE_STALE_THRESHOLD_INVALID"]
+    const database = ["INVALID_ARGUMENT", "DATABASE_URL_INVALID", "DATABASE_TLS_UNVERIFIED", "QUEUE_STALE_THRESHOLD_INVALID"]
       .includes(code)
       ? "not-checked"
       : "unavailable";
