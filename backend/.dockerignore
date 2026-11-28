@@ -4,3 +4,5 @@ dist
 .env.local
 npm-debug.log
 .env.*
+# Mounted at /app/certs at run time, never built in.
+certs

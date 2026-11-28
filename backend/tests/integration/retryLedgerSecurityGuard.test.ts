@@ -88,6 +88,29 @@ describe("startup guard: retry ledger security", () => {
     }
   });
 
+  // A backup restored with --no-privileges (deploy/backup-db.sh, restore-drill.sh)
+  // leaves every relacl NULL, which means "owner only" and grants PUBLIC nothing.
+  // The guard used to feed '{}' to aclexplode for NULL, which Postgres rejects,
+  // so the API refused to start on any restored database.
+  it("accepts tables and sequences with no stored ACL, as a --no-privileges restore leaves them", async () => {
+    const objects = ['"ChatSendRequest"', '"ReceiptCaptureBatch"', '"ReceiptCaptureBatch_ReceiptCaptureBatch_ID_seq"'];
+    const saved = await prisma.$queryRawUnsafe<{ name: string; acl: string | null }[]>(
+      `SELECT oid::regclass::text AS name, relacl::text AS acl FROM pg_class WHERE oid IN (${objects.map((o) => `'${o}'::regclass`).join(", ")})`,
+    );
+    expect(saved).toHaveLength(objects.length);
+    try {
+      for (const { name } of saved) {
+        await prisma.$executeRawUnsafe(`UPDATE pg_catalog.pg_class SET relacl = NULL WHERE oid = $1::regclass`, name);
+      }
+      await expectClean();
+    } finally {
+      for (const { name, acl } of saved) {
+        await prisma.$executeRawUnsafe(`UPDATE pg_catalog.pg_class SET relacl = $2::aclitem[] WHERE oid = $1::regclass`, name, acl);
+      }
+    }
+    await expectClean();
+  });
+
   it("rejects a manual-create link that no longer has to match the request's business", async () => {
     await prisma.$executeRawUnsafe(`ALTER TABLE "ManualRecordCreateRequest" DROP CONSTRAINT "ManualRecordCreateRequest_expense_scope_check"`);
     await prisma.$executeRawUnsafe(`

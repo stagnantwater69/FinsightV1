@@ -22,6 +22,7 @@ import {
   parseConnectionUrl,
   sanitizeTarget,
 } from "./urlSafety";
+import { databaseTlsProblem } from "../../src/config/databaseTls";
 import { evaluateHostedDeployment, neverPersistConfirmation } from "./hostedGuard";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
@@ -88,6 +89,13 @@ export function main(argv: string[]): number {
 
   if (!verdict.allowed) {
     console.error(`[migrate:deploy-hosted] REFUSED: ${verdict.reason}`);
+    return 1;
+  }
+
+  // The CLI's schema engine, like the runtime client, verifies nothing without these settings.
+  const tlsProblem = databaseTlsProblem(rawUrl ?? "");
+  if (tlsProblem) {
+    console.error(`[migrate:deploy-hosted] REFUSED: DIRECT_URL ${tlsProblem}. See backend/.env.example (database TLS).`);
     return 1;
   }
 

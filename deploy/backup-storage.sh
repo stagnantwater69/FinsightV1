@@ -63,10 +63,18 @@ fi
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
 umask 077
+# Leftovers of a run killed outright (SIGKILL, power loss), as in backup-db.sh.
+find "$BACKUP_DIR" -maxdepth 1 \( -name 'finsight-*.partial' -o -name '.storage-*' \) -mmin +720 -exec rm -rf -- {} +
 scratch=$(mktemp -d "$BACKUP_DIR/.storage-XXXXXX")
-trap 'rm -rf -- "$scratch"' EXIT
 name="finsight-storage-$(date -u +%Y%m%d-%H%M%S).tar"
 file="$BACKUP_DIR/$name"
+# However the run ends, no plaintext copy of the objects outlives it: the
+# scratch folder, an unfinished tar, and (when encrypting) the tar itself.
+readonly plain="$file"
+trap 'rm -rf -- "$scratch" "$plain.partial" "$plain.age.partial"; [ -z "$RECIPIENT" ] || rm -f -- "$plain"' EXIT
+# Without this, a signal runs the EXIT trap at once while a sync is still
+# writing into $scratch; with it, bash waits for the child, then cleans up.
+trap 'exit 1' INT TERM HUP
 
 # Passed by name so no key shows up in `ps` (see backup-db.sh).
 export AWS_ACCESS_KEY_ID="$SOURCE_KEY_ID" AWS_SECRET_ACCESS_KEY="$SOURCE_SECRET" AWS_DEFAULT_REGION="${SOURCE_REGION:-us-east-1}"

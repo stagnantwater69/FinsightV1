@@ -371,6 +371,15 @@ jobs:
       - run: bash backend/docker/verify-receipt-upload-orphan-sweep.sh
       - run: bash backend/docker/verify-api-entrypoint-signal.sh
       - run: bash backend/docker/verify-receipt-worker-readiness.sh
+      # Backups: an interrupted run leaves no plaintext, the restore drill
+      # fails a dump that was cut short, and restore-supabase.sh is all or
+      # nothing, refuses non-empty targets and bad archives, leaves the API
+      # roles no privilege, and puts no password on a command line. The full
+      # local Supabase rehearsal is the separate recovery-rehearsal workflow.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq age
+      - run: bash deploy/verify-backup-interrupt.sh
+      - run: bash deploy/verify-restore-drill.sh
+      - run: bash deploy/verify-restore-supabase.sh
 
       - uses: actions/setup-node@v7
         with:
@@ -378,6 +387,10 @@ jobs:
           cache: npm
           cache-dependency-path: |
             backend/package-lock.json
+      # The hosted-rehearsal guard: valid inputs stop before any network
+      # access, everything else is refused; network tools are stubbed and any
+      # call fails the step (the runner allows no network-less namespace).
+      - run: bash deploy/rehearsal/verify-hosted-guard.sh
       # The runtime image ships no `prisma` CLI on purpose (see the Dockerfile
       # comment on the deps stage) — only the generated client. Migrations
       # against the throwaway DB have to run from outside the image, the same
@@ -389,12 +402,23 @@ jobs:
         env:
           DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
           DIRECT_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+      # Hosted-rehearsal clients verify the server: libpq (preflight, restore)
+      # and the API's Prisma refuse an untrusted CA and a wrong host name.
+      # And the rehearsal API is stopped, children included, when interrupted
+      # right after launch or when it never becomes ready.
+      - run: (cd backend && npx prisma generate) && bash deploy/rehearsal/verify-target-tls.sh
+      - run: bash deploy/rehearsal/verify-api-lifecycle.sh
 
       # Both targets, named explicitly, then a CMD check on each: an untargeted
       # build once resolved to the worker stage (OPS-DEPLOY-01), which would
       # have made the smoke below poll an image that never listens.
       - run: docker build --target api -t finsight-backend:ci ./backend
       - run: docker build --target worker -t finsight-worker:ci ./backend
+      # The backend's database clients (API, migrate, backup-db.sh) refuse an
+      # untrusted CA, a wrong host name and a server without TLS, and refuse
+      # to start on a URL that would not check, before connecting.
+      - run: docker build --target build -t finsight-build:ci ./backend
+      - run: TLS_CLIENT_IMAGE=finsight-build:ci bash deploy/verify-database-tls.sh
       - name: Verify production dependency boundary
         run: |
           docker run --rm --entrypoint sh finsight-backend:ci -c '

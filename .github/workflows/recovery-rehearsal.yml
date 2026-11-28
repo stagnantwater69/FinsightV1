@@ -1,0 +1,35 @@
+name: Recovery rehearsal (local Supabase)
+
+# The full backup-and-restore rehearsal between two throwaway Supabase stacks
+# inside the runner, with synthetic data: deploy/rehearsal/run-local-supabase.sh.
+# Heavy (two stacks, image pulls), so run by hand, not on every push. Needs no
+# secrets and touches no hosted project; passing it says nothing about one.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rehearsal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq age
+      - run: npm ci && npx prisma generate
+        working-directory: backend
+      - run: bash deploy/rehearsal/run-local-supabase.sh
+        env:
+          RR_EVIDENCE_DIR: ${{ runner.temp }}/recovery-rehearsal
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: recovery-rehearsal
+          path: ${{ runner.temp }}/recovery-rehearsal
+          if-no-files-found: ignore

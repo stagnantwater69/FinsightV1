@@ -8,6 +8,8 @@ build/
 .env.*
 !.env.example
 !.env.test
+# Database CA files, placed per machine (backend/.env.example, database TLS).
+/backend/certs/
 .mcp.json
 *.log
 .DS_Store

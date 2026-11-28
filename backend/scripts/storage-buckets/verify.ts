@@ -8,6 +8,7 @@ import {
   loadStorageOperatorEnvironment,
   writeFailure,
 } from "./contract";
+import { databaseTlsProblem } from "../../src/config/databaseTls";
 
 const COMMAND = "storage:buckets:verify";
 const HELP = `Usage: npm run ${COMMAND}
@@ -148,6 +149,11 @@ export async function main(argv: string[], environment: NodeJS.ProcessEnv): Prom
   if (argv.length !== 0) throw new StorageOperatorError("UNEXPECTED_ARGUMENT");
 
   const operatorEnvironment = loadStorageOperatorEnvironment(environment, { requireDirectUrl: true });
+  // Before any request, so a URL that would not verify the database stops the whole check.
+  // As written and as Prisma receives it (re-serializing normalizes an escaped sslcert).
+  if (databaseTlsProblem(environment.DIRECT_URL ?? "") || databaseTlsProblem(operatorEnvironment.directUrl!)) {
+    throw new StorageOperatorError("DIRECT_URL_TLS_UNVERIFIED");
+  }
   const storageAdmin = createStorageAdmin(operatorEnvironment);
 
   const buckets = [];

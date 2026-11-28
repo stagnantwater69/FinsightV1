@@ -41,7 +41,10 @@ services:
       target: build
     profiles: ["tools"]
     env_file: ./backend/.env
-    command: ["npx", "prisma", "migrate", "deploy"]
+    # The CLI verifies nothing unless DIRECT_URL says so; check before it connects.
+    command: ["sh", "-c", "node dist/config/databaseTls.js DIRECT_URL && exec npx prisma migrate deploy"]
+    volumes:
+      - ./backend/certs:/app/certs:ro
     restart: "no"
 
 volumes:

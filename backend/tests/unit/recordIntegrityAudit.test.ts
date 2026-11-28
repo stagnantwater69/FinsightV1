@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   HELP_TEXT,
@@ -27,7 +28,9 @@ describe("record integrity audit command safety", () => {
   });
 
   it("refuses remote hosts unless the read-only override is explicit", () => {
-    const remote = "postgresql://user:secret@db.example.invalid:5432/production";
+    // With the database TLS settings (src/config/databaseTls.ts), which remote targets also need.
+    const ca = path.resolve(__dirname, "../fixtures/database-tls/test-ca.crt").replace(/\\/g, "/");
+    const remote = `postgresql://user:secret@db.example.invalid:5432/production?sslmode=require&sslcert=${ca}&sslaccept=strict`;
     expect(() => validateAuditDatabaseUrl(remote, false))
       .toThrowError("REMOTE_DATABASE_REQUIRES_EXPLICIT_FLAG");
     expect(() => validateAuditDatabaseUrl(remote, true))

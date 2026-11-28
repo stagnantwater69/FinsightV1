@@ -5,6 +5,8 @@
 #   bash deploy/deploy.sh             # pull, build, (first time: certificate), start
 #   bash deploy/deploy.sh --migrate   # the same, applying pending migrations first
 #   bash deploy/deploy.sh --no-pull   # deploy the checkout as it is
+#   bash deploy/deploy.sh --check     # settings, database TLS and migration
+#                                     # state only (read-only); starts nothing
 #
 # It refuses to start with settings that are wrong for production (see
 # check_env below) and with unapplied migrations unless --migrate is given.
@@ -13,16 +15,21 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 readonly COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.prod.yml)
+# shellcheck source=deploy/pg-credentials.sh
+. deploy/pg-credentials.sh
 
 migrate=0
 pull=1
+check=0
 for arg in "$@"; do
   case "$arg" in
     --migrate) migrate=1 ;;
     --no-pull) pull=0 ;;
+    --check) check=1 pull=0 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
 done
+if [ "$check" = 1 ] && [ "$migrate" = 1 ]; then echo "--check changes nothing, so it cannot --migrate" >&2; exit 2; fi
 
 fail() { echo "deploy: $*" >&2; exit 1; }
 
@@ -60,6 +67,18 @@ check_env() {
     if env_value $b $key | grep -qE '@db\.[^/]*\.supabase\.co'; then
       fail "backend/.env: $key uses Supabase's IPv6-only direct host; use the session pooler URL (Dashboard > Connect)"
     fi
+  done
+  # Prisma verifies the database only with all three settings, and the API and
+  # `migrate` refuse to start without them (backend/src/config/databaseTls.ts).
+  # Checked here so a deploy stops before it builds anything.
+  local url ca
+  for key in DATABASE_URL DIRECT_URL; do
+    url=$(env_value $b $key)
+    if ! ca=$(pg_mounted_ca "$url") || ! grep -qE '[?&]sslmode=require(&|$)' <<< "$url" \
+      || ! grep -qE '[?&]sslaccept=strict(&|$)' <<< "$url"; then
+      fail "backend/.env: $key needs sslmode=require&sslcert=/app/certs/<file>&sslaccept=strict, one plain file name (see backend/.env.example, database TLS)"
+    fi
+    [ -f "$ca" ] || fail "backend/.env: $key names a CA file, but $ca does not exist"
   done
   if [ -z "$(env_value $b HEALTH_DETAIL_TOKEN)" ]; then
     echo "deploy: note: HEALTH_DETAIL_TOKEN is empty, so /health/ready returns no queue counts"
@@ -112,15 +131,32 @@ install_cron() {
   fi
 }
 
-check_env
-
 if [ "$pull" = 1 ]; then
   git pull --ff-only
+  # Carry on in the script just pulled: bash is still reading this older copy,
+  # whose checks may predate what the new images require.
+  exec bash deploy/deploy.sh --no-pull "$@"
 fi
 
+check_env
+
 echo "deploy: building images"
-"${COMPOSE[@]}" build
+[ "$check" = 1 ] || "${COMPOSE[@]}" build
 "${COMPOSE[@]}" --profile tools build migrate
+
+# The CA file's contents (one current CA certificate), which check_env cannot
+# read without Node, checked by the code the API and `migrate` run at start.
+# Both checks run as `node`, the user the API and workers run as
+# (backend/Dockerfile), so a CA file only root can read fails here, not after `up`.
+for key in DATABASE_URL DIRECT_URL; do
+  "${COMPOSE[@]}" run --rm --user node migrate node dist/config/databaseTls.js "$key" \
+    || fail "backend/.env: $key would not verify the database (above); nothing was changed"
+done
+# Read-only: connect as the API does (dist/config/prisma.js, DATABASE_URL), so a
+# chain or host name the CA file does not verify stops the deploy here, before
+# anything starts. `migrate status` below does the same for DIRECT_URL.
+"${COMPOSE[@]}" run --rm --user node migrate node -e 'require("./dist/config/prisma.js").prisma.$queryRawUnsafe("SELECT 1").then(() => { console.log("deploy: DATABASE_URL connects with a verified certificate"); process.exit(0); }, (e) => { console.error(String(e.message).split("\n").filter(Boolean).pop()); process.exit(1); })' \
+  || fail "the API could not connect to the database (above); nothing was changed"
 
 echo "deploy: checking migrations"
 if migrate_status=$("${COMPOSE[@]}" run --rm migrate npx prisma migrate status 2>&1); then
@@ -131,11 +167,18 @@ else
   # is full), which is not the same as having migrations to apply.
   grep -q "not yet been applied" <<<"$migrate_status" \
     || fail "could not confirm the migration state (error above); nothing was changed. If it says 'max clients reached', stop other processes using this database (a local dev API/worker counts) and rerun"
-  if [ "$migrate" = 1 ]; then
+  if [ "$check" = 1 ]; then
+    echo "deploy: checks passed, and migrations are pending (above). Back the database up, then: bash deploy/deploy.sh --no-pull --migrate"
+    exit 0
+  elif [ "$migrate" = 1 ]; then
     "${COMPOSE[@]}" run --rm migrate
   else
     fail "the database has unapplied migrations (above). Back it up, then rerun with --migrate"
   fi
+fi
+if [ "$check" = 1 ]; then
+  echo "deploy: checks passed; nothing was started or changed"
+  exit 0
 fi
 
 has_certificate || issue_certificate

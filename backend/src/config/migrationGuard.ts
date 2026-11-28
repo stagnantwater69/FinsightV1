@@ -981,7 +981,9 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
         ('security.receipt_tables_no_public_grants', NOT EXISTS (
           SELECT 1
           FROM pg_class table_object
-          CROSS JOIN LATERAL aclexplode(COALESCE(table_object.relacl, '{}'::aclitem[])) grant_entry
+          -- NULL relacl (e.g. after a --no-privileges restore) means the default
+          -- ACL; aclexplode rejects an empty '{}' array, so expand the default.
+          CROSS JOIN LATERAL aclexplode(COALESCE(table_object.relacl, acldefault('r', table_object.relowner))) grant_entry
           WHERE table_object.oid IN (
               to_regclass('public."ReceiptCaptureBatch"'),
               to_regclass('public."ReceiptDuplicateCandidate"'),
@@ -1038,7 +1040,7 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
         ('security.retry_ledgers_no_public_grants', NOT EXISTS (
           SELECT 1
           FROM pg_class table_object
-          CROSS JOIN LATERAL aclexplode(COALESCE(table_object.relacl, '{}'::aclitem[])) grant_entry
+          CROSS JOIN LATERAL aclexplode(COALESCE(table_object.relacl, acldefault('r', table_object.relowner))) grant_entry
           WHERE table_object.oid IN (
               to_regclass('public."ManualRecordCreateRequest"'),
               to_regclass('public."ChatSendRequest"')
@@ -1048,7 +1050,7 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
         ('security.receipt_sequences_no_public_grants', NOT EXISTS (
           SELECT 1
           FROM pg_class sequence_object
-          CROSS JOIN LATERAL aclexplode(COALESCE(sequence_object.relacl, '{}'::aclitem[])) grant_entry
+          CROSS JOIN LATERAL aclexplode(COALESCE(sequence_object.relacl, acldefault('s', sequence_object.relowner))) grant_entry
           WHERE sequence_object.oid IN (
               to_regclass('public."ReceiptCaptureBatch_ReceiptCaptureBatch_ID_seq"'),
               to_regclass('public."ReceiptDuplicateCandidate_ReceiptDuplicateCandidate_ID_seq"'),

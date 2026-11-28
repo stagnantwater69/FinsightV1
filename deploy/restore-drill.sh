@@ -11,9 +11,10 @@
 #
 #   BACKUP_AGE_IDENTITY=~/drill-key.txt bash deploy/restore-drill.sh
 #
-# Compare the counts with the live app (or the previous drill). Restoring the
-# auth schema into plain Postgres reports errors for Supabase-only roles and
-# extensions; the application tables are what this checks.
+# Compare the counts with the live app (or the previous drill). Any pg_restore
+# error fails the drill except `schema "public" already exists`, the only one
+# a hosted dump produced here (2026-11-14). This proves the data restores; it
+# does not start the app against it (docs/deployment-runbook.md §6.1 does).
 set -euo pipefail
 
 readonly BACKUP_DIR="${BACKUP_DIR:-$HOME/finsight-backups}"
@@ -24,7 +25,7 @@ dump=${1:-}
 if [ -z "$dump" ]; then
   dump=$(ls -1t "$BACKUP_DIR"/finsight-*.dump "$BACKUP_DIR"/finsight-*.dump.age 2>/dev/null | head -n1 || true)
 fi
-[ -n "$dump" ] && [ -f "$dump" ] || { echo "restore-drill: no dump found (looked in $BACKUP_DIR)" >&2; exit 1; }
+[ -n "$dump" ] && [ -f "$dump" ] || { echo "restore-drill: no dump found at ${1:-$BACKUP_DIR}" >&2; exit 1; }
 
 case "$dump" in
   *.age)
@@ -33,7 +34,7 @@ case "$dump" in
       || { echo "restore-drill: $dump is encrypted; set BACKUP_AGE_IDENTITY to the private key file" >&2; exit 1; }
     # Fails here, before any container starts, on a wrong key or a damaged file.
     age --decrypt --identity "$BACKUP_AGE_IDENTITY" "$dump" > /dev/null \
-      || { echo "restore-drill: could not decrypt $dump with that key" >&2; exit 1; }
+      || { echo "restore-drill: could not decrypt $dump: wrong key, or the file is damaged (age says which, above)" >&2; exit 1; }
     ;;
 esac
 
@@ -45,7 +46,9 @@ read_dump() {
   esac
 }
 
-cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
+# -v: the postgres image keeps its data in an anonymous volume, which a plain
+# `rm -f` leaves behind holding every restored record and password hash.
+cleanup() { docker rm -f -v "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 echo "restore-drill: restoring $dump into a throwaway database"
@@ -70,8 +73,8 @@ docker exec "$CONTAINER" psql -h 127.0.0.1 -U postgres -d drill -q \
   -c 'CREATE SCHEMA IF NOT EXISTS extensions' -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA extensions' >/dev/null
 
 started=$(date +%s)
-# Errors from the auth schema's Supabase-specific parts are expected; the
-# counts and the structure check below are the verdict.
+# pg_restore exits non-zero for the expected error too; the checks below are
+# the verdict.
 read_dump | docker exec -i "$CONTAINER" pg_restore --no-owner --no-privileges -U postgres -d drill \
   2> /tmp/finsight-restore-drill.log || true
 echo "restore-drill: restored in $(( $(date +%s) - started ))s"
@@ -89,10 +92,10 @@ if [ "$missing" = 1 ]; then
   echo "restore-drill: some application tables did not restore; see /tmp/finsight-restore-drill.log" >&2
   exit 1
 fi
-# Rows can all be back while an index, trigger or constraint is not, which
-# leaves a database that answers slowly or stops enforcing its rules.
-if grep -qE '^Command was: (CREATE (UNIQUE )?INDEX|CREATE TRIGGER|CREATE (OR REPLACE )?FUNCTION|ALTER TABLE .* ADD CONSTRAINT)' /tmp/finsight-restore-drill.log; then
-  echo "restore-drill: an index, trigger, function or constraint did not restore; see /tmp/finsight-restore-drill.log" >&2
+# Every table can be present while rows, an index, a trigger or a constraint
+# are not: a dump cut short restores its tables empty, and only the log says so.
+if grep '^pg_restore: error:' /tmp/finsight-restore-drill.log | grep -v 'schema "public" already exists' >&2; then
+  echo "restore-drill: pg_restore could not restore everything (above); see /tmp/finsight-restore-drill.log" >&2
   exit 1
 fi
 echo "restore-drill: OK"

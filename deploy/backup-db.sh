@@ -32,6 +32,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# shellcheck source=deploy/pg-credentials.sh
+. deploy/pg-credentials.sh
 readonly BACKUP_DIR="${BACKUP_DIR:-$HOME/finsight-backups}"
 # pg_dump must be at least the server's major version; 17 also reads older ones.
 readonly PG_IMAGE=postgres:17-alpine
@@ -66,27 +68,55 @@ chmod 700 "$BACKUP_DIR"
 name="finsight-$(date -u +%Y%m%d-%H%M%S).dump"
 file="$BACKUP_DIR/$name"
 umask 077
+# A run killed outright (SIGKILL, power loss) never reaches the trap below.
+# 12 hours old: gone by the next daily run, and far longer than any run takes.
+find "$BACKUP_DIR" -maxdepth 1 \( -name 'finsight-*.partial' -o -name '.storage-*' \) -mmin +720 -exec rm -rf -- {} +
+
+# A run stopped part-way (a reboot, a kill) must not leave a readable dump
+# behind: no later run deletes a .partial, and the encryption exists so this
+# disk never keeps one. $file is renamed to the .age below, hence the copy.
+readonly plain="$file"
+on_signal() {
+  rm -f -- "$plain.partial" "$plain.age.partial"
+  [ -z "$RECIPIENT" ] || rm -f -- "$plain"
+  echo "backup: interrupted; the unfinished dump was deleted" >&2
+  exit 1
+}
+trap on_signal INT TERM HUP
 
 schema_args=()
 for schema in $SCHEMAS; do schema_args+=("--schema=$schema"); done
 
 echo "backup: dumping ${SCHEMAS} to $file"
-# The URL goes in through the environment, not the command line, so it never
-# shows up in `ps`: a bare `-e NAME` makes docker read the exported value
-# itself (`-e NAME="$VALUE"` would put the password in docker's own argv).
+# The password reaches pg_dump only as PGPASSWORD, passed to docker by name, so
+# it is in no command line: not docker's, and not pg_dump's inside the
+# container (`ps` and `docker top` show both). PG_URL has no password.
 # --no-owner/--no-privileges: Supabase's roles do not exist in whatever
 # database a restore targets.
-export DIRECT_URL
-if ! docker run --rm -e DIRECT_URL "$PG_IMAGE" \
-  sh -c 'pg_dump --format=custom --no-owner --no-privileges "$@" --dbname="$DIRECT_URL"' \
-  pg_dump "${schema_args[@]}" > "$file.partial"; then
+pg_split_url "$DIRECT_URL" || fail "DIRECT_URL in backend/.env is not usable (above)"
+# DIRECT_URL carries Prisma's TLS settings (backend/.env.example, database TLS),
+# which libpq rejects or reads differently (its sslcert is a client
+# certificate). So the query is dropped and libpq verifies the chain and host
+# name itself, against the same CA file on this side of the container mount.
+# Without that file, libpq's default would accept any certificate, or none.
+PG_TLS=()
+if ca=$(pg_mounted_ca "$PG_URL"); then
+  PG_URL=${PG_URL%%\?*}
+  pg_verify_tls "$ca" || fail "DIRECT_URL's CA certificate is not usable (above)"
+elif [ "${BACKUP_ALLOW_UNVERIFIED:-}" = 1 ]; then
+  echo "backup: note: BACKUP_ALLOW_UNVERIFIED=1, so the database's certificate is not checked"
+else
+  fail "DIRECT_URL in backend/.env needs one plain sslcert=/app/certs/<file> (see backend/.env.example, database TLS); BACKUP_ALLOW_UNVERIFIED=1 skips the check for a local test database"
+fi
+if ! MSYS_NO_PATHCONV=1 docker run --rm -e PGPASSWORD "${PG_TLS[@]}" "$PG_IMAGE" \
+  pg_dump --format=custom --no-owner --no-privileges "${schema_args[@]}" --dbname="$PG_URL" > "$file.partial"; then
   rm -f "$file.partial"
   fail "pg_dump failed (above); no backup was written"
 fi
 
 # A dump that pg_restore cannot list is not a backup.
 docker run --rm -i "$PG_IMAGE" pg_restore --list < "$file.partial" > /dev/null \
-  || fail "the dump is unreadable; kept as $file.partial for inspection"
+  || fail "the dump is unreadable; kept as $file.partial for inspection until the next run deletes it"
 mv "$file.partial" "$file"
 
 if [ -n "$RECIPIENT" ]; then

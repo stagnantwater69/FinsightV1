@@ -18,6 +18,7 @@
  */
 import "dotenv/config";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { databaseTlsProblem } from "../src/config/databaseTls";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "host.docker.internal"]);
 
@@ -44,6 +45,12 @@ async function main(): Promise<number> {
   const host = new URL(url).hostname;
   if (!LOCAL_HOSTS.has(host) && !process.argv.includes("--allow-remote")) {
     console.error(`Refusing to check ${host} without --allow-remote.`);
+    return 2;
+  }
+
+  const tlsProblem = databaseTlsProblem(url);
+  if (tlsProblem) {
+    console.error(`DATABASE_URL ${tlsProblem}. See backend/.env.example (database TLS).`);
     return 2;
   }
 

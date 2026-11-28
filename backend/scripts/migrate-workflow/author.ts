@@ -92,7 +92,9 @@ function sanitizeMigrationName(name: string): string {
 /** Enforces the local-mode allowlist on whatever URL will actually be used. */
 export function assertLocalTarget(environment: string, rawUrl: string): void {
   const parsed = parseConnectionUrl(rawUrl);
-  if (!isLocalAllowedHost(parsed.host)) {
+  // Prisma connects to a ?host= (or ?hostaddr=) parameter instead of the URL's host.
+  const query = new URL(rawUrl).searchParams;
+  if (!isLocalAllowedHost(parsed.host) || query.has("host") || query.has("hostaddr")) {
     const target = sanitizeTarget(environment, parsed);
     throw new Error(
       `Refusing to run migration-authoring in local mode against ${formatSanitizedTarget(target)} — ` +
@@ -132,7 +134,8 @@ export async function runAuthorWorkflow(argsInput: string[]): Promise<{ migratio
         { cwd: REPO_ROOT, encoding: "utf8" }
       );
     } catch (err) {
-      throw new Error(`prisma migrate diff failed: ${(err as Error).message}`);
+      // execFileSync's message repeats the command line, URL and password included.
+      throw new Error(`prisma migrate diff failed: ${(err as Error).message.split(sourceUrl).join("<source url>")}`);
     }
 
     const trimmed = diffSql.trim();
